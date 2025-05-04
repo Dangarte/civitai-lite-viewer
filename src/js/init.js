@@ -37,7 +37,7 @@ const SETTINGS = {
     nsfw: true,
 };
 
-Object.entries(tryParseLocalStorageJSON('settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
+Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
 
 // =================================
 
@@ -240,7 +240,7 @@ class Controller {
         const autoplayToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.autoplay = newValue;
-                localStorage.setItem('time:nextCacheClearTime', new Date(Date.now() + 3 * 60 * 1000).toISOString());
+                localStorage.setItem('civitai-lite-viewer--time:nextCacheClearTime', new Date(Date.now() + 3 * 60 * 1000).toISOString());
                 savePageSettings();
             },
             value: SETTINGS.autoplay,
@@ -252,7 +252,7 @@ class Controller {
         const resizeToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.resize = newValue;
-                localStorage.setItem('time:nextCacheClearTime', new Date(Date.now() + 3 * 60 * 1000).toISOString());
+                localStorage.setItem('civitai-lite-viewer--time:nextCacheClearTime', new Date(Date.now() + 3 * 60 * 1000).toISOString());
                 savePageSettings();
             },
             value: SETTINGS.resize,
@@ -852,7 +852,7 @@ function getIcon(name, original = false) {
 
 function loadLanguagePack(language, forceReload = false) {
     if (!CONFIG.langauges.includes(language)) language = 'en';
-    const key = `languagePack:${language}`;
+    const key = `civitai-lite-viewer--languagePack:${language}`;
     const cachedLanguagePack = tryParseLocalStorageJSON(key, {}) ?? {};
 
     const updateMenu = () => {
@@ -892,7 +892,7 @@ function onTargetInViewport(target, callback) {
 }
 
 function savePageSettings() {
-    localStorage.setItem('settings', JSON.stringify({ settings: SETTINGS, version: CONFIG.version }));
+    localStorage.setItem('civitai-lite-viewer--settings', JSON.stringify({ settings: SETTINGS, version: CONFIG.version }));
 }
 
 function clearCache(mode = 'old') {
@@ -911,7 +911,7 @@ function clearCache(mode = 'old') {
 let cacheClearTimer = null;
 function tryClearCache() {
     try {
-        const key ='time:nextCacheClearTime';
+        const key ='civitai-lite-viewer--time:nextCacheClearTime';
         const nextCacheClearTime = localStorage.getItem(key) ?? (Date.now() - 1000);
         if (new Date(nextCacheClearTime) < Date.now()) {
             localStorage.setItem(key, new Date(Date.now() + 5 * 60 * 1000).toISOString());
