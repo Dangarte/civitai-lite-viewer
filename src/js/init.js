@@ -864,7 +864,7 @@ function loadLanguagePack(language, forceReload = false) {
 
     window.languagePack = cachedLanguagePack.version === CONFIG.version && cachedLanguagePack.language === language ? cachedLanguagePack.languagePack ?? {} : {};
     if (typeof window.languagePack !== 'object' || !Object.keys(window.languagePack).length) {
-        fetch(`/_locales/${language}/language.json`)
+        fetch(`_locales/${language}/language.json`)
         .then(response => response.json())
         .then(data => {
             localStorage.setItem(key, JSON.stringify({ languagePack: data, loaded: new Date().toISOString(), version: CONFIG.version, language }));
