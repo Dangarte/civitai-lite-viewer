@@ -1,6 +1,6 @@
 const SW_CONFIG = {
     cache: 'civitai_light_cache_v1',
-    base_url: 'http://127.0.0.1:3000', // dont put / in the end here
+    base_url: 'https://dangarte.github.io/civitai-lite-viewer', // dont put / in the end here
     images_url: 'https://image.civitai.com/',
     api_url: 'https://civitai.com/api/v1/',
     local_urls: {},
