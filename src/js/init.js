@@ -6,8 +6,8 @@ const CONFIG = {
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
     local_urls: {
-        local: '/local',
-        blurHash: '/local/blurhash'
+        local: 'local',
+        blurHash: 'local/blurhash'
     },
     langauges: [ 'en', 'ru', 'zh', 'uk' ],
     appearance: {
@@ -41,7 +41,7 @@ Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settin
 
 // =================================
 
-navigator.serviceWorker.register('service_worker.js');
+navigator.serviceWorker.register('service_worker.js', { scope: './' });
 
 class CivitaiAPI {
     constructor(baseURL = CONFIG.api_url) {

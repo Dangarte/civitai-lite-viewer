@@ -1,6 +1,7 @@
 const SW_CONFIG = {
     cache: 'civitai_light_cache_v1',
     base_url: 'https://dangarte.github.io/civitai-lite-viewer', // dont put / in the end here
+    origin: 'https://dangarte.github.io',
     images_url: 'https://image.civitai.com/',
     api_url: 'https://civitai.com/api/v1/',
     local_urls: {},
@@ -37,7 +38,7 @@ function onMessage(e) { // Messages
         console.error(error);
     };
 
-    if (!e.isTrusted || e.origin !== SW_CONFIG.base_url) return sendError('Unknown sender.');
+    if (!e.isTrusted || e.origin !== SW_CONFIG.origin) return sendError('Unknown sender.');
 
     if (!e.data || typeof e.data !== 'object' || Array.isArray(e.data)) {
         return sendError('Message Error. Invalid message format, must be an object.');
