@@ -1,0 +1,90 @@
+{
+    "text": {
+        "Updated": "Updated",
+        "EarlyAccess": "Early Access",
+        "New": "New",
+        "end": "End",
+        "home": "Home",
+        "models": "Models",
+        "articles": "Articles",
+        "download": "Download",
+        "images": "Images",
+        "period": "Time Period",
+        "openOnCivitAI": "Open on CivitAI",
+        "sort": "Sort",
+        "language": "Language",
+        "sortOptions": {
+            "Highest Rated": "Highest Rated",
+            "Most Downloaded": "Most Downloaded",
+            "Most Liked": "Most Liked",
+            "Most Discussed": "Most Discussed",
+            "Most Collected": "Most Collected",
+            "Most Images": "Most Images",
+            "Newest": "Newest",
+            "Oldest": "Oldest"
+        },
+        "periodOptions": {
+            "AllTime": "All Time",
+            "Year": "Year",
+            "Month": "Month",
+            "Week": "Week",
+            "Day": "Day"
+        },
+        "checkpointTypeOptions": {
+            "All": "All",
+            "Trained": "Trained",
+            "Merge": "Merged"
+        }
+    },
+    "errors": {
+        "no_media": "No Media"
+    },
+    "units": {
+        "second": ["second", "seconds", "seconds"],
+        "minute": ["minute", "minutes", "minutes"],
+        "hour": ["hour", "hours", "hours"],
+        "day": ["day", "days", "days"],
+        "week": ["week", "weeks", "weeks"],
+        "month": ["month", "months", "months"],
+        "year": ["year", "years", "years"],
+        "like": ["like", "likes", "likes"],
+        "download": ["download", "downloads", "downloads"],
+        "bookmark": ["bookmark", "bookmarks", "bookmarks"],
+        "message": ["message", "messages", "messages"],
+        "comment": ["comment", "comments", "comments"]
+    },
+    "time": {
+        "unitAgo": "%n %unit ago",
+        "unitAfter": "in %n %unit",
+        "now": "Now"
+    },
+    "fileSize": {
+        "b": "B",
+        "kb": "KB",
+        "mb": "MB",
+        "gb": "GB"
+    },
+    "temp": {
+        "home": {
+            "p1": [
+                "This is a 'simplified' version of the CivitAI website. The main purpose of this page was to create a way to search models on CivitAI without dealing with the original site's terrible performance.",
+                "Due to limitations of the public API from CivitAI, many features available on the original site are missing here.",
+                "It's sad that the API doesn't provide information about articles (list and content) or image generation (image metadata) 😭",
+                "Good luck finding models!",
+                "(You can switch the language in the page footer)"
+            ],
+            "settingsDescription": "Performance settings",
+            "autoplay": "Autoplay",
+            "autoplayDescription": "If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.",
+            "resize": "SW Resizing",
+            "resizeDescription": "If SW resizing is enabled, images on the card page will be resized to their actual size (with DPR in mind) before being displayed. Otherwise, the server-provided size will be shown with automatic scaling.",
+            "resizeNote": "For example: the server returned an image sized 320x411 for a 300x450 request — with SW resizing enabled, the page will still get 300x450, and the browser won't need to resize it on the fly.",
+            "cachesTitle": "Cache Info",
+            "cachesDescription": "This is information about the disk cache size used by this site. If you changed DPR (page/interface scaling), or the SW resizing setting, there may be outdated image sizes left. They will be cleaned up automatically over time, but you can also clear them manually.",
+            "cachesSize": "Disk space used by cache",
+            "removeCacheAll": "Clear all cache",
+            "removeCacheOld": "Clear old cache"
+        },
+        "articles": "CivitAI's public API does not provide a list or content of articles 😢"
+    }
+}
