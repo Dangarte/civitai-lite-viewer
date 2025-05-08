@@ -376,6 +376,34 @@ body.prevent-all::before {
     transition: .1s ease-out;
 }
 
+.page-loading::before {
+    content: '';
+    position: absolute;
+    height: 4px;
+    border-radius: 2px;
+    background-image: linear-gradient(90deg, transparent 30%, var(--c-main), transparent 70%);
+    background-size: 100%;
+    background-position-x: calc(-1 * min(600px, 100vw));
+    background-repeat: no-repeat;
+    inset-inline: 0;
+    inset-block-start: 1em;
+    max-width: 1200px;
+    margin: 0 auto;
+    animation: pageloading-bar-fadeIn .4s linear 1, pageloading-bar 2s .4s ease-in-out infinite;
+}
+
+@keyframes pageloading-bar {
+    0% { background-position-x: calc(-1 * min(600px, 100vw)); }
+    50% { background-position-x: min(600px, 100vw); }
+    100% { background-position-x: calc(-1 * min(600px, 100vw)); }
+}
+
+@keyframes pageloading-bar-fadeIn {
+    0% { opacity: 0; }
+    80% { opacity: 0; }
+    100% { opacity: 1; }
+}
+
 header {
     display: flex;
     align-items: center;
@@ -677,6 +705,16 @@ footer p {
 #tooltip[data-animation="out"] {
     transform: scale(0.9);
     animation: fadeOut .1s 1 ease-in-out forwards;
+}
+
+@keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+}
+
+@keyframes fadeOut {
+    0% { opacity: 1; }
+    100% { opacity: 0; }
 }
 
 .carousel {

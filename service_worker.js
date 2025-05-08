@@ -1,6 +1,8 @@
 const SW_CONFIG = {
     cache: 'civitai_light_cache_v1',
-    base_url: 'https://dangarte.github.io/civitai-lite-viewer', // dont put / in the end here
+    // base_url: 'http://127.0.0.1:3000/',
+    // origin: 'http://127.0.0.1:3000',
+    base_url: 'https://dangarte.github.io/civitai-lite-viewer/',
     origin: 'https://dangarte.github.io',
     images_url: 'https://image.civitai.com/',
     api_url: 'https://civitai.com/api/v1/',
@@ -12,6 +14,7 @@ const SW_CONFIG = {
         'full-image': 2 * 60 * 60,          // Images on full size image page:          2 hours
         'unknown': 60 * 60,                 // Unknown target:                          1 hour
         'large-file': 15 * 60,              // Dont store large files (14+ mb) longer than 15 minutes
+        'lite-viewer': 7 * 24 * 60 * 60,    // Files from repo
     },
     api_key: null,
     task_time_limit: 60000, // 1 minute
@@ -38,7 +41,7 @@ function onMessage(e) { // Messages
         console.error(error);
     };
 
-    if (!e.isTrusted || e.origin !== SW_CONFIG.origin) return sendError('Unknown sender.');
+    if (!e.isTrusted || e.origin !== SW_CONFIG.origin || !e.source || e.source.url.indexOf(SW_CONFIG.base_url) !== 0) return sendError('Unknown sender.');
 
     if (!e.data || typeof e.data !== 'object' || Array.isArray(e.data)) {
         return sendError('Message Error. Invalid message format, must be an object.');
@@ -68,6 +71,8 @@ function onFetch(e) { // Request interception
 async function cacheFetch(request, cacheControl) {
     if (request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return localFetch(request);
 
+    if (request.url.indexOf(SW_CONFIG.base_url) === 0 && !cacheControl) cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer']}`;
+
     console.log('fetch', request);
     try {
         let blob = await fetch(request).then(file => file.blob());
@@ -79,10 +84,12 @@ async function cacheFetch(request, cacheControl) {
             blob = (await resizeBlobImage(blob, { width, height, quality, format, fit })) || blob;
         }
 
-        if (blob.type === 'application/json') cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
-        else {
-            const maxAge = blob.size < 15000000 ? SW_CONFIG.cacheTargets[params?.target] ?? SW_CONFIG.cacheTargets.unknown : SW_CONFIG.cacheTargets['large-file'];
-            cacheControl = `max-age=${maxAge}`;
+        if (!cacheControl) {
+            if (blob.type === 'application/json') cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
+            else {
+                const maxAge = blob.size < 15000000 ? SW_CONFIG.cacheTargets[params?.target] ?? SW_CONFIG.cacheTargets.unknown : SW_CONFIG.cacheTargets['large-file'];
+                cacheControl = `max-age=${maxAge}`;
+            }
         }
 
         const response = responseFromBlob(blob, cacheControl);
