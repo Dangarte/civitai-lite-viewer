@@ -20,8 +20,8 @@ const SW_CONFIG = {
     task_time_limit: 60000, // 1 minute
 };
 SW_CONFIG.local_urls = {
-    base: `${SW_CONFIG.base_url}/local`,
-    blurHash: `${SW_CONFIG.base_url}/local/blurhash`
+    base: `${SW_CONFIG.base_url}local`,
+    blurHash: `${SW_CONFIG.base_url}local/blurhash`
 };
 const currentTasks = {};
 
