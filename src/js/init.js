@@ -378,7 +378,7 @@ class Controller {
             });
         };
         return this.api.fetchModels({
-            limit: 20,
+            limit: 100,
             page: 1,
             types: SETTINGS.types,
             sort: SETTINGS.sort,
