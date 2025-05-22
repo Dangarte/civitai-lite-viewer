@@ -1,5 +1,5 @@
 const SW_CONFIG = {
-    cache: 'civitai_light_cache_v1',
+    cache: 'civitai_light_cache_v2',
     // base_url: 'http://127.0.0.1:3000/',
     // origin: 'http://127.0.0.1:3000',
     base_url: 'https://dangarte.github.io/civitai-lite-viewer/',
@@ -27,6 +27,7 @@ const currentTasks = {};
 
 self.addEventListener('activate', () => {
     cleanExpiredCache();
+    caches.delete('civitai_light_cache_v1'); // Temporarily, remove old version, crooked, cache
     self.clients.claim();
 });
 self.addEventListener('fetch', onFetch);
@@ -63,7 +64,15 @@ function onMessage(e) { // Messages
 }
 
 function onFetch(e) { // Request interception
-    if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
+    if (e.request.url.indexOf(SW_CONFIG.base_url) === 0) {
+        if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
+        const url = new URL(e.request.url);
+        if ( // Do not save in cache sw file index.html
+            url.pathname === '/civitai-lite-viewer/' ||
+            url.pathname === '/civitai-lite-viewer/index.html' ||
+            url.pathname.indexOf('service_worker.js') !== -1
+        ) return;
+    }
     if (e.request.url.indexOf('https') === -1) return; // Allow only from https
     e.respondWith(cacheGet(e.request));
 }
