@@ -10,11 +10,13 @@ const SW_CONFIG = {
     cacheTargets: {
         'model-preview': 2 * 24 * 60 * 60,  // Images in preview list on model page:    2 days
         'model-card': 4 * 24 * 60 * 60,     // Images in cards on models page:          4 days
-        'creator-image': 6 * 24 * 60 * 60,  // Images in creator profile:               6 days
+        'user-image': 6 * 24 * 60 * 60,  // Images in creator profile:               6 days
         'full-image': 2 * 60 * 60,          // Images on full size image page:          2 hours
+        'image-card': 2 * 60 * 60,          // Images images list:                      2 hours
         'unknown': 60 * 60,                 // Unknown target:                          1 hour
         'large-file': 15 * 60,              // Dont store large files (14+ mb) longer than 15 minutes
         'lite-viewer': 7 * 24 * 60 * 60,    // Files from repo
+        'lite-viewer-core': 3 * 60,         // Main files from the repo (index.html, service_worker.js)
     },
     api_key: null,
     task_time_limit: 60000, // 1 minute
@@ -64,15 +66,7 @@ function onMessage(e) { // Messages
 }
 
 function onFetch(e) { // Request interception
-    if (e.request.url.indexOf(SW_CONFIG.base_url) === 0) {
-        if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
-        const url = new URL(e.request.url);
-        if ( // Do not save in cache sw file index.html
-            url.pathname === '/civitai-lite-viewer/' ||
-            url.pathname === '/civitai-lite-viewer/index.html' ||
-            url.pathname.indexOf('service_worker.js') !== -1
-        ) return;
-    }
+    if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
     if (e.request.url.indexOf('https') === -1) return; // Allow only from https
     e.respondWith(cacheGet(e.request));
 }
@@ -80,16 +74,28 @@ function onFetch(e) { // Request interception
 async function cacheFetch(request, cacheControl) {
     if (request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return localFetch(request);
 
-    if (request.url.indexOf(SW_CONFIG.base_url) === 0 && !cacheControl) cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer']}`;
+    if (request.url.indexOf(SW_CONFIG.base_url) === 0 && !cacheControl) {
+        const url = new URL(e.request.url);
+        if ( // Cache for a 3 mins only
+            url.pathname === '/civitai-lite-viewer/' ||
+            url.pathname === '/civitai-lite-viewer/index.html' ||
+            url.pathname.indexOf('service_worker.js') !== -1
+        ) {
+            cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer-core']}`;
+        } else {
+            cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer']}`;
+        }
+    }
 
-    console.log('fetch', request);
     try {
-        let blob = await fetch(request).then(file => file.blob());
+        const fetchResponse = await fetch(request);
+        if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
+
+        let blob = await fetchResponse.blob();
         const qIndex = request.url.indexOf('?');
         const params = qIndex !== -1 ? Object.fromEntries(new URLSearchParams(request.url.substring(qIndex + 1))) : null;
         if (params && blob.type.indexOf('image/') === 0 && (params.width || params.height || params.type) && !([ 'image/gif', 'image/apng' ].includes(blob.type))) {
             const { width, height , format, quality, fit } = params;
-            console.log('resize', params, request.url);
             blob = (await resizeBlobImage(blob, { width, height, quality, format, fit })) || blob;
         }
 

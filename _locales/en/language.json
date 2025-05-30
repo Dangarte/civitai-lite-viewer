@@ -10,6 +10,7 @@
         "download": "Download",
         "images": "Images",
         "period": "Time Period",
+        "resurces_used": "Resources Used",
         "openOnCivitAI": "Open on CivitAI",
         "sort": "Sort",
         "language": "Language",
@@ -21,7 +22,10 @@
             "Most Collected": "Most Collected",
             "Most Images": "Most Images",
             "Newest": "Newest",
-            "Oldest": "Oldest"
+            "Oldest": "Oldest",
+            "Most Reactions": "Most Reactions",
+            "Most Comments": "Most Comments",
+            "Random": "Random"
         },
         "periodOptions": {
             "AllTime": "All Time",
@@ -30,6 +34,14 @@
             "Week": "Week",
             "Day": "Day"
         },
+        "modelLabels": {
+            "All": "All",
+            "Other": "Other"
+        },
+        "typeOptions": {
+            "All": "All",
+            "Other": "Other"
+        },
         "checkpointTypeOptions": {
             "All": "All",
             "Trained": "Trained",
@@ -37,7 +49,8 @@
         }
     },
     "errors": {
-        "no_media": "No Media"
+        "no_media": "No Media",
+        "no_response": "Что-то не так, загрузка не должна занимать столько времени... Ты можешь проверить консоль разработчика (Ctrl + Shift + I) и статус API: {{api-status}}"
     },
     "units": {
         "second": ["second", "seconds", "seconds"],
@@ -48,6 +61,7 @@
         "month": ["month", "months", "months"],
         "year": ["year", "years", "years"],
         "like": ["like", "likes", "likes"],
+        "dislike": ["dislike", "dislikes", "dislikes"],
         "download": ["download", "downloads", "downloads"],
         "bookmark": ["bookmark", "bookmarks", "bookmarks"],
         "message": ["message", "messages", "messages"],
@@ -69,7 +83,7 @@
             "p1": [
                 "This is a 'simplified' version of the CivitAI website. The main purpose of this page was to create a way to search models on CivitAI without dealing with the original site's terrible performance.",
                 "Due to limitations of the public API from CivitAI, many features available on the original site are missing here.",
-                "It's sad that the API doesn't provide information about articles (list and content) or image generation (image metadata) 😭",
+                "It's sad that the API doesn't provide information about articles (list and content) 😭",
                 "Good luck finding models!",
                 "(You can switch the language in the page footer)"
             ],

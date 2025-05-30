@@ -1,10 +1,11 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 1,
+    version: 3,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
+    api_status_url: 'https://status.civitai.com/status/public',
     local_urls: {
         local: 'local',
         blurHash: 'local/blurhash'
@@ -13,13 +14,15 @@ const CONFIG = {
     appearance: {
         card: {
             width: 300,
-            height: 450
+            height: 450,
+            gap: 16
         },
         modelPage: {
             carouselItemWidth: 450
         },
         blurHashSize: 32, // minimum size of blur preview
-    }
+    },
+    timeOut: 20000, // 20 sec (API is very slow)
 };
 
 const SETTINGS = {
@@ -31,7 +34,9 @@ const SETTINGS = {
     checkpointType: 'All',
     types: [ 'Checkpoint' ],
     sort: 'Highest Rated',
+    sort_images: 'Newest',
     period: 'Month',
+    period_images: 'Month',
     baseModels: [],
     blackListTags: [ 'gay' ],
     nsfw: true,
@@ -41,7 +46,7 @@ Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settin
 
 // =================================
 
-navigator.serviceWorker.register('service_worker.js?v=2', { scope: './' });
+navigator.serviceWorker.register(`service_worker.js?v=${Number(CONFIG.version)}`, { scope: './' });
 
 class CivitaiAPI {
     constructor(baseURL = CONFIG.api_url) {
@@ -97,6 +102,71 @@ class CivitaiAPI {
         }
     }
 
+    async fetchImages(options = {}) {
+        const {
+            limit = 20,
+            page = 1,
+            modelId,
+            modelVersionId,
+            username = '',
+            nsfw = false,
+            hidden = false,
+            sort = '',
+            period = '',
+        } = options;
+
+        const url = new URL(`${this.baseURL}/images`);
+        url.searchParams.append('limit', limit);
+        url.searchParams.append('page', page);
+
+        if (username) url.searchParams.append('username', username);
+        if (modelId) url.searchParams.append('modelId', modelId);
+        if (modelVersionId) url.searchParams.append('modelVersionId', modelVersionId);
+        if (sort) url.searchParams.append('sort', sort);
+        if (period) url.searchParams.append('period', period);
+        if (hidden) url.searchParams.append('hidden', 'true');
+        if (nsfw) url.searchParams.append('nsfw', 'true');
+
+        try {
+            const data = await fetchJSON(url.toString(), {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                },
+            });
+            return data;
+        } catch (error) {
+            console.error('Failed to fetch images:', error);
+            throw error;
+        }
+    }
+
+    async fetchImageMeta(options = {}) {
+        const {
+            id,
+            nsfw = false,
+        } = options;
+
+        const url = new URL(`${this.baseURL}/images`);
+        url.searchParams.append('limit', 1);
+
+        if (id) url.searchParams.append('imageId', id);
+        if (nsfw) url.searchParams.append('nsfw', 'true');
+
+        try {
+            const data = await fetchJSON(url.toString(), {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                },
+            });
+            return data.items[0];
+        } catch (error) {
+            console.error(`Failed to fetch image meta (id: ${imageId}):`, error);
+            throw error;
+        }
+    }
+
     async fetchModelInfo(id) {
         try {
             const data = await fetchJSON(`${this.baseURL}/models/${id}`, {
@@ -117,7 +187,9 @@ class Controller {
     static api = new CivitaiAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
     static #devicePixelRatio = +window.devicePixelRatio.toFixed(2);
+    static #errorTimer = null;
     static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
+    static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
 
     static #types = {
         'Checkpoint': 'Checkpoint',
@@ -186,6 +258,8 @@ class Controller {
         const [ pageId, paramString ] = page?.split('?') ?? [];
         document.title = CONFIG.title;
 
+        this.#pageNavigation = Date.now();
+
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
         onTargetInViewport();
         this.appElement.classList.add('page-loading');
@@ -195,6 +269,37 @@ class Controller {
         document.querySelector('#main-menu .menu a.active')?.classList.remove('active');
         if (pageId) document.querySelector(`#main-menu .menu a[href="${pageId}"]`)?.classList.add('active');
         document.documentElement.scrollTo({ top: 0, behavior: 'smooth' }); // Not sure about this...
+
+        const finishPageLoading = () => {
+            this.appElement.classList.remove('page-loading');
+            hideTimeError();
+        };
+
+        // Clear all errors and prepare new timer
+        if (this.#errorTimer) clearTimeout(this.#errorTimer);
+        document.getElementById('error-timeout')?.remove();
+        const showTimeOutError = () => {
+            this.#errorTimer = null;
+            const errorContainer = createElement('div', { id: 'error-timeout' });
+            const textTemplate = window.languagePack?.errors?.no_response ?? "Something is wrong, loading shouldn't take so long... You can check the developer console (Ctrl + Shift + I) and the API status: {{api-status}}";
+            const parts = textTemplate.split('{{api-status}}');
+
+            if (parts[0]) errorContainer.appendChild(document.createTextNode(parts[0]));
+            insertElement('a', errorContainer, { href: CONFIG.api_status_url, target: '_blank' }, 'CivitaAI API Status');
+            if (parts[1]) errorContainer.appendChild(document.createTextNode(parts[0]));
+
+            document.querySelector('body header').appendChild(errorContainer);
+        };
+
+        const hideTimeError = () => {
+            if (this.#errorTimer) {
+                clearTimeout(this.#errorTimer);
+                this.#errorTimer = null;
+            }
+            document.getElementById('error-timeout')?.remove();
+        };
+
+        this.#errorTimer = setTimeout(showTimeOutError, CONFIG.timeOut);
 
         let promise;
         if (pageId === '#home') promise = this.gotoHome();
@@ -210,33 +315,29 @@ class Controller {
             else promise = this.gotoImage(params.image);
         }
 
-        if (promise) promise.finally(() => {
-            this.appElement.classList.remove('page-loading');
-        });
-        else {
-            this.appElement.classList.remove('page-loading');
-        }
+        if (promise) promise.finally(finishPageLoading);
+        else finishPageLoading();
     }
 
     static gotoHome() {
         document.title = `${CONFIG.title} - ${window.languagePack?.text?.home ?? 'Home'}`;
-        const fragment = new DocumentFragment();
+        const appContent = createElement('div', { class: 'app-content' });
         const tempHome =  window.languagePack?.temp?.home ?? {};
-        insertElement('h1', fragment, undefined, window.languagePack?.text?.home);
-        insertElement('p', fragment, undefined, tempHome.p1?.[1]);
-        insertElement('p', fragment, undefined, tempHome.p1?.[2]);
-        insertElement('p', fragment, undefined, tempHome.p1?.[3]);
-        insertElement('p', fragment, undefined, tempHome.p1?.[4]);
-        insertElement('p', fragment, undefined, tempHome.p1?.[5]);
+        insertElement('h1', appContent, undefined, window.languagePack?.text?.home);
+        insertElement('p', appContent, undefined, tempHome.p1?.[1]);
+        insertElement('p', appContent, undefined, tempHome.p1?.[2]);
+        insertElement('p', appContent, undefined, tempHome.p1?.[3]);
+        insertElement('p', appContent, undefined, tempHome.p1?.[4]);
+        insertElement('p', appContent, undefined, tempHome.p1?.[5]);
 
-        insertElement('br', fragment);
-        insertElement('hr', fragment);
-        insertElement('br', fragment);
+        insertElement('br', appContent);
+        insertElement('hr', appContent);
+        insertElement('br', appContent);
 
-        insertElement('h2', fragment, undefined, tempHome.settingsDescription ?? 'Performance settings');
+        insertElement('h2', appContent, undefined, tempHome.settingsDescription ?? 'Performance settings');
 
         // Toggles
-        insertElement('p', fragment, undefined, tempHome.autoplayDescription);
+        insertElement('p', appContent, undefined, tempHome.autoplayDescription);
         const autoplayToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.autoplay = newValue;
@@ -246,9 +347,9 @@ class Controller {
             value: SETTINGS.autoplay,
             label: tempHome.autoplay ?? 'autoplay'
         });
-        fragment.appendChild(autoplayToggle.element);
-        insertElement('p', fragment, undefined, tempHome.resizeDescription);
-        insertElement('blockquote', fragment, undefined, tempHome.resizeNote);
+        appContent.appendChild(autoplayToggle.element);
+        insertElement('p', appContent, undefined, tempHome.resizeDescription);
+        insertElement('blockquote', appContent, undefined, tempHome.resizeNote);
         const resizeToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.resize = newValue;
@@ -258,10 +359,10 @@ class Controller {
             value: SETTINGS.resize,
             label: tempHome.resize ?? 'resize'
         });
-        fragment.appendChild(resizeToggle.element);
+        appContent.appendChild(resizeToggle.element);
 
         // Cache usage
-        const cachesWrap = insertElement('div', fragment);
+        const cachesWrap = insertElement('div', appContent);
         navigator.storage.estimate().then(info => {
             const caches = info.usageDetails?.caches ?? info.usage;
             if (caches > 200000000) { // 191 Mb
@@ -295,67 +396,174 @@ class Controller {
 
 
         this.appElement.textContent = '';
-        this.appElement.appendChild(fragment);
+        this.appElement.appendChild(appContent);
     }
 
     static gotoArticles() {
-        const fragment = new DocumentFragment();
+        const appContent = createElement('div', { class: 'app-content' });
         document.title = `${CONFIG.title} - ${window.languagePack?.text?.articles ?? 'Articles'}`;
-        const p = insertElement('p', fragment, { class: 'error-text' });
+        const p = insertElement('p', appContent, { class: 'error-text' });
         p.appendChild(getIcon('cross'));
         insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
         this.appElement.textContent = '';
-        this.appElement.appendChild(fragment);
+        this.appElement.appendChild(appContent);
     }
 
-    static gotoImage(url) {
-        const fragment = new DocumentFragment();
-        if (url.endsWith('.mp4')) {
-            const posterUrl = url.replace(/\/(width=\d+)\//, '/$1,anim=false,transcode=true,optimized=true/');
-            insertElement('video', fragment, { controls: '', class: 'loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none', autoplay: '', poster: `${posterUrl}?target=full-image`, src: `${url}?target=full-image` });
-        } else {
-            insertElement('img', fragment, { crossorigin: 'anonymous', alt: 'image', src: `${url}?target=full-image` });
-        }
-        insertElement('p', fragment, { class: 'error-text', style: 'text-align: center;' }, 'There should be a normal full-screen image here, with information about generation and other things, but the Civitai REST API does not provide such data 😭');
-        const id = url.split('/')?.at(-1)?.split('.')?.[0];
-        insertElement('a', fragment, { href: `${CONFIG.civitai_url}/images/${id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 0 auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
-        this.appElement.textContent = '';
-        this.appElement.appendChild(fragment);
+    static gotoImage(imageId) {
+        const pageNavigation = this.#pageNavigation;
+        const appContent = createElement('div', { class: 'app-content-wide full-image-page' });
+
+        this.api.fetchImageMeta({ id: imageId, nsfw: SETTINGS.nsfw }).then(media => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            console.log('Loaded image info', media);
+            if (!media) throw new Error('No Meta');
+
+            const mediaContainer = createElement('div', { class: 'media-full-preview' });
+            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image' });
+            mediaElement.style.aspectRatio = (media.width/media.height).toFixed(4);
+            mediaElement.style.width = `${media.width}px`;
+            mediaContainer.appendChild(mediaElement);
+            if (media.type === 'video' && !SETTINGS.autoplay) {
+                mediaContainer.classList.add('video-hover-play');
+                const videoPlayButton = getIcon('play');
+                videoPlayButton.classList.add('video-play-button');
+                mediaContainer.appendChild(videoPlayButton);
+            }
+            appContent.appendChild(mediaContainer);
+
+            const metaContainer = createElement('div', { class: 'media-full-meta' });
+
+            // const nsfwLevel = insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, `NSFW: ${media.nsfwLevel}`);
+
+            const creatorWrap = insertElement('div', metaContainer, { class: 'user-info' });
+            insertElement('div', creatorWrap, undefined, media.username);
+        
+            const statsList = [
+                { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
+                { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
+                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
+                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
+                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
+                { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+            ];
+            metaContainer.appendChild(this.#genStats(statsList));
+
+            // Generation info
+            if (media.meta) metaContainer.appendChild(this.#genImageGenerationMeta(media.meta));
+
+            insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
+            appContent.appendChild(metaContainer);
+        }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            console.error('Error:', error);
+            insertElement('h1', appContent, { class: 'error-text' }, 'Error');
+        }).finally(() => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            this.appElement.textContent = '';
+            this.appElement.appendChild(appContent);
+        });
     }
 
     static gotoImages() {
-        const fragment = new DocumentFragment();
+        const appContent = createElement('div', { class: 'app-content' });
         document.title = `${CONFIG.title} - ${window.languagePack?.text?.images ?? 'Images'}`;
-        insertElement('p', fragment, undefined, "Work In Progress");
-        insertElement('a', fragment, { href: 'https://developer.civitai.com/docs/api/public-rest#get-apiv1images' }, 'GET /api/v1/images');
+        insertElement('p', appContent, undefined, "Work In Progress");
+        insertElement('a', appContent, { href: 'https://developer.civitai.com/docs/api/public-rest#get-apiv1images' }, 'GET /api/v1/images');
         this.appElement.textContent = '';
-        this.appElement.appendChild(fragment);
+        this.appElement.appendChild(appContent);
     }
 
     static gotoModel(id, version = null) {
+        const pageNavigation = this.#pageNavigation;
         const fragment = new DocumentFragment();
+        const appContent = insertElement('div', fragment, { class: 'app-content' });
 
         return this.api.fetchModelInfo(id)
         .then(data => {
+            if (pageNavigation !== this.#pageNavigation) return;
             console.log('Loaded model:', data);
             const modelVersion = version ? data.modelVersions.find(v => v.name === version) ?? data.modelVersions[0] : data.modelVersions[0];
             document.title = `${data.name} - ${modelVersion.name} | ${modelVersion.baseModel} | ${data.type} | ${CONFIG.title}`;
-            fragment.appendChild(this.#genModelPage(data, version));
+            appContent.appendChild(this.#genModelPage(data, version));
+
+            // Images
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide' });
+            const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
+            onTargetInViewport(imagesListTrigger, () => {
+                imagesListTrigger.remove();
+                const imagesList = this.#genImages({ modelId: data.id, modelVersionId: modelVersion.id });
+                appContentWide.appendChild(imagesList);
+            });
         }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error);
-            insertElement('h1', fragment, { class: 'error-text' }, 'Error');
+            insertElement('h1', appContent, { class: 'error-text' }, 'Error');
         }).finally(() => {
+            if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
             this.appElement.appendChild(fragment);
         });
     }
 
     static gotoModels() {
+        const pageNavigation = this.#pageNavigation;
         let nextPageUrl = null;
-        const listWrap = createElement('div', { id: 'models-list', class: 'cards-list models-list', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; ` });
+        const appContent = createElement('div', { class: 'app-content app-content-wide' });
+        const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-list models-list', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; --gap: ${CONFIG.appearance.card.gap}px;` });
+
+        let allCards = [];
+        let fakeIndex = 0;
+        const setFakeFocus = index => {
+            listWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
+            allCards[index].setAttribute('tabindex', 0);
+            allCards[index].focus();
+        };
+        listWrap.addEventListener('keydown', e => {
+            if (e.ctrlKey) return;
+
+            const columns = Math.floor(window.innerWidth / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
+
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                if (Math.floor((fakeIndex + 1) / columns) === Math.floor(fakeIndex / columns)) {
+                    fakeIndex++;
+                    setFakeFocus(fakeIndex);
+                }
+                
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                if (Math.floor((fakeIndex - 1) / columns) === Math.floor(fakeIndex / columns)) {
+                    fakeIndex--;
+                    setFakeFocus(fakeIndex);
+                }
+                
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (fakeIndex + columns < allCards.length) {
+                    fakeIndex += columns;
+                    setFakeFocus(fakeIndex);
+                }
+                
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (fakeIndex >= columns) {
+                    fakeIndex -= columns;
+                    setFakeFocus(fakeIndex);
+                }
+                
+            }
+        });
+
         const insertModels = models => {
             console.log('Loaded models:', models);
-            models.forEach(model => !model.modelVersions?.length || model.tags.some(tag => SETTINGS.blackListTags.includes(tag)) || listWrap.querySelector(`.card[href$="${model.id}"]`) ? null : listWrap.appendChild(this.#genModelCard(model)));
+            models.forEach(model => {
+                if (!model.modelVersions?.length || model.tags.some(tag => SETTINGS.blackListTags.includes(tag)) || listWrap.querySelector(`.card[data-id="${model.id}"]`)) return;
+                const card = this.#genModelCard(model);
+                card.setAttribute('tabindex', -1);
+                allCards.push(card);
+                listWrap.appendChild(card);
+            });
             if (nextPageUrl) {
                 const loadMoreTrigger = insertElement('div', listWrap, { id: 'load-more' });
                 loadMoreTrigger.appendChild(getIcon('infinity'));
@@ -368,15 +576,19 @@ class Controller {
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
             }
         };
+
         const loadMore = () => {
             if (!nextPageUrl) return;
             return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
+                if (pageNavigation !== this.#pageNavigation) return;
                 nextPageUrl = data.metadata?.nextPage ?? null;
                 insertModels(data.items);
             }).catch(error => {
-                console.error('Failed to fetch models:', error);    
+                if (pageNavigation !== this.#pageNavigation) return;
+                console.error('Failed to fetch models:', error);
             });
         };
+
         return this.api.fetchModels({
             limit: 100,
             page: 1,
@@ -387,21 +599,27 @@ class Controller {
             baseModels: SETTINGS.baseModels,
             nsfw: SETTINGS.nsfw,
         }).then(data => {
+            if (pageNavigation !== this.#pageNavigation) return;
             console.log(data);
             nextPageUrl = data.metadata?.nextPage ?? null;
+            allCards = [];
             insertModels(data.items);
+            allCards[0]?.setAttribute('tabindex', 0);
+            fakeIndex = 0;
             document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
         }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error);
-            listWrap.textContent = 'Error!';
+            insertElement('h1', listWrap, { class: 'error-text' }, 'Error');
         }).finally(() => {
+            if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
-            this.appElement.appendChild(this.#genListFIlters(() => {
+            this.appElement.appendChild(this.#genModelsListFIlters(() => {
                 savePageSettings();
                 listWrap.classList.add('cards-loading');
                 Controller.gotoModels();
             }));
-            this.appElement.appendChild(listWrap);
+            this.appElement.appendChild(appContent);
         });
     }
 
@@ -409,7 +627,7 @@ class Controller {
         const modelVersion = version ? model.modelVersions.find(v => v.name === version) ?? model.modelVersions[0] : model.modelVersions[0];
         const page = createElement('div', { class: 'model-page', 'data-model-id': model.id });
 
-
+        // Model name
         const modelNameWrap = insertElement('div', page, { class: 'model-name' });
         const modelNameH1 = insertElement('h1', modelNameWrap, undefined, model.name);
         const statsList = [
@@ -447,7 +665,7 @@ class Controller {
             }
         });
 
-
+        // Model sub name
         const modelSubNameWrap = insertElement('p', page, { class: 'model-sub-name' });
         const publishedAt = new Date(modelVersion.publishedAt);
         insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': `${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}` }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
@@ -458,14 +676,37 @@ class Controller {
         model.modelVersions.forEach(version => {
             const href = `#models?model=${model.id}&version=${version.name}`;
             const isActive = version.name === modelVersion.name;
-            insertElement('a', modelVersionsWrap, { class: isActive ? 'badge active' : 'badge', href }, version.name);
+            version.element = insertElement('a', modelVersionsWrap, { class: isActive ? 'badge active' : 'badge', href, tabindex: -1 }, version.name);
+        });
+        model.modelVersions[0]?.element.setAttribute('tabindex', 0);
+        
+        let fakeIndex = 0;
+        const setFakeFocus = index => {
+            modelVersionsWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
+            model.modelVersions[index].element.setAttribute('tabindex', 0);
+            model.modelVersions[index].element.focus();
+        };
+        modelVersionsWrap.addEventListener('keydown', e => {
+            if (e.ctrlKey) return;
+
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                fakeIndex = (fakeIndex + 1) % model.modelVersions.length;
+                setFakeFocus(fakeIndex);
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                fakeIndex = (model.modelVersions.length + fakeIndex - 1) % model.modelVersions.length;
+                setFakeFocus(fakeIndex);
+            }
         });
 
-
+        // Model preview
         const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
         const previewList = modelVersion.images.map((media, index) => {
             const ratio = +(media.width/media.height).toFixed(3);
-            const item = createElement('a', { href: `#images?image=${media.url}`, style: `aspect-ratio: ${ratio};`, tabindex: -1 });
+            const item = createElement('div', { style: `aspect-ratio: ${ratio};` });
+            // const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1]; // This id is not real and there will always be an error
+            // const item = createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}` : ', style: `aspect-ratio: ${ratio};`, tabindex: -1 });
             const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
             const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, lazy: index > 3, taget: 'model-preview' });
             item.appendChild(mediaElement);
@@ -479,13 +720,14 @@ class Controller {
         });
         modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
 
-
-        const creatorWrap = insertElement('div', page, { class: 'model-creator' });
+        // Model creator
+        const creatorWrap = insertElement('div', page, { class: 'user-info' });
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
-        if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=creator-image` });
+        if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
         else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
         insertElement('div', creatorWrap, undefined, model.creator.username);
 
+        // Model version description
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
         const modelVersionNameWrap = insertElement('h2', modelVersionDescription, { class: 'model-version' }, modelVersion.name);
         const versionStatsList = [
@@ -495,33 +737,281 @@ class Controller {
         modelVersionNameWrap.appendChild(this.#genStats(versionStatsList));
         if (modelVersion.description) modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
 
+        // Model descrition
         const modelDescription = insertElement('div', page, { class: 'model-description' });
         modelDescription.appendChild(safeParseHTML(model.description));
 
-        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 0 auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        // Open in CivitAI
+        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 2em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
+        // Comments
+        // ...
 
         return page;
     }
 
+    // TODO: change number of columns when browser resizes
+    static #genImages({ modelId, modelVersionId }) {
+        const pageNavigation = this.#pageNavigation;
+        let nextPageUrl = null;
+        const fragment = new DocumentFragment();
+        const imagesTitle = insertElement('h1', fragment, { style: 'justify-content: center;;' });
+        imagesTitle.appendChild(getIcon('image'));
+        insertElement('span', imagesTitle, undefined, window.languagePack?.text?.images ?? 'Images');
+
+        const listWrap = createElement('div', { id: 'images-list', class: 'cards-list images-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --gap: ${CONFIG.appearance.card.gap}px;` });
+
+        let allImages = [];
+        let columns = [];
+        let fakeIndex = 0;
+        let fakeTableIndex = 0;
+        const setFakeFocus = index => {
+            listWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
+            allImages[index].element.setAttribute('tabindex', 0);
+            allImages[index].element.focus();
+        };
+        listWrap.addEventListener('keydown', e => {
+            if (e.ctrlKey) return;
+
+            if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                if (fakeTableIndex + 1 < columns.length) {
+                    const currentColumn = columns[fakeTableIndex].positions;
+                    const currentImageTop = currentColumn.find(e => e.index === fakeIndex).top;
+    
+                    fakeTableIndex = fakeTableIndex + 1;
+                    const nextColumn = columns[fakeTableIndex].positions;
+                    const closestImage = nextColumn.reduce((closest, item) => {
+                        const diff = Math.abs(item.top - currentImageTop);
+                        const closestDiff = Math.abs(closest.top - currentImageTop);
+                        return diff < closestDiff ? item : closest;
+                    });
+                    fakeIndex = closestImage.index;
+                    setFakeFocus(fakeIndex);
+                }
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                if (fakeTableIndex > 0) {
+                    const currentColumn = columns[fakeTableIndex].positions;
+                    const currentImageTop = currentColumn.find(e => e.index === fakeIndex).top;
+    
+                    fakeTableIndex = fakeTableIndex - 1;
+                    const nextColumn = columns[fakeTableIndex].positions;
+                    const closestImage = nextColumn.reduce((closest, item) => {
+                        const diff = Math.abs(item.top - currentImageTop);
+                        const closestDiff = Math.abs(closest.top - currentImageTop);
+                        return diff < closestDiff ? item : closest;
+                    });
+                    fakeIndex = closestImage.index;
+                    setFakeFocus(fakeIndex);
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                const column = columns[fakeTableIndex].positions;
+                const currentImageIndex = column.findIndex(e => e.index === fakeIndex);
+                if (currentImageIndex < column.length) {
+                    const closestImage = column[currentImageIndex + 1];
+                    fakeIndex = closestImage.index;
+                    setFakeFocus(fakeIndex);
+                }
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                const column = columns[fakeTableIndex].positions;
+                const currentImageIndex = column.findIndex(e => e.index === fakeIndex);
+                if (currentImageIndex > 0) {
+                    const closestImage = column[currentImageIndex - 1];
+                    fakeIndex = closestImage.index;
+                    setFakeFocus(fakeIndex);
+                }
+            }
+        });
+
+        fragment.appendChild(this.#genImagesListFilters(() => {
+            savePageSettings();
+            listWrap.classList.add('cards-loading');
+            loadImages();
+        }));
+
+        const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more' });
+        firstLoadingPlaceholder.appendChild(getIcon('infinity'));
+
+        fragment.appendChild(listWrap);
+
+        const loadMore = () => {
+            if (!nextPageUrl) return;
+            return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                nextPageUrl = data.metadata?.nextPage ?? null;
+                insertImages(data.items);
+            }).catch(error => {
+                console.error('Failed to fetch images:', error);
+            });
+        };
+
+        const updateColumns = () => {
+            columns = [];
+            let columnsCount = Math.floor(window.innerWidth / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
+            for(let i = 0; i < columnsCount; i++) {
+                columns.push({
+                    height: 0,
+                    element: createElement('div', { class: 'images-column' }),
+                    positions: []
+                });
+            }
+
+            if (allImages.length) {
+                insertImages(allImages);
+                allImages[0].element.setAttribute('tabindex', 0);
+                fakeIndex = 0;
+                fakeTableIndex = 0;
+            }
+        };
+
+        const insertImages = images => {
+            console.log('Loaded images:', images);
+            images.forEach(image => {
+                if (listWrap.querySelector(`.card[data-id="${image.id}"]`)) return;
+
+                const card = image.element ?? this.#genImageCard(image);
+                card.setAttribute('tabindex', -1);
+                const ratio = image.width / image.height;
+
+                if (!image.element) image.element = card;
+                allImages.push(image);
+
+                const targetColumn = columns.reduce((minCol, col) => {
+                    return col.height < minCol.height ? col : minCol;
+                }, columns[0]);
+
+                targetColumn.element.appendChild(card);
+                const cardHeight = Math.round(CONFIG.appearance.card.width / ratio);
+                targetColumn.positions.push({ element: card, top: Math.round(targetColumn.height + cardHeight / 2), index: allImages.length - 1 });
+                targetColumn.height += cardHeight + CONFIG.appearance.card.gap;
+            });
+
+            const targetColumn = columns.reduce((minCol, col) => {
+                return col.height < minCol.height ? col : minCol;
+            }, columns[0]);
+
+            if (nextPageUrl) {
+                const loadMoreTrigger = insertElement('div', targetColumn.element, { id: 'load-more' });
+                loadMoreTrigger.appendChild(getIcon('infinity'));
+                onTargetInViewport(loadMoreTrigger, () => {
+                    loadMore().then(() => loadMoreTrigger.remove());
+                });
+            } else {
+                const loadNoMore = insertElement('div', targetColumn.element, { id: 'load-no-more' });
+                loadNoMore.appendChild(getIcon('ufo'));
+                insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
+            }
+        };
+
+        const loadImages = () => {
+            allImages = [];
+            updateColumns();
+
+            this.api.fetchImages({
+                limit: 100,
+                page: 1,
+                sort: SETTINGS.sort_images,
+                period: SETTINGS.period_images,
+                nsfw: SETTINGS.nsfw,
+                modelId,
+                modelVersionId
+            }).then(data => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                console.log(data);
+                nextPageUrl = data.metadata?.nextPage ?? null;
+                listWrap.textContent = '';
+                columns.forEach(col => listWrap.appendChild(col.element));
+                insertImages(data.items);
+                allImages[0]?.element?.setAttribute('tabindex', 0);
+                fakeIndex = 0;
+                fakeTableIndex = 0;
+            }).catch(error => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                console.error('Error:', error);
+                listWrap.textContent = 'Error!';
+            }).finally(() => {
+                firstLoadingPlaceholder.remove();
+                listWrap.classList.remove('cards-loading');
+            });
+        };
+
+        loadImages();
+
+        return fragment;
+    }
+
     static #genStats(stats) {
-        const statsWrap = createElement('div', { class: 'badges model-stats' });
-        stats.forEach(({ icon, value, formatter, unit, type }) => {
-            const statWrap = insertElement('div', statsWrap, { class: 'badge' });
+        const statsWrap = createElement('div', { class: 'badges' });
+        stats.forEach(({ icon, iconString, value, formatter, unit, type }) => {
+            const statWrap = insertElement('div', statsWrap, { class: 'badge', 'data-value': value });
             if (unit) {
                 const untis = window.languagePack?.units?.[unit];
                 if (untis) statWrap.setAttribute('lilpipe-text', `${value} ${pluralize(value, untis)}`);
-            }
+            } else statWrap.setAttribute('lilpipe-text', value);
             if (type) statWrap.setAttribute('data-badge', type);
-            statWrap.appendChild(getIcon(icon));
+            if (icon) statWrap.appendChild(getIcon(icon));
+            if (iconString) statWrap.appendChild(document.createTextNode(iconString));
             insertElement('span', statWrap, undefined, formatter?.(value) ?? value);
         });
         return statsWrap;
     }
 
+    static #genImageGenerationMeta(meta) {
+        const container = createElement('div', { class: 'generation-info' });
+
+        // TODO: remixOfId from extra fields
+
+        // params
+        if (meta.prompt) insertElement('code', container, { class: 'prompt prompt-positive' }, meta.prompt);
+        if (meta.negativePrompt) insertElement('code', container, { class: 'prompt prompt-negative' }, meta.negativePrompt);
+        const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
+        if (meta.Size) insertElement('code', otherMetaContainer, undefined, `Size: ${meta.Size}`);
+        if (meta.cfgScale) insertElement('code', otherMetaContainer, undefined, `CFG: ${meta.cfgScale}`);
+        if (meta.sampler) insertElement('code', otherMetaContainer, undefined, `Sampler: ${meta.sampler}`);
+        if (meta['Schedule type']) insertElement('code', otherMetaContainer, undefined, `Sheduler: ${meta['Schedule type']}`);
+        if (meta.steps) insertElement('code', otherMetaContainer, undefined, `Steps: ${meta.steps}`);
+        if (meta.clipSkip) insertElement('code', otherMetaContainer, undefined, `clipSkip: ${meta.clipSkip}`);
+        if (meta.seed) insertElement('code', otherMetaContainer, undefined, `Seed: ${meta.seed}`);
+        if (meta.workflow) insertElement('code', otherMetaContainer, undefined, meta.workflow);
+        if (meta['Hires upscaler']) insertElement('code', otherMetaContainer, undefined, `Hires: ${meta['Hires upscaler']} x${meta['Hires upscale']}`);
+        if (meta['ADetailer model']) {
+            const tooltip = Object.keys(meta).filter(key => key.indexOf('ADetailer') === 0).map(key => `<tr><td>${key.replace('ADetailer', '').trim()}</td><td>${meta[key]}</td></tr>`).join('');
+            const code = insertElement('code', otherMetaContainer, undefined, `ADetailer: ${meta['ADetailer model']}`);
+            if (tooltip) code.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
+        }
+        // if (meta['Denoising strength']) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength']}`); // This is where...
+
+        // Resources
+        if (meta.civitaiResources?.length || meta.resources?.length) {
+            const resourcesContainer = insertElement('div', container, { class: 'meta-resources' });
+            insertElement('h3', resourcesContainer, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used');
+
+            meta.civitaiResources?.forEach(item => {
+                const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
+                // TODO: Understand where to get the names and id for the link...
+                const nameEl = insertElement('span', el, { href: `#models?model=${item.modelVersionId}`, class: 'meta-resource-name' }, item.name || `${item.modelVersionId} ${item.modelVersionName}` );
+                insertElement('span', el, { class: 'meta-resource-type' }, item.type);
+                if (item.weight) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+            });
+
+            meta.resources?.forEach(item => {
+                const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
+                const nameEl = insertElement('span', el, { class: 'meta-resource-name' }, item.name);
+                insertElement('span', el, { class: 'meta-resource-type' }, item.type);
+                if (item.weight) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+            });
+        }
+
+        return container;
+    }
+
     static #genModelCard(model) {
         const modelVersion = model.modelVersions[0];
         const previewMedia = modelVersion.images[0];
-        const card = createElement('a', { class: 'card model-card', 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}` });
+        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}` });
         if (previewMedia?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -545,9 +1035,9 @@ class Controller {
         const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : (new Date() - new Date(modelVersion.publishedAt) < 3 * 24 * 60 * 60 * 1000) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
         if (availabilityBadge) insertElement('span', modelTypeWrap, { class: 'model-availability', 'data-availability': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
 
-        const creatorWrap = insertElement('div', cardContentWrap, { class: 'model-creator' });
+        const creatorWrap = insertElement('div', cardContentWrap, { class: 'user-info' });
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
-        if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=creator-image` });
+        if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
         else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
         insertElement('div', creatorWrap, undefined, model.creator.username);
     
@@ -561,6 +1051,38 @@ class Controller {
         ];
         cardContentWrap.appendChild(this.#genStats(statsList));
     
+        return card;
+    }
+
+    static #genImageCard(image) {
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
+        if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
+        const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+        const mediaElement = this.#genMediaElement({ media: image, width: CONFIG.appearance.card.width, resize: SETTINGS.resize, target: 'image-card', lazy: true });
+        cardBackgroundWrap.appendChild(mediaElement);
+        if (image.type === 'video' && !SETTINGS.autoplay) {
+            const videoPlayButton = getIcon('play');
+            videoPlayButton.classList.add('video-play-button');
+            cardBackgroundWrap.appendChild(videoPlayButton);
+            cardBackgroundWrap.classList.add('video-hover-play');
+        }
+
+        const nsfwLevel = insertElement('div', cardContentWrap, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+
+        const creatorWrap = insertElement('div', cardContentWrap, { class: 'user-info' });
+        insertElement('div', creatorWrap, undefined, image.username);
+    
+        const statsList = [
+            { iconString: '👍', value: image.stats.likeCount, formatter: formatNumber, unit: 'like' },
+            { iconString: '👎', value: image.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
+            { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber },
+            { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber },
+            { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber },
+            { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+        ];
+        cardContentWrap.appendChild(this.#genStats(statsList));
+
         return card;
     }
 
@@ -624,7 +1146,7 @@ class Controller {
         const previewUrl = media.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${ratio < 1 ? blurSize : Math.round(blurSize/ratio)}&height=${ratio < 1 ? Math.round(blurSize/ratio) : blurSize}` : '';
         if (media.type === 'image') {
             const src = SETTINGS.autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
-            mediaElement = createElement('img', { class: 'loading',  alt: 'model-preview', crossorigin: 'anonymous', src: lazy ? '' : src });
+            mediaElement = createElement('img', { class: 'loading',  alt: 'image', crossorigin: 'anonymous', src: lazy ? '' : src });
             if (lazy) onTargetInViewport(mediaElement, () => {
                 mediaElement.src = src;
             });
@@ -650,7 +1172,39 @@ class Controller {
         return mediaElement;
     }
 
-    static #genListFIlters(onAnyChange) {
+    static #genImagesListFilters(onAnyChange) {
+        const filterWrap = createElement('div', { class: 'list-filters' });
+
+        // Sort list
+        const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest", "Random" ];
+        const sortList = this.#genList({ onchange: ({ newValue }) => {
+            SETTINGS.sort_images = newValue;
+            onAnyChange?.();
+        }, value: SETTINGS.sort_images, options: sortOptions, labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ])) });
+        const filterSortList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'sort' });
+        filterSortList.appendChild(sortList.element);
+
+        // Period list
+        const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
+        const periodList = this.#genList({ onchange: ({ newValue }) => {
+            SETTINGS.period_images = newValue;
+            onAnyChange?.();
+        }, value: SETTINGS.period_images, options: periodOptions, labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ])) });
+        const filterPeriodList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'period' });
+        filterPeriodList.appendChild(periodList.element);
+
+        // NSFW toggle
+        const filterNSFW = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'nsfw' });
+        const nsfwToggle = this.#genBoolean({ onchange: ({ newValue }) => {
+            SETTINGS.nsfw = newValue;
+            onAnyChange?.();
+        }, value: SETTINGS.nsfw, label: 'NSFW' });
+        filterNSFW.appendChild(nsfwToggle.element);
+
+        return filterWrap;
+    }
+
+    static #genModelsListFIlters(onAnyChange) {
         const filterWrap = createElement('div', { class: 'list-filters' });
         // Models list
         const modelsOptions = [
@@ -705,7 +1259,7 @@ class Controller {
             "OpenAI",
             "Other"
         ];
-        const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, value ]));
+        const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? value ]));
         const modelsList = this.#genList({ onchange: ({ newValue }) => {
             SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
             onAnyChange?.();
@@ -715,7 +1269,8 @@ class Controller {
 
         // Types list
         const typeOptions = [ "All", "Checkpoint", "TextualInversion", "Hypernetwork", "AestheticGradient", "LORA", "LoCon", "DoRA", "Controlnet", "Upscaler", "MotionModule", "VAE", "Poses", "Wildcards", "Workflows", "Detection", "Other" ];
-        const typeLabels = { "All": "All", "Checkpoint": "Checkpoint", "TextualInversion": "Textual Inversion", "Hypernetwork": "Hypernetwork", "AestheticGradient": "Aesthetic Gradient", "LORA": "LORA", "LoCon": "LoCon", "DoRA": "DoRA", "Controlnet": "Controlnet", "Upscaler": "Upscaler", "MotionModule": "Motion", "VAE": "VAE", "Poses": "Poses", "Wildcards": "Wildcards", "Workflows": "Workflows", "Detection": "Detection", "Other": "Other" };
+        const typeLabelsDefault = { "All": "All", "Checkpoint": "Checkpoint", "TextualInversion": "Textual Inversion", "Hypernetwork": "Hypernetwork", "AestheticGradient": "Aesthetic Gradient", "LORA": "LORA", "LoCon": "LoCon", "DoRA": "DoRA", "Controlnet": "СontrolNet", "Upscaler": "Upscaler", "MotionModule": "Motion", "VAE": "VAE", "Poses": "Poses", "Wildcards": "Wildcards", "Workflows": "Workflows", "Detection": "Detection", "Other": "Other" };
+        const typeLabels = Object.fromEntries(typeOptions.map(value => [ value, window.languagePack?.text?.typeOptions?.[value] ?? typeLabelsDefault[value] ?? value ]));
         const typesList = this.#genList({ onchange: ({ newValue }) => {
             SETTINGS.types = newValue === 'All' ? [] : [ newValue ];
             onAnyChange?.();
@@ -937,7 +1492,7 @@ function onTargetInViewport(target, callback) {
             obs.disconnect();
             callback();
         }
-    }, { threshold: 0.1 });
+    }, { threshold: 0.05 });
 
     observer.observe(target);
 }
@@ -987,7 +1542,9 @@ if (!document.hidden) {
 // =================================
 
 document.addEventListener('click', e => {
-    const href = e.target.closest('a[href^="#"]')?.getAttribute('href');
+    if (e.ctrlKey) return;
+
+    const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
     if (href) {
         e.preventDefault();
         if (href !== location.hash) history.pushState(null, '', href);

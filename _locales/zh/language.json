@@ -10,6 +10,7 @@
         "download": "下载",
         "images": "图片",
         "period": "时间范围",
+        "resurces_used": "使用的资源",
         "openOnCivitAI": "在 CivitAI 上打开",
         "sort": "排序",
         "language": "语言",
@@ -21,7 +22,10 @@
             "Most Collected": "最多收藏",
             "Most Images": "最多图片",
             "Newest": "最新",
-            "Oldest": "最旧"
+            "Oldest": "最旧",
+            "Most Reactions": "最多反应",
+            "Most Comments": "最多评论",
+            "Random": "随机"
         },
         "periodOptions": {
             "AllTime": "全部时间",
@@ -30,6 +34,14 @@
             "Week": "一周内",
             "Day": "一天内"
         },
+        "modelLabels": {
+            "All": "全部",
+            "Other": "其他"
+        },
+        "typeOptions": {
+            "All": "全部",
+            "Other": "其他"
+        },
         "checkpointTypeOptions": {
             "All": "全部",
             "Trained": "已训练",
@@ -37,7 +49,8 @@
         }
     },
     "errors": {
-        "no_media": "没有媒体"
+        "no_media": "没有媒体",
+        "no_response": "出了点问题，加载不应该花这么长时间...您可以检查开发者控制台（Ctrl + Shift + I）和 API 状态：{{api-status}}"
     },
     "units": {
         "second": ["秒", "秒", "秒"],
@@ -48,6 +61,7 @@
         "month": ["月", "月", "月"],
         "year": ["年", "年", "年"],
         "like": ["点赞", "点赞", "点赞"],
+        "dislike": ["点踩", "一个点踩", "多个点踩"],
         "download": ["下载", "下载", "下载"],
         "bookmark": ["书签", "书签", "书签"],
         "message": ["消息", "消息", "消息"],
@@ -69,7 +83,7 @@
             "p1": [
                 "这是 CivitAI 网站的“简化版”。该页面的主要目标是让你能搜索 CivitAI 上的模型，而无需忍受原始网站的糟糕性能。",
                 "由于 CivitAI 的公共 API 限制，这里缺少了很多原始网站上的功能。",
-                "遗憾的是，API 不提供文章信息（文章列表和内容）或图像生成信息（图像元数据）😭",
+                "不幸的是，API 不提供有关文章的信息（文章列表和内容）😭",
                 "祝你找到合适的模型！",
                 "（你可以在页面底部切换语言）"
             ],
