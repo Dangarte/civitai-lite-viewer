@@ -75,7 +75,7 @@ async function cacheFetch(request, cacheControl) {
     if (request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return localFetch(request);
 
     if (request.url.indexOf(SW_CONFIG.base_url) === 0 && !cacheControl) {
-        const url = new URL(e.request.url);
+        const url = new URL(request.url);
         if ( // Cache for a 3 mins only
             url.pathname === '/civitai-lite-viewer/' ||
             url.pathname === '/civitai-lite-viewer/index.html' ||
