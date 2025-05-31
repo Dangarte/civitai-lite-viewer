@@ -87,7 +87,8 @@
                 "祝你找到合适的模型！",
                 "（你可以在页面底部切换语言）"
             ],
-            "settingsDescription": "性能设置",
+            "settingsDescription": "设置",
+            "blackListTagsDescription": "要隐藏的标签列表（以逗号分隔）",
             "autoplay": "自动播放",
             "autoplayDescription": "如果关闭自动播放，卡片页面将不会显示 GIF，所有页面的视频默认暂停，仅在悬停时播放。",
             "resize": "SW 尺寸调整",

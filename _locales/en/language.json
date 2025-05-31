@@ -87,7 +87,8 @@
                 "Good luck finding models!",
                 "(You can switch the language in the page footer)"
             ],
-            "settingsDescription": "Performance settings",
+            "settingsDescription": "Settings",
+            "blackListTagsDescription": "List of tags to hide (separated by commas)",
             "autoplay": "Autoplay",
             "autoplayDescription": "If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.",
             "resize": "SW Resizing",

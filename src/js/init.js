@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 3,
+    version: 4,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -38,7 +38,7 @@ const SETTINGS = {
     period: 'Month',
     period_images: 'Month',
     baseModels: [],
-    blackListTags: [ 'gay' ],
+    blackListTags: [], // TODO: Doesn't work on images (pictures don't have tags), need to poke around the API, maybe there's some field like excludedTags...
     nsfw: true,
 };
 
@@ -60,14 +60,17 @@ class CivitaiAPI {
             query = '',
             tag = '',
             username = '',
+            status = '',
             types = [],
             baseModels = [],
             checkpointType = 'All',
+            browsingLevel = '', // Is it work?
             sort = '',
             period = '',
             rating = '',
             favorites = false,
             hidden = false,
+            primaryFileOnly = false,
             nsfw = false
         } = options;
 
@@ -87,6 +90,9 @@ class CivitaiAPI {
         if (favorites) url.searchParams.append('favorites', 'true');
         if (hidden) url.searchParams.append('hidden', 'true');
         if (nsfw) url.searchParams.append('nsfw', 'true');
+        if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true');
+        if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // Is it work?
+        if (status) url.searchParams.append('status', status);
 
         try {
             const data = await fetchJSON(url.toString(), {
@@ -178,6 +184,22 @@ class CivitaiAPI {
             return data;
         } catch (error) {
             console.error('Failed to fetch model info:', error);
+            throw error;
+        }
+    }
+
+    async fetchModelVersionInfo(id, byHash = false) {
+        const url = `${this.baseURL}/model-versions/${byHash ? `by-hash/${encodeURIComponent(id)}` : id}`;
+        try {
+            const data = await fetchJSON(url, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                },
+            });
+            return data;
+        } catch (error) {
+            console.error('Failed to fetch model version info:', error);
             throw error;
         }
     }
@@ -305,7 +327,7 @@ class Controller {
         if (pageId === '#home') promise = this.gotoHome();
         else if (pageId === '#models') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (!params.model) promise = this.gotoModels();
+            if (!params.model) promise = this.gotoModels({ tag: params.tag });
             else promise = this.gotoModel(params.model, params.version);
         }
         else if (pageId === '#articles') promise = this.gotoArticles();
@@ -334,10 +356,22 @@ class Controller {
         insertElement('hr', appContent);
         insertElement('br', appContent);
 
-        insertElement('h2', appContent, undefined, tempHome.settingsDescription ?? 'Performance settings');
+        insertElement('h2', appContent, undefined, tempHome.settingsDescription ?? 'Settings');
+
+        // Inputs
+        insertElement('p', appContent, undefined, tempHome.blackListTagsDescription ?? 'List of tags to hide (separated by commas)');
+        const blackListTagsInput = this.#genStringInput({
+            onchange: ({ newValue }) => {
+                SETTINGS.blackListTags = newValue.split(',').map(tag => tag.trim()).filter(tag => tag) ?? [];
+                savePageSettings();
+            },
+            value: SETTINGS.blackListTags.join(', '),
+            placeholder: 'tags separated by commas'
+        });
+        appContent.appendChild(blackListTagsInput.element);
 
         // Toggles
-        insertElement('p', appContent, undefined, tempHome.autoplayDescription);
+        insertElement('p', appContent, undefined, tempHome.autoplayDescription ?? 'If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.');
         const autoplayToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.autoplay = newValue;
@@ -348,8 +382,9 @@ class Controller {
             label: tempHome.autoplay ?? 'autoplay'
         });
         appContent.appendChild(autoplayToggle.element);
-        insertElement('p', appContent, undefined, tempHome.resizeDescription);
-        insertElement('blockquote', appContent, undefined, tempHome.resizeNote);
+
+        insertElement('p', appContent, undefined, tempHome.resizeDescription ?? 'If SW resizing is enabled, images on the card page will be resized to their actual size (with DPR in mind) before being displayed. Otherwise, the server-provided size will be shown with automatic scaling.');
+        insertElement('blockquote', appContent, undefined, tempHome.resizeNote ?? "For example: the server returned an image sized 320x411 for a 300x450 request — with SW resizing enabled, the page will still get 300x450, and the browser won't need to resize it on the fly.");
         const resizeToggle = this.#genBoolean({
             onchange: ({ newValue }) => {
                 SETTINGS.resize = newValue;
@@ -506,7 +541,8 @@ class Controller {
         });
     }
 
-    static gotoModels() {
+    static gotoModels(options = {}) {
+        const { tag = '' } = options;
         const pageNavigation = this.#pageNavigation;
         let nextPageUrl = null;
         const appContent = createElement('div', { class: 'app-content app-content-wide' });
@@ -589,18 +625,28 @@ class Controller {
             });
         };
 
+        this.appElement.textContent = '';
+        this.appElement.appendChild(this.#genModelsListFIlters(() => {
+            savePageSettings();
+            listWrap.classList.add('cards-loading');
+            Controller.gotoModels();
+        }));
+        this.appElement.appendChild(appContent);
+
         return this.api.fetchModels({
             limit: 100,
             page: 1,
+            tag,
             types: SETTINGS.types,
             sort: SETTINGS.sort,
             period: SETTINGS.period,
             checkpointType: SETTINGS.checkpointType,
+            primaryFileOnly: true,
             baseModels: SETTINGS.baseModels,
             nsfw: SETTINGS.nsfw,
         }).then(data => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.log(data);
+            console.log('Loaded models:', data);
             nextPageUrl = data.metadata?.nextPage ?? null;
             allCards = [];
             insertModels(data.items);
@@ -611,15 +657,6 @@ class Controller {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error);
             insertElement('h1', listWrap, { class: 'error-text' }, 'Error');
-        }).finally(() => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            this.appElement.textContent = '';
-            this.appElement.appendChild(this.#genModelsListFIlters(() => {
-                savePageSettings();
-                listWrap.classList.add('cards-loading');
-                Controller.gotoModels();
-            }));
-            this.appElement.appendChild(appContent);
         });
     }
 
@@ -640,11 +677,12 @@ class Controller {
         if (availabilityBadge) statsList.push({ icon: 'information', value: window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge, type: availabilityBadge });
         modelNameH1.appendChild(this.#genStats(statsList));
 
+        // Download buttons
         const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
         modelVersion.files.forEach(file => {
             const download = window.languagePack?.text?.download ?? 'Download';
             const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
-            const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl });
+            const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-text': file.type, 'lilpipe-delay': 600 });
             a.appendChild(getIcon('download'));
             if (file.type === 'Model') {
                 const downloadTitle = `${download} ${file.metadata.fp ?? ''} (${fileSize})` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
@@ -666,11 +704,11 @@ class Controller {
         });
 
         // Model sub name
-        const modelSubNameWrap = insertElement('p', page, { class: 'model-sub-name' });
+        const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
         const publishedAt = new Date(modelVersion.publishedAt);
         insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': `${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}` }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
         const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
-        model.tags.forEach(tag => insertElement('div', modelTagsWrap, { class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
+        model.tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${tag}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
 
         const modelVersionsWrap = insertElement('div', page, { class: 'badges model-versions' });
         model.modelVersions.forEach(version => {
@@ -721,11 +759,13 @@ class Controller {
         modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
 
         // Model creator
-        const creatorWrap = insertElement('div', page, { class: 'user-info' });
-        const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
-        if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
-        else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
-        insertElement('div', creatorWrap, undefined, model.creator.username);
+        if (model.creator) {
+            const creatorWrap = insertElement('div', page, { class: 'user-info' });
+            const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
+            if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
+            else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
+            insertElement('div', creatorWrap, undefined, model.creator.username);
+        }
 
         // Model version description
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
@@ -739,7 +779,11 @@ class Controller {
 
         // Model descrition
         const modelDescription = insertElement('div', page, { class: 'model-description' });
+        model.description = this.#analyzeModelDescriptionString(model.description);
         modelDescription.appendChild(safeParseHTML(model.description));
+
+        // Analyze descriptions and find patterns to improve display
+        this.#analyzeModelDescription(modelDescription);
 
         // Open in CivitAI
         insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 2em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
@@ -959,50 +1003,250 @@ class Controller {
         return statsWrap;
     }
 
+    static #analyzeModelDescriptionString(description) {
+        // There should be rules here to improve formatting...
+        // But... all creators have their own description format, and they don't really fit together,
+        // I can't write for everyone, maybe I'll run the first hundred creators (their description format) through llm later
+        const rules = [
+            //
+            { regex: '<br /></p>', replacement: '</p>'  },
+            // Handle potential prompt blocks with poorly formatted text
+            { regex: /<p>\s*(positive\s+)?prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, __, promptText) => `<p>Positive Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
+            { regex: /<p>\s*negative\s+prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, promptText) => `<p>Negative Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
+            // Sometimes descriptions contain homemade separators... along with the usual <hr>...
+            { regex: /<p>\s*([\-=_*+])\1{4,}\s*<\/p>/gi, replacement: '<hr>' },
+            { regex: /(?:^|\n)\s*([\-=_*+])\1{4,}\s*(?=\n|$)/g, replacement: '\n<hr>\n' },
+        ];
+
+        return rules.reduce((acc, { skip, regex, replacement }) => !skip ? acc.replace(regex, replacement) : acc, description);
+    }
+
+    static #analyzeModelDescription(description) {
+        // Remove garbage (empty elements and all unnecessary things)
+        description.querySelectorAll('p:empty, h3:empty').forEach(el => el.remove());
+
+        // If a block of code has a lot of commas, it's probably a prompt block
+        description.querySelectorAll('code').forEach(code => {
+            const text = code.textContent;
+            let count = 0;
+            let pos = text.indexOf(',');
+            while (pos !== -1 || count < 3) {
+                count++;
+                pos = text.indexOf(',', pos + 1);
+            }
+
+            if (count > 3) code.classList.add('prompt');
+            else if (text.indexOf('\n') !== -1) {
+                code.classList.add('code-block');
+                return;
+            }
+        });
+
+        description.querySelectorAll('p:has(+pre)').forEach(p => {
+            const text = p.textContent.trim().toLowerCase();
+            if (text === 'positive prompt' || text.indexOf('positive prompt') === 0) {
+                getFollowingTagGroup(p, 'pre').forEach(pre => {
+                    const code = pre.querySelector('code');
+                    if (!code) return;
+
+                    code.classList.add('prompt', 'prompt-positive');
+                    this.#analyzePromptCode(code);
+                });
+            } else if (text === 'negative prompt' || text.indexOf('negative prompt') === 0) {
+                getFollowingTagGroup(p, 'pre').forEach(pre => {
+                    const code = pre.querySelector('code');
+                    if (!code) return;
+
+                    code.classList.add('prompt', 'prompt-negative');
+                    this.#analyzePromptCode(code);
+                });
+            }
+        });
+    }
+
+    static #analyzePromptCode(codeElement) {
+        if (!codeElement) return;
+        // Some prompts are hard to read due to missing spaces after commas
+        const fixedText = codeElement.textContent.replace(/,(?!\s)/g, ', ').trim();
+
+        // Highlight keywords and brackets of tag weight
+        const keywords = new Set([ 'BREAK', '{PROMPT}' ]);
+        const fragment = new DocumentFragment();
+        let lastTextNode = null;
+        const pushText = text => {
+            if (lastTextNode) {
+                lastTextNode.textContent += text;
+            } else {
+                lastTextNode = document.createTextNode(text);
+                fragment.appendChild(lastTextNode);
+            }
+        };
+        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|\\[()[\]]|[\[\]()]+|:[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
+
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+
+            if (/^<lora:[^:>]+:[^>]+>$/.test(token)) {
+                insertElement('span', fragment, { class: 'lora' }, token);
+            } else if (/^[\[\]()]+$/.test(token)) {
+                insertElement('span', fragment, { class: 'bracket' }, token);
+            } else if (/^:[0-9.]+$/.test(token) && tokens[i + 1] === ')') {
+                insertElement('span', fragment, { class: 'weight' }, token);
+            } else if (keywords.has(token)) {
+                insertElement('span', fragment, { class: 'keyword' }, token);
+            } else {
+                pushText(token);
+                continue;
+            }
+
+            lastTextNode = null;
+        }
+
+        codeElement.textContent = '';
+        codeElement.appendChild(fragment);
+    }
+
     static #genImageGenerationMeta(meta) {
         const container = createElement('div', { class: 'generation-info' });
 
         // TODO: remixOfId from extra fields
 
         // params
-        if (meta.prompt) insertElement('code', container, { class: 'prompt prompt-positive' }, meta.prompt);
-        if (meta.negativePrompt) insertElement('code', container, { class: 'prompt prompt-negative' }, meta.negativePrompt);
+        if (meta.baseModel) insertElement('code', container, { class: 'prompt meta-baseModel' }, meta.baseModel);
+        if (meta.prompt) {
+            const code = insertElement('code', container, { class: 'prompt prompt-positive' }, meta.prompt);
+            this.#analyzePromptCode(code);
+        }
+        if (meta.negativePrompt) {
+            const code = insertElement('code', container, { class: 'prompt prompt-negative' }, meta.negativePrompt);
+            this.#analyzePromptCode(code);
+        }
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
         if (meta.Size) insertElement('code', otherMetaContainer, undefined, `Size: ${meta.Size}`);
         if (meta.cfgScale) insertElement('code', otherMetaContainer, undefined, `CFG: ${meta.cfgScale}`);
         if (meta.sampler) insertElement('code', otherMetaContainer, undefined, `Sampler: ${meta.sampler}`);
-        if (meta['Schedule type']) insertElement('code', otherMetaContainer, undefined, `Sheduler: ${meta['Schedule type']}`);
+        if (meta['Schedule type'] || meta.scheduler ) insertElement('code', otherMetaContainer, undefined, `Sheduler: ${meta['Schedule type'] || meta.scheduler}`);
         if (meta.steps) insertElement('code', otherMetaContainer, undefined, `Steps: ${meta.steps}`);
         if (meta.clipSkip) insertElement('code', otherMetaContainer, undefined, `clipSkip: ${meta.clipSkip}`);
         if (meta.seed) insertElement('code', otherMetaContainer, undefined, `Seed: ${meta.seed}`);
+        if (meta['Denoising strength'] || meta.denoise) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength'] || meta.denoise}`); // This is where...
         if (meta.workflow) insertElement('code', otherMetaContainer, undefined, meta.workflow);
-        if (meta['Hires upscaler']) insertElement('code', otherMetaContainer, undefined, `Hires: ${meta['Hires upscaler']} x${meta['Hires upscale']}`);
+        if (meta.comfy) {
+            const comfyJSON = meta.comfy;
+            const code = insertElement('code', otherMetaContainer, { class: 'copy' }, 'ComfyUI');
+            code.appendChild(getIcon('copy'));
+            code.addEventListener('click', () => {
+                toClipBoard(comfyJSON);
+                console.log('Copied to clipboard, TODO: notifications'); // TODO: notifications
+                console.log('ComfyUI: ', JSON.parse(comfyJSON));
+            }, { passive: true });
+        }
+        if (meta['Hires upscaler']) {
+            const code = insertElement('code', otherMetaContainer, undefined, `Hires: ${meta['Hires upscaler']}`);
+            if (meta['Hires upscale']) insertElement('i', code, undefined, ` x${meta['Hires upscale']}`);
+        }
         if (meta['ADetailer model']) {
-            const tooltip = Object.keys(meta).filter(key => key.indexOf('ADetailer') === 0).map(key => `<tr><td>${key.replace('ADetailer', '').trim()}</td><td>${meta[key]}</td></tr>`).join('');
+            const tooltip = Object.keys(meta).filter(key => key.indexOf('ADetailer') === 0).map(key => `<tr><td>${key.replace('ADetailer', '').trim()}</td><td>${typeof meta[key] === 'string' ? meta[key] : JSON.stringify(meta[key])}</td></tr>`).join('');
             const code = insertElement('code', otherMetaContainer, undefined, `ADetailer: ${meta['ADetailer model']}`);
             if (tooltip) code.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
         }
-        // if (meta['Denoising strength']) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength']}`); // This is where...
 
         // Resources
         if (meta.civitaiResources?.length || meta.resources?.length) {
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources' });
             insertElement('h3', resourcesContainer, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used');
 
-            meta.civitaiResources?.forEach(item => {
+            const resources = [ ...(meta.civitaiResources || []), ...(meta.resources || []), ...(meta.additionalResources || [])];
+            const processedResources = new Set();
+            const resourcePromises = [];
+            resources.forEach(item => {
+                if (item.modelVersionId) {
+                    if (processedResources.has(item.modelVersionId)) return;
+                    else processedResources.add(item.modelVersionId)
+                }
+
                 const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
                 // TODO: Understand where to get the names and id for the link...
-                const nameEl = insertElement('span', el, { href: `#models?model=${item.modelVersionId}`, class: 'meta-resource-name' }, item.name || `${item.modelVersionId} ${item.modelVersionName}` );
+                const nameEl = insertElement('span', el, { class: 'meta-resource-name' }, item.name || `${item.modelVersionId} ${item.modelVersionName}` );
                 insertElement('span', el, { class: 'meta-resource-type' }, item.type);
-                if (item.weight) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+                if (item.weight && item.weight !== 1) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+
+                let fetchPromise = null;
+
+                if (item.modelVersionId) fetchPromise = this.api.fetchModelVersionInfo(item.modelVersionId);
+                else if (item.hash) fetchPromise = this.api.fetchModelVersionInfo(item.hash, true);
+
+                if (!fetchPromise) return;
+
+                el.classList.add('meta-resource-loading');
+                const promise = fetchPromise.then(info => {
+                    if (!info) return info;
+
+                    el.textContent = '';
+                    const nameEl = insertElement('a', el, { href: `#models?model=${info.modelId}&version=${info.name}`, class: 'meta-resource-name' }, `${info?.model?.name} ` );
+                    insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': info.baseModel }, info?.model?.type);
+                    insertElement('strong', nameEl, undefined, info.name)
+                    if (item.weight && item.weight !== 1) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+                    return info;
+                }).finally(() => {
+                    el.classList.remove('meta-resource-loading');
+                });
+                resourcePromises.push(promise);
             });
 
-            meta.resources?.forEach(item => {
-                const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
-                const nameEl = insertElement('span', el, { class: 'meta-resource-name' }, item.name);
-                insertElement('span', el, { class: 'meta-resource-type' }, item.type);
-                if (item.weight) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
-            });
+            if (resourcePromises.length) {
+                Promise.all(resourcePromises).then(result => {
+                    const trainedWords = [];
+                    const triggerTooltips = {};
+                    console.log('Loaded resources', result);
+
+                    result.forEach(item => {
+                        const type = item?.model?.type;
+                        if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length) return;
+
+                        item.trainedWords.forEach(word => {
+                            word = word.indexOf(',') === -1 ? word : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                            trainedWords.push(word);
+                            if (item.model.name) {
+                                if (triggerTooltips[word]) triggerTooltips[word] += `, ${item.model.name}`;
+                                else triggerTooltips[word] = item.model.name;
+                            }
+                        });
+                    });
+
+                    console.log(trainedWords)
+                    if (trainedWords.length > 0) {
+                        const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
+
+                        codeBlocks.forEach(code => {
+                            const children = Array.from(code.childNodes);
+
+                            children.forEach(node => {
+                                if (node.nodeType !== Node.TEXT_NODE) return;
+
+                                const text = node.textContent;
+                                const indexes = trainedWords.map(key => [ key, text.indexOf(key) ]).filter(a => a[1] !== -1).sort((a, b) => a[1] - b[1]);
+
+                                if (indexes.length <= 0) return;
+
+                                const fragment = new DocumentFragment();
+                                const startText = text.substring(0, indexes[0][1]);
+                                if (startText) fragment.appendChild(document.createTextNode(startText));
+                                indexes.forEach(([key, index], i) => {
+                                    const postText = text.substring(index + key.length, indexes[i + 1]?.[1] ?? undefined );
+                                    const span = insertElement('span', fragment, { class: 'trigger' }, key);
+                                    if (triggerTooltips[key]) span.setAttribute('lilpipe-text', triggerTooltips[key]);
+                                    if (postText) fragment.appendChild(document.createTextNode(postText));
+                                });
+
+                                code.replaceChild(fragment, node);
+                                return fragment;
+                            });
+                        });
+                    }
+                });
+            }
+
         }
 
         return container;
@@ -1428,6 +1672,38 @@ class Controller {
 
         return { element, setValue };
     }
+
+    static #genStringInput({ onchange, value = '', placeholder = 'string', maxlength, multiline = false }) {
+        const element = createElement('div', { class: 'config config-string' });
+        let currentValue = value;
+
+        const inputElement = multiline
+            ? insertElement('textarea', element, { class: 'string-input textarea-input', placeholder })
+            : insertElement('input', element, { type: 'text', class: 'string-input', placeholder });
+        
+        const invisibleString = multiline ? null : insertElement('div', element, { class: 'invisible-string string-input' });
+
+        if (maxlength) inputElement.setAttribute('maxlength', maxlength);
+        inputElement.value = currentValue;
+        if (invisibleString) invisibleString.textContent = currentValue;
+
+        const setValue = newValue => {
+            if (currentValue === newValue) return;
+            onchange({ oldValue: currentValue, newValue });
+            currentValue = newValue;
+            if (invisibleString) invisibleString.textContent = currentValue;
+        };
+
+        const oninput = () => {
+            if (maxlength && inputElement.value.length > maxlength) inputElement.value = currentValue;
+            else setValue(inputElement.value);
+        };
+
+        inputElement.addEventListener('input', oninput, { passive: true });
+        inputElement.addEventListener('change', oninput, { passive: true });
+
+        return { element, setValue };
+    }
 }
 
 // ==============================
@@ -1470,7 +1746,7 @@ function loadLanguagePack(language, forceReload = false) {
 
     window.languagePack = cachedLanguagePack.version === CONFIG.version && cachedLanguagePack.language === language ? cachedLanguagePack.languagePack ?? {} : {};
     if (typeof window.languagePack !== 'object' || !Object.keys(window.languagePack).length) {
-        fetch(`_locales/${language}/language.json`)
+        fetch(`_locales/${language}/language.json?v=${Number(CONFIG.version)}`)
         .then(response => response.json())
         .then(data => {
             localStorage.setItem(key, JSON.stringify({ languagePack: data, loaded: new Date().toISOString(), version: CONFIG.version, language }));
@@ -1482,6 +1758,20 @@ function loadLanguagePack(language, forceReload = false) {
         updateMenu();
         if (forceReload) Controller.gotoPage(location.hash || '#home');
     }
+}
+
+function getFollowingTagGroup(startElem, tagName) {
+    const result = [];
+    let next = startElem.nextElementSibling;
+
+    tagName = tagName.toUpperCase(); // DOM API uses uppercase for tagName
+
+    while (next && next.tagName === tagName) {
+        result.push(next);
+        next = next.nextElementSibling;
+    }
+
+    return result;
 }
 
 function onTargetInViewport(target, callback) {
