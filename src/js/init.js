@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 4,
+    version: 5,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -53,6 +53,22 @@ class CivitaiAPI {
         this.baseURL = baseURL;
     }
 
+    async #getJSON({ url, target }) {
+        try {
+            const data = await fetchJSON(url.toString(), {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                },
+            });
+            if (data.error) throw new Error(data.error);
+            return data;
+        } catch (error) {
+            console.error(`Failed to fetch ${target ?? 'something'}:`, error?.message ?? error);
+            throw error;
+        }
+    }
+
     async fetchModels(options = {}) {
         const {
             limit = 20,
@@ -94,18 +110,8 @@ class CivitaiAPI {
         if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // Is it work?
         if (status) url.searchParams.append('status', status);
 
-        try {
-            const data = await fetchJSON(url.toString(), {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
-            return data;
-        } catch (error) {
-            console.error('Failed to fetch models:', error);
-            throw error;
-        }
+        const data = await this.#getJSON({ url, target: 'models' });
+        return data;
     }
 
     async fetchImages(options = {}) {
@@ -133,18 +139,8 @@ class CivitaiAPI {
         if (hidden) url.searchParams.append('hidden', 'true');
         if (nsfw) url.searchParams.append('nsfw', 'true');
 
-        try {
-            const data = await fetchJSON(url.toString(), {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
-            return data;
-        } catch (error) {
-            console.error('Failed to fetch images:', error);
-            throw error;
-        }
+        const data = await this.#getJSON({ url, target: 'images' });
+        return data;
     }
 
     async fetchImageMeta(options = {}) {
@@ -159,49 +155,22 @@ class CivitaiAPI {
         if (id) url.searchParams.append('imageId', id);
         if (nsfw) url.searchParams.append('nsfw', 'true');
 
-        try {
-            const data = await fetchJSON(url.toString(), {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
-            return data.items[0];
-        } catch (error) {
-            console.error(`Failed to fetch image meta (id: ${imageId}):`, error);
-            throw error;
-        }
+        const data = await this.#getJSON({ url, target: `image meta (id: ${id})` });
+        return data?.items?.[0] ?? null;
     }
 
     async fetchModelInfo(id) {
-        try {
-            const data = await fetchJSON(`${this.baseURL}/models/${id}`, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
-            return data;
-        } catch (error) {
-            console.error('Failed to fetch model info:', error);
-            throw error;
-        }
+        const url = new URL(`${this.baseURL}/models/${id}`);
+
+        const data = await this.#getJSON({ url, target: 'model info' });
+        return data;
     }
 
     async fetchModelVersionInfo(id, byHash = false) {
         const url = `${this.baseURL}/model-versions/${byHash ? `by-hash/${encodeURIComponent(id)}` : id}`;
-        try {
-            const data = await fetchJSON(url, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
-            return data;
-        } catch (error) {
-            console.error('Failed to fetch model version info:', error);
-            throw error;
-        }
+
+        const data = await this.#getJSON({ url, target: 'model version info' });
+        return data;
     }
 }
 
@@ -280,7 +249,7 @@ class Controller {
         const [ pageId, paramString ] = page?.split('?') ?? [];
         document.title = CONFIG.title;
 
-        this.#pageNavigation = Date.now();
+        const pageNavigation = this.#pageNavigation = Date.now();
 
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
         onTargetInViewport();
@@ -293,8 +262,8 @@ class Controller {
         document.documentElement.scrollTo({ top: 0, behavior: 'smooth' }); // Not sure about this...
 
         const finishPageLoading = () => {
-            this.appElement.classList.remove('page-loading');
             hideTimeError();
+            if (pageNavigation === this.#pageNavigation) this.appElement.classList.remove('page-loading');
         };
 
         // Clear all errors and prepare new timer
@@ -327,7 +296,8 @@ class Controller {
         if (pageId === '#home') promise = this.gotoHome();
         else if (pageId === '#models') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (!params.model) promise = this.gotoModels({ tag: params.tag });
+            if (params.hash) promise = this.gotoModelByHash(params.hash);
+            else if (!params.model) promise = this.gotoModels({ tag: params.tag });
             else promise = this.gotoModel(params.model, params.version);
         }
         else if (pageId === '#articles') promise = this.gotoArticles();
@@ -448,7 +418,7 @@ class Controller {
         const pageNavigation = this.#pageNavigation;
         const appContent = createElement('div', { class: 'app-content-wide full-image-page' });
 
-        this.api.fetchImageMeta({ id: imageId, nsfw: SETTINGS.nsfw }).then(media => {
+        return this.api.fetchImageMeta({ id: imageId, nsfw: SETTINGS.nsfw }).then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.log('Loaded image info', media);
             if (!media) throw new Error('No Meta');
@@ -468,7 +438,7 @@ class Controller {
 
             const metaContainer = createElement('div', { class: 'media-full-meta' });
 
-            // const nsfwLevel = insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, `NSFW: ${media.nsfwLevel}`);
+            if (media.nsfwLevel !== 'None') insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, `NSFW: ${media.nsfwLevel}`);
 
             const creatorWrap = insertElement('div', metaContainer, { class: 'user-info' });
             insertElement('div', creatorWrap, undefined, media.username);
@@ -491,8 +461,8 @@ class Controller {
             appContent.appendChild(metaContainer);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error);
-            insertElement('h1', appContent, { class: 'error-text' }, 'Error');
+            console.error('Error:', error?.message ?? error);
+            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
         }).finally(() => {
             if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
@@ -507,6 +477,24 @@ class Controller {
         insertElement('a', appContent, { href: 'https://developer.civitai.com/docs/api/public-rest#get-apiv1images' }, 'GET /api/v1/images');
         this.appElement.textContent = '';
         this.appElement.appendChild(appContent);
+    }
+
+    static gotoModelByHash(hash) {
+        const pageNavigation = this.#pageNavigation;
+        return this.api.fetchModelVersionInfo(hash, true).then(model => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            const { modelId, name: modelVersionName } = model ?? {};
+            if (modelId) return this.gotoModel(modelId, modelVersionName);
+            else {
+                console.log('There is no model id here...', model);
+                throw new Error(model?.error ?? `No models found with this hash (${hash})`);
+            }
+        }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            console.error('Error:', error?.message ?? error);
+            this.appElement.textContent = '';
+            this.appElement.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+        });
     }
 
     static gotoModel(id, version = null) {
@@ -532,8 +520,8 @@ class Controller {
             });
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error);
-            insertElement('h1', appContent, { class: 'error-text' }, 'Error');
+            console.error('Error:', error?.message ?? error);
+            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
         }).finally(() => {
             if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
@@ -543,10 +531,9 @@ class Controller {
 
     static gotoModels(options = {}) {
         const { tag = '' } = options;
-        const pageNavigation = this.#pageNavigation;
         let nextPageUrl = null;
         const appContent = createElement('div', { class: 'app-content app-content-wide' });
-        const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-list models-list', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; --gap: ${CONFIG.appearance.card.gap}px;` });
+        const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-list models-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; --gap: ${CONFIG.appearance.card.gap}px;` });
 
         let allCards = [];
         let fakeIndex = 0;
@@ -614,6 +601,7 @@ class Controller {
         };
 
         const loadMore = () => {
+            const pageNavigation = this.#pageNavigation;
             if (!nextPageUrl) return;
             return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
@@ -621,42 +609,57 @@ class Controller {
                 insertModels(data.items);
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Failed to fetch models:', error);
+                console.error('Failed to fetch models:', error?.message ?? error);
             });
         };
+
+        const loadModels = () => {
+            const pageNavigation = this.#pageNavigation;
+
+            return this.api.fetchModels({
+                limit: 100,
+                page: 1,
+                tag,
+                types: SETTINGS.types,
+                sort: SETTINGS.sort,
+                period: SETTINGS.period,
+                checkpointType: SETTINGS.checkpointType,
+                primaryFileOnly: true,
+                baseModels: SETTINGS.baseModels,
+                nsfw: SETTINGS.nsfw,
+            }).then(data => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                nextPageUrl = data.metadata?.nextPage ?? null;
+                allCards = [];
+                listWrap.textContent = '';
+                insertModels(data.items);
+                allCards[0]?.setAttribute('tabindex', 0);
+                fakeIndex = 0;
+                document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
+            }).catch(error => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                console.error('Error:', error?.message ?? error);
+                listWrap.textContent = '';
+                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+            }).finally(() => {
+                listWrap.classList.remove('cards-loading');
+            });
+        };
+
+        const firstLoadingPlaceholder = insertElement('div', listWrap, { id: 'load-more' });
+        firstLoadingPlaceholder.appendChild(getIcon('infinity'));
 
         this.appElement.textContent = '';
         this.appElement.appendChild(this.#genModelsListFIlters(() => {
             savePageSettings();
+            this.#pageNavigation = Date.now();
             listWrap.classList.add('cards-loading');
-            Controller.gotoModels();
+            loadModels();
         }));
         this.appElement.appendChild(appContent);
 
-        return this.api.fetchModels({
-            limit: 100,
-            page: 1,
-            tag,
-            types: SETTINGS.types,
-            sort: SETTINGS.sort,
-            period: SETTINGS.period,
-            checkpointType: SETTINGS.checkpointType,
-            primaryFileOnly: true,
-            baseModels: SETTINGS.baseModels,
-            nsfw: SETTINGS.nsfw,
-        }).then(data => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            console.log('Loaded models:', data);
-            nextPageUrl = data.metadata?.nextPage ?? null;
-            allCards = [];
-            insertModels(data.items);
-            allCards[0]?.setAttribute('tabindex', 0);
-            fakeIndex = 0;
-            document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
-        }).catch(error => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error);
-            insertElement('h1', listWrap, { class: 'error-text' }, 'Error');
+        return loadModels().finally(() => {
+            firstLoadingPlaceholder.remove();
         });
     }
 
@@ -775,6 +778,12 @@ class Controller {
             { icon: 'download', value: modelVersion.stats.downloadCount, formatter: formatNumber, unit: 'download' },
         ];
         modelVersionNameWrap.appendChild(this.#genStats(versionStatsList));
+        if (modelVersion.trainedWords?.length > 0) {
+            const trainedWordsContainer = insertElement('div', modelVersionDescription, { class: 'trigger-words' });
+            modelVersion.trainedWords.forEach(word => {
+                insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, word);
+            });
+        }
         if (modelVersion.description) modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
 
         // Model descrition
@@ -796,7 +805,6 @@ class Controller {
 
     // TODO: change number of columns when browser resizes
     static #genImages({ modelId, modelVersionId }) {
-        const pageNavigation = this.#pageNavigation;
         let nextPageUrl = null;
         const fragment = new DocumentFragment();
         const imagesTitle = insertElement('h1', fragment, { style: 'justify-content: center;;' });
@@ -872,6 +880,7 @@ class Controller {
 
         fragment.appendChild(this.#genImagesListFilters(() => {
             savePageSettings();
+            this.#pageNavigation = Date.now();
             listWrap.classList.add('cards-loading');
             loadImages();
         }));
@@ -883,12 +892,13 @@ class Controller {
 
         const loadMore = () => {
             if (!nextPageUrl) return;
+            const pageNavigation = this.#pageNavigation;
             return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 nextPageUrl = data.metadata?.nextPage ?? null;
                 insertImages(data.items);
             }).catch(error => {
-                console.error('Failed to fetch images:', error);
+                console.error('Failed to fetch images:', error?.message ?? error);
             });
         };
 
@@ -951,10 +961,11 @@ class Controller {
         };
 
         const loadImages = () => {
+            const pageNavigation = this.#pageNavigation;
             allImages = [];
             updateColumns();
 
-            this.api.fetchImages({
+            return this.api.fetchImages({
                 limit: 100,
                 page: 1,
                 sort: SETTINGS.sort_images,
@@ -964,7 +975,6 @@ class Controller {
                 modelVersionId
             }).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                console.log(data);
                 nextPageUrl = data.metadata?.nextPage ?? null;
                 listWrap.textContent = '';
                 columns.forEach(col => listWrap.appendChild(col.element));
@@ -974,15 +984,17 @@ class Controller {
                 fakeTableIndex = 0;
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Error:', error);
-                listWrap.textContent = 'Error!';
+                console.error('Error:', error?.message ?? error);
+                listWrap.textContent = '';
+                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
             }).finally(() => {
-                firstLoadingPlaceholder.remove();
                 listWrap.classList.remove('cards-loading');
             });
         };
 
-        loadImages();
+        loadImages().finally(() => {
+            firstLoadingPlaceholder.remove();
+        });
 
         return fragment;
     }
@@ -994,7 +1006,7 @@ class Controller {
             if (unit) {
                 const untis = window.languagePack?.units?.[unit];
                 if (untis) statWrap.setAttribute('lilpipe-text', `${value} ${pluralize(value, untis)}`);
-            } else statWrap.setAttribute('lilpipe-text', value);
+            } else if (!type) statWrap.setAttribute('lilpipe-text', value);
             if (type) statWrap.setAttribute('data-badge', type);
             if (icon) statWrap.appendChild(getIcon(icon));
             if (iconString) statWrap.appendChild(document.createTextNode(iconString));
@@ -1003,6 +1015,8 @@ class Controller {
         return statsWrap;
     }
 
+    // TODO: Add BibTeX support https://ru.wikipedia.org/wiki/BibTeX
+    // BibTeX: It is in the description of this model (modelId: 958009)
     static #analyzeModelDescriptionString(description) {
         // There should be rules here to improve formatting...
         // But... all creators have their own description format, and they don't really fit together,
@@ -1025,8 +1039,27 @@ class Controller {
         // Remove garbage (empty elements and all unnecessary things)
         description.querySelectorAll('p:empty, h3:empty').forEach(el => el.remove());
 
+        description.querySelectorAll('p:has(+pre)').forEach(p => {
+            const text = p.textContent.trim().toLowerCase();
+            if (text === 'positive prompt' || text.indexOf('+prompt') === 0 || text.indexOf('positive prompt') === 0) {
+                getFollowingTagGroup(p, 'pre').forEach(pre => {
+                    const code = pre.querySelector('code');
+                    if (!code) return;
+
+                    code.classList.add('prompt', 'prompt-positive');
+                });
+            } else if (text === 'negative prompt' || text.indexOf('-prompt') === 0 || text.indexOf('negative prompt') === 0) {
+                getFollowingTagGroup(p, 'pre').forEach(pre => {
+                    const code = pre.querySelector('code');
+                    if (!code) return;
+
+                    code.classList.add('prompt', 'prompt-negative');
+                });
+            }
+        });
+
         // If a block of code has a lot of commas, it's probably a prompt block
-        description.querySelectorAll('code').forEach(code => {
+        description.querySelectorAll('code:not(.prompt)').forEach(code => {
             const text = code.textContent;
             let count = 0;
             let pos = text.indexOf(',');
@@ -1042,26 +1075,7 @@ class Controller {
             }
         });
 
-        description.querySelectorAll('p:has(+pre)').forEach(p => {
-            const text = p.textContent.trim().toLowerCase();
-            if (text === 'positive prompt' || text.indexOf('positive prompt') === 0) {
-                getFollowingTagGroup(p, 'pre').forEach(pre => {
-                    const code = pre.querySelector('code');
-                    if (!code) return;
-
-                    code.classList.add('prompt', 'prompt-positive');
-                    this.#analyzePromptCode(code);
-                });
-            } else if (text === 'negative prompt' || text.indexOf('negative prompt') === 0) {
-                getFollowingTagGroup(p, 'pre').forEach(pre => {
-                    const code = pre.querySelector('code');
-                    if (!code) return;
-
-                    code.classList.add('prompt', 'prompt-negative');
-                    this.#analyzePromptCode(code);
-                });
-            }
-        });
+        description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
     }
 
     static #analyzePromptCode(codeElement) {
@@ -1081,7 +1095,7 @@ class Controller {
                 fragment.appendChild(lastTextNode);
             }
         };
-        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|\\[()[\]]|[\[\]()]+|:[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
+        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
 
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i];
@@ -1090,7 +1104,7 @@ class Controller {
                 insertElement('span', fragment, { class: 'lora' }, token);
             } else if (/^[\[\]()]+$/.test(token)) {
                 insertElement('span', fragment, { class: 'bracket' }, token);
-            } else if (/^:[0-9.]+$/.test(token) && tokens[i + 1] === ')') {
+            } else if (/^:-?[0-9.]+$/.test(token) && tokens[i + 1]?.[0] === ')') {
                 insertElement('span', fragment, { class: 'weight' }, token);
             } else if (keywords.has(token)) {
                 insertElement('span', fragment, { class: 'keyword' }, token);
@@ -1123,13 +1137,17 @@ class Controller {
         }
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
         if (meta.Size) insertElement('code', otherMetaContainer, undefined, `Size: ${meta.Size}`);
-        if (meta.cfgScale) insertElement('code', otherMetaContainer, undefined, `CFG: ${meta.cfgScale}`);
+        if (meta.cfgScale) {
+            const cfg = +(meta.cfgScale).toFixed(4);
+            const code = insertElement('code', otherMetaContainer, undefined, `CFG: ${cfg}`);
+            if (cfg !== meta.cfgScale) code.setAttribute('lilpipe-text', meta.cfgScale);
+        }
         if (meta.sampler) insertElement('code', otherMetaContainer, undefined, `Sampler: ${meta.sampler}`);
         if (meta['Schedule type'] || meta.scheduler ) insertElement('code', otherMetaContainer, undefined, `Sheduler: ${meta['Schedule type'] || meta.scheduler}`);
         if (meta.steps) insertElement('code', otherMetaContainer, undefined, `Steps: ${meta.steps}`);
         if (meta.clipSkip) insertElement('code', otherMetaContainer, undefined, `clipSkip: ${meta.clipSkip}`);
         if (meta.seed) insertElement('code', otherMetaContainer, undefined, `Seed: ${meta.seed}`);
-        if (meta['Denoising strength'] || meta.denoise) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength'] || meta.denoise}`); // This is where...
+        if (meta['Denoising strength'] || meta.denoise) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength'] || meta.denoise}`);
         if (meta.workflow) insertElement('code', otherMetaContainer, undefined, meta.workflow);
         if (meta.comfy) {
             const comfyJSON = meta.comfy;
@@ -1148,17 +1166,33 @@ class Controller {
         if (meta['ADetailer model']) {
             const tooltip = Object.keys(meta).filter(key => key.indexOf('ADetailer') === 0).map(key => `<tr><td>${key.replace('ADetailer', '').trim()}</td><td>${typeof meta[key] === 'string' ? meta[key] : JSON.stringify(meta[key])}</td></tr>`).join('');
             const code = insertElement('code', otherMetaContainer, undefined, `ADetailer: ${meta['ADetailer model']}`);
-            if (tooltip) code.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
+            if (tooltip) {
+                code.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
+                code.setAttribute('lilpipe-type', 'meta-adetailer');
+            }
         }
 
         // Resources
-        if (meta.civitaiResources?.length || meta.resources?.length) {
-            const resourcesContainer = insertElement('div', container, { class: 'meta-resources' });
-            insertElement('h3', resourcesContainer, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used');
+        if (meta.civitaiResources?.length || meta.resources?.length || (meta.hashes && Object.keys(meta.hashes)?.length)) {
+            const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
+            const resourcesTitle = insertElement('h3', resourcesContainer);
+            resourcesTitle.appendChild(getIcon('database'));
+            insertElement('span', resourcesTitle, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used')
 
             const resources = [ ...(meta.civitaiResources || []), ...(meta.resources || []), ...(meta.additionalResources || [])];
             const processedResources = new Set();
             const resourcePromises = [];
+
+            // Not sure if this is necessary...
+            if (meta.hashes && Object.keys(meta.hashes)?.length) {
+                Object.keys(meta.hashes).forEach(key => {
+                    const hash = meta.hashes[key];
+                    if (resources.some(item => item.hash === hash)) return;
+
+                    resources.push({ hash, name: key });
+                });
+            }
+
             resources.forEach(item => {
                 if (item.modelVersionId) {
                     if (processedResources.has(item.modelVersionId)) return;
@@ -1168,7 +1202,7 @@ class Controller {
                 const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
                 // TODO: Understand where to get the names and id for the link...
                 const nameEl = insertElement('span', el, { class: 'meta-resource-name' }, item.name || `${item.modelVersionId} ${item.modelVersionName}` );
-                insertElement('span', el, { class: 'meta-resource-type' }, item.type);
+                insertElement('span', el, { class: 'meta-resource-type' }, item.type ?? '???');
                 if (item.weight && item.weight !== 1) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
 
                 let fetchPromise = null;
@@ -1196,6 +1230,7 @@ class Controller {
 
             if (resourcePromises.length) {
                 Promise.all(resourcePromises).then(result => {
+                    result = result.filter(item => item);
                     const trainedWords = [];
                     const triggerTooltips = {};
                     console.log('Loaded resources', result);
@@ -1214,7 +1249,6 @@ class Controller {
                         });
                     });
 
-                    console.log(trainedWords)
                     if (trainedWords.length > 0) {
                         const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
 
@@ -1244,7 +1278,11 @@ class Controller {
                             });
                         });
                     }
+                }).finally(() => {
+                    resourcesContainer.classList.remove('meta-resources-loading');
                 });
+            } else {
+                resourcesContainer.classList.remove('meta-resources-loading');
             }
 
         }
@@ -1300,6 +1338,8 @@ class Controller {
 
     static #genImageCard(image) {
         const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
+
+        // Image
         if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -1312,11 +1352,20 @@ class Controller {
             cardBackgroundWrap.classList.add('video-hover-play');
         }
 
-        const nsfwLevel = insertElement('div', cardContentWrap, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+        // NSFW Level
+        if (image.nsfwLevel !== 'None') insertElement('div', cardContentWrap, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+        
+        // Created At
+        if (image.createdAt) {
+            const createdAt = new Date(image.createdAt);
+            insertElement('span', cardContentWrap, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
+        }
 
+        // Creator
         const creatorWrap = insertElement('div', cardContentWrap, { class: 'user-info' });
         insertElement('div', creatorWrap, undefined, image.username);
     
+        // Stats
         const statsList = [
             { iconString: '👍', value: image.stats.likeCount, formatter: formatNumber, unit: 'like' },
             { iconString: '👎', value: image.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
@@ -1391,9 +1440,11 @@ class Controller {
         if (media.type === 'image') {
             const src = SETTINGS.autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
             mediaElement = createElement('img', { class: 'loading',  alt: 'image', crossorigin: 'anonymous', src: lazy ? '' : src });
-            if (lazy) onTargetInViewport(mediaElement, () => {
-                mediaElement.src = src;
-            });
+            if (lazy) {
+                onTargetInViewport(mediaElement, () => {
+                    mediaElement.src = src;
+                });
+            }
         } else {
             const src = url.replace('optimized=true', 'optimized=true,transcode=true');
             const poster = resize ? `${src}&format=webp` : src;
@@ -1404,10 +1455,12 @@ class Controller {
             mediaElement.loop = true;
             mediaElement.playsInline = true;
             if (SETTINGS.autoplay) mediaElement.autoplay = true;
-            if (lazy) onTargetInViewport(mediaElement, () => {
-                mediaElement.poster = poster;
-                mediaElement.src = videoSrc;
-            }); else {
+            if (lazy) {
+                onTargetInViewport(mediaElement, () => {
+                    mediaElement.poster = poster;
+                    mediaElement.src = videoSrc;
+                });
+            } else {
                 mediaElement.poster = poster;
                 mediaElement.src = videoSrc;
             }
@@ -1559,6 +1612,29 @@ class Controller {
         filterNSFW.appendChild(nsfwToggle.element);
 
         return filterWrap;
+    }
+
+    static #genErrorPage(error) {
+        if (error.message) error = error.message;
+
+        const errorImageDefault = 'src/icons/error.png';
+        const errorsImagesDictionary = {
+            'HTTP 500': 'src/icons/500.png',
+            'HTTP 404': 'src/icons/404.png',
+            'Model not found': 'src/icons/404.png',
+            'HTTP 401': 'src/icons/403.png',
+            'HTTP 403': 'src/icons/403.png'
+        };
+
+        let imgSrc;
+        if (error.indexOf('No model with id') === 0) imgSrc = errorsImagesDictionary['HTTP 404'];
+        else imgSrc = errorsImagesDictionary[error] || errorImageDefault;
+
+        const errorPage = createElement('div', { class: 'error-block' });
+        insertElement('img', errorPage, { alt: error, src: imgSrc });
+        insertElement('h1', errorPage, { class: 'error-text' }, `${window.languagePack?.errors?.error ?? 'Error'}: ${error}`);
+
+        return errorPage;
     }
 
     static #genBoolean({ onchange, value, label }) {
@@ -1784,7 +1860,9 @@ function onTargetInViewport(target, callback) {
         }
     }, { threshold: 0.05 });
 
-    observer.observe(target);
+    // This requestAnimationFrame is needed to make sure that the element is in the DOM
+    if (target.offsetParent === null) requestAnimationFrame(() => observer.observe(target));
+    else observer.observe(target);
 }
 
 function savePageSettings() {
@@ -1832,7 +1910,7 @@ if (!document.hidden) {
 // =================================
 
 document.addEventListener('click', e => {
-    if (e.ctrlKey) return;
+    if (e.ctrlKey || e.altKey) return;
 
     const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
     if (href) {

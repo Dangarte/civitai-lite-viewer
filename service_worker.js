@@ -8,10 +8,10 @@ const SW_CONFIG = {
     api_url: 'https://civitai.com/api/v1/',
     local_urls: {},
     cacheTargets: {
-        'model-preview': 2 * 24 * 60 * 60,  // Images in preview list on model page:    2 days
-        'model-version': 5 * 24 * 60 * 60,  // Info about model version:                5 days
-        'model-card': 4 * 24 * 60 * 60,     // Images in cards on models page:          4 days
-        'user-image': 5 * 24 * 60 * 60,     // Images in creator profile:               5 days
+        'model-preview': 12 * 60 * 60,      // Images in preview list on model page:    12 hours
+        'model-version': 3 * 24 * 60 * 60,  // Info about model version:                3 days
+        'model-card': 3 * 24 * 60 * 60,     // Images in cards on models page:          3 days
+        'user-image': 2 * 24 * 60 * 60,     // Images in creator profile:               2 days
         'full-image': 2 * 60 * 60,          // Images on full size image page:          2 hours
         'image-card': 2 * 60 * 60,          // Images images list:                      2 hours
         'unknown': 60 * 60,                 // Unknown target:                          1 hour
@@ -35,7 +35,7 @@ self.addEventListener('activate', () => {
 });
 self.addEventListener('fetch', onFetch);
 self.addEventListener('message', onMessage);
-  
+
 
 function onMessage(e) { // Messages
     const sendSuccess = response => {

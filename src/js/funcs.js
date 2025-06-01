@@ -178,11 +178,16 @@ function copyThis(obj) {
 async function fetchJSON(url, options = {}) {
     try {
         const res = await fetch(url, options);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+            // Try to extract the error message from the response
+            let error;
+            try { error = (await res.json()).error; } catch(_) {}
+            throw new Error(error || `HTTP ${res.status}`);
+        }
         return await res.json();
     } catch (err) {
-        console.warn('fetchJSON error:', err);
-        return null;
+        console.warn('fetchJSON error:', err?.message ?? err);
+        return { error: err?.message ?? err };
     }
 }
 
