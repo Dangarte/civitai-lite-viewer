@@ -1861,8 +1861,7 @@ function onTargetInViewport(target, callback) {
     }, { threshold: 0.05 });
 
     // This requestAnimationFrame is needed to make sure that the element is in the DOM
-    if (target.offsetParent === null) requestAnimationFrame(() => observer.observe(target));
-    else observer.observe(target);
+    requestAnimationFrame(() => observer.observe(target));
 }
 
 function savePageSettings() {
