@@ -747,7 +747,7 @@ class Controller {
         const previewList = modelVersion.images.map((media, index) => {
             const ratio = +(media.width/media.height).toFixed(3);
             const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
-            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${media.nsfwLevel >= 8}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
+            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${media.nsfwLevel >= 4}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
             const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
             const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, lazy: index > 3, taget: 'model-preview' });
             item.appendChild(mediaElement);
@@ -1372,7 +1372,7 @@ class Controller {
     }
 
     static #genImageCard(image) {
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.nsfwLevel >= 8}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.nsfw}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
 
         // Image
         if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
