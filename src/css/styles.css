@@ -3,6 +3,7 @@
     --card-height: 450px;
 
     --app-width: 1200px;
+    --app-width-small: 800px; /* Model descriptions are formatted to fit 800px width */
 
     --radius: 8px;
 }
@@ -214,6 +215,15 @@ ul {
     padding-inline-start: 2em;
 }
 
+ul:only-child {
+    margin: 0;
+    padding-inline-start: 1.5em;
+}
+
+ul li::marker {
+    color: var(--c-text-dark);
+}
+
 th {
     color: var(--c-text-light);
 }
@@ -229,17 +239,16 @@ h1, h2, h3, h4, h5, h6 {
 a {
     color: inherit;
     cursor: pointer;
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
+    display: inline;
     border-radius: 2px;
+    text-decoration: none;
 }
 
 a.selected,
 a:hover,
 a:focus-visible {
     color: var(--c-main-text, #0095ff);
+    text-decoration: underline;
 }
 
 a:focus-visible {
@@ -253,6 +262,15 @@ a[href]:not([href^="#"])::after {
     transform: translateY(-.25em);
     margin-left: 4px;
     text-decoration: none;
+}
+
+a.badge,
+a.link-button {
+    text-decoration: none !important;
+    display: inline-flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
 }
 
 details summary {
@@ -525,6 +543,7 @@ footer {
     bottom: .5em;
     inset-inline: 0;
     max-width: var(--app-width);
+    color: var(--c-text-dark);
     margin: 0 auto;
     padding: .5em;
     display: flex;
@@ -743,7 +762,12 @@ footer p {
     user-select: none;
     transform: none;
     max-width: 350px;
-    transition: transform .1s ease-in-out;
+    transition: transform .1s ease-out;
+    --translateY: 1em;
+}
+
+#tooltip[tooltip-below] {
+    --translateY: -1em;
 }
 
 #tooltip::after {
@@ -770,14 +794,21 @@ footer p {
 }
 
 #tooltip[data-animation="in"] {
-    transform: scale(1.05);
-    opacity: 0;
-    animation: fadeIn .1s 1 ease-in-out forwards;
+    animation: tooltipFadeIn .15s 1 cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 #tooltip[data-animation="out"] {
-    transform: scale(0.9);
-    animation: fadeOut .1s 1 ease-in-out forwards;
+    animation: tooltipFadeOut .15s 1 ease-in-out forwards;
+}
+
+@keyframes tooltipFadeIn {
+    0% { opacity: 0; transform: translateY(var(--translateY)) scaleX(.8); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tooltipFadeOut {
+    0% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(var(--translateY)) scaleX(.8); }
 }
 
 @keyframes fadeIn {
@@ -874,10 +905,14 @@ footer p {
 
 .model-preview .carousel-item img {
     color: transparent;
+    display: block;
+    height: auto;
 }
 
 .model-description {
     padding: 1em;
+    width: var(--app-width-small);
+    margin: 0 auto;
 }
 
 .model-description a {
@@ -894,6 +929,10 @@ footer p {
 .model-description a:has(img:only-child) {
     line-height: 0;
     font-size: 0;
+}
+
+.model-description a:has(img:only-child)::after {
+    display: none;
 }
 
 .model-description code {
@@ -972,7 +1011,7 @@ footer p {
     width: var(--card-width);
     height: var(--card-height);
     position: relative;
-    text-decoration: none;
+    text-decoration: none !important;
     color: var(--c-text) !important;
     border-radius: var(--radius);
 }
@@ -1143,6 +1182,8 @@ img.loading:not([src]) {
     flex-direction: row;
     align-items: center;
     justify-content: flex-start;
+    width: -moz-fit-content;
+    width: fit-content;
     gap: .5em;
     font-weight: 500;
 }
@@ -1207,10 +1248,15 @@ img.loading:not([src]) {
     text-shadow: -1px -1px 0 var(--c-shadow), 1px -1px 0 var(--c-shadow), -1px  1px 0 var(--c-shadow), 1px  1px 0 var(--c-shadow);
 }
 
+.images-list-container {
+    padding: 0;
+}
+
 .images-list {
     display: flex;
     flex-direction: row;
     gap: var(--gap, 1em);
+    padding-inline: var(--gap, 1em);
     isolation: isolate;
 }
 
@@ -1240,6 +1286,7 @@ img.loading:not([src]) {
 .media-full-preview video,
 .media-full-preview img {
     max-width: 100%;
+    display: block;
 }
 
 .media-full-meta {

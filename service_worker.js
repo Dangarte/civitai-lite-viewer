@@ -1,5 +1,10 @@
 const SW_CONFIG = {
-    cache: 'civitai_light_cache_v2',
+    cache: {
+        api: 'civitai_light-api-cache-v1',
+        blurhash: 'civitai_light-blurhash-cache-v1',
+        static: 'civitai_light-static-cache-v1',
+        media: 'civitai_light-media-cache-v1'
+    },
     // base_url: 'http://127.0.0.1:3000/',
     // origin: 'http://127.0.0.1:3000',
     base_url: 'https://dangarte.github.io/civitai-lite-viewer/',
@@ -7,17 +12,18 @@ const SW_CONFIG = {
     images_url: 'https://image.civitai.com/',
     api_url: 'https://civitai.com/api/v1/',
     local_urls: {},
-    cacheTargets: {
+    ttl: {
         'model-preview': 12 * 60 * 60,      // Images in preview list on model page:    12 hours
-        'model-version': 3 * 24 * 60 * 60,  // Info about model version:                3 days
-        'model-card': 3 * 24 * 60 * 60,     // Images in cards on models page:          3 days
-        'user-image': 2 * 24 * 60 * 60,     // Images in creator profile:               2 days
-        'full-image': 2 * 60 * 60,          // Images on full size image page:          2 hours
-        'image-card': 2 * 60 * 60,          // Images images list:                      2 hours
-        'unknown': 60 * 60,                 // Unknown target:                          1 hour
-        'large-file': 15 * 60,              // Dont store large files (14+ mb) longer than 15 minutes       15 mins
-        'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                          5 days
-        'lite-viewer-core': 3 * 60,         // Main files from the repo (index.html, service_worker.js)     3 mins
+        'model-version': 2 * 24 * 60 * 60,  // Info about model version:                 2 days
+        'model-card': 24 * 60 * 60,         // Images in cards on models page:           1 day
+        'user-image': 2 * 24 * 60 * 60,     // Images in creator profile:                2 days
+        'full-image': 15 * 60,              // Images on full size image page:          15 mins
+        'image-card': 30 * 60,              // Images images list:                      30 mins
+        'unknown': 60 * 60,                 // Unknown target:                           1 hour
+        'large-file': 15 * 60,              // Дarge files (14+ mb)                     15 mins
+        'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                           5 days
+        'lite-viewer-core': 3 * 60,         // Main files from the repo                  3 mins
+        'blur-hash': 60 * 60                // blurHash                                  1 hour
     },
     api_key: null,
     task_time_limit: 60000, // 1 minute
@@ -29,8 +35,8 @@ SW_CONFIG.local_urls = {
 const currentTasks = {};
 
 self.addEventListener('activate', () => {
-    cleanExpiredCache();
-    caches.delete('civitai_light_cache_v1'); // Temporarily, remove old version, crooked, cache
+    Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => cleanExpiredCache({ cacheName }));
+    caches.delete('civitai_light_cache_v2'); // Temporarily, remove old version
     self.clients.claim();
 });
 self.addEventListener('fetch', onFetch);
@@ -39,13 +45,15 @@ self.addEventListener('message', onMessage);
 
 function onMessage(e) { // Messages
     const sendSuccess = response => {
-        console.log(response);
+        console.log(`${e?.data?.action ?? 'Unknown action'}: `, response);
     };
     const sendError = error => {
-        console.error(error);
+        console.error(`${e?.data?.action ?? 'Unknown action'}: `, error);
     };
 
-    if (!e.isTrusted || e.origin !== SW_CONFIG.origin || !e.source || e.source.url.indexOf(SW_CONFIG.base_url) !== 0) return sendError('Unknown sender.');
+    if (!e.isTrusted || e.origin !== SW_CONFIG.origin || !e.source || e.source.url.indexOf(SW_CONFIG.base_url) !== 0) {
+        return sendError('Unknown sender.');
+    }
 
     if (!e.data || typeof e.data !== 'object' || Array.isArray(e.data)) {
         return sendError('Message Error. Invalid message format, must be an object.');
@@ -58,7 +66,7 @@ function onMessage(e) { // Messages
     currentTasks[action] = Date.now();
 
     let actionPromise = null;
-    if (action === 'Clear Cache') actionPromise = cleanExpiredCache(data);
+    if (action === 'Clear Cache') actionPromise = Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
     else actionPromise = Promise.reject(`Undefined action: '${action}'`);
     actionPromise.then(sendSuccess).catch(sendError).finally(() => delete currentTasks[action]);
 
@@ -75,43 +83,53 @@ function onFetch(e) { // Request interception
 async function cacheFetch(request, cacheControl) {
     if (request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return localFetch(request);
 
+    let cacheName = SW_CONFIG.cache.media;
     const url = new URL(request.url);
+    const params = Object.fromEntries(url.searchParams.entries());
 
-    if (request.url.indexOf(SW_CONFIG.base_url) === 0 && !cacheControl) {
-        if ( // Cache for a 3 mins only
-            url.pathname === '/civitai-lite-viewer/' ||
-            url.pathname === '/civitai-lite-viewer/index.html' ||
-            url.pathname.indexOf('service_worker.js') !== -1
-        ) {
-            cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer-core']}`;
-        } else {
-            cacheControl = `max-age=${SW_CONFIG.cacheTargets['lite-viewer']}`;
+    if (request.url.indexOf(SW_CONFIG.base_url) === 0) {
+        if (!cacheControl) {
+            if ( // Cache for a 3 mins only
+                url.pathname === '/civitai-lite-viewer/' ||
+                url.pathname === '/civitai-lite-viewer/index.html' ||
+                url.pathname.indexOf('service_worker.js') !== -1
+            ) {
+                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer-core']}`;
+            } else {
+                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer']}`;
+            }
         }
+        cacheName = SW_CONFIG.cache.static;
+    } else if (request.url.indexOf(SW_CONFIG.api_url) === 0) {
+        cacheName = SW_CONFIG.cache.api;
+    } else if (request.url.indexOf(SW_CONFIG.images_url) === 0 || ['model-preview', 'model-card', 'user-image', 'full-image', 'image-card'].includes(params.target) ) {
+        cacheName = SW_CONFIG.cache.media;
     }
 
-    if (url.pathname.indexOf('/model-versions/') === 0) cacheControl = SW_CONFIG.cacheTargets['model-version'];
+    if (!cacheControl && url.pathname.indexOf('/model-versions/') !== -1) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
 
     try {
         const fetchResponse = await fetch(request);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
-        const params = Object.fromEntries(url.searchParams.entries());
         if (params && blob.type.indexOf('image/') === 0 && (params.width || params.height || params.type) && !([ 'image/gif', 'image/apng' ].includes(blob.type))) {
             const { width, height , format, quality, fit } = params;
             blob = (await resizeBlobImage(blob, { width, height, quality, format, fit })) || blob;
         }
 
         if (!cacheControl) {
-            if (blob.type === 'application/json') cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
+            if (blob.type === 'application/json') {
+                cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
+            }
             else {
-                const maxAge = blob.size < 15000000 ? SW_CONFIG.cacheTargets[params?.target] ?? SW_CONFIG.cacheTargets.unknown : SW_CONFIG.cacheTargets['large-file'];
+                const maxAge = blob.size < 15000000 ? SW_CONFIG.ttl[params?.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl['large-file'];
                 cacheControl = `max-age=${maxAge}`;
             }
         }
 
         const response = responseFromBlob(blob, cacheControl);
-        if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(request, response.clone());
+        if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(request, response.clone(), cacheName);
         return response;
     } catch (_) {
         console.error(_);
@@ -119,7 +137,7 @@ async function cacheFetch(request, cacheControl) {
             console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
             const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
             const response = await cacheFetch(newREquest, cacheControl);
-            cachePut(request, response.clone());
+            cachePut(request, response.clone(), cacheName);
             return response;
         }
         return new Response('', { status: 500, statusText: 'Network Error' });
@@ -130,8 +148,8 @@ async function localFetch(request) {
     if (request.url.indexOf(SW_CONFIG.local_urls.blurHash) === 0) {
         const { hash, width = 32, height = 32, punch = 1 } = Object.fromEntries(new URLSearchParams(request.url.substring(request.url.indexOf('?') + 1)));
         const blob = await blurhashToImageBlob(hash, Number(width), Number(height), Number(punch));
-        const response = responseFromBlob(blob, `max-age=${5 * 24 * 60 * 60}`); // 5 days
-        cachePut(request, response.clone());
+        const response = responseFromBlob(blob, `max-age=${SW_CONFIG.ttl['blur-hash']}`);
+        cachePut(request, response.clone(), SW_CONFIG.cache.blurhash);
         return response;
     }
     return new Response('', { status: 500, statusText: 'Unknown local URL' });
@@ -341,8 +359,8 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
     return blob;
 }
 
-async function cleanExpiredCache({ mode = 'max-age-expired', urlMask = null } = {}) { // Check and remove all old data (max-age expired)
-    const cache = await caches.open(SW_CONFIG.cache);
+async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) { // Check and remove all old data (max-age expired)
+    const cache = await caches.open(cacheName);
     const keys = await cache.keys();
 
     const masks = Array.isArray(urlMask) ? urlMask : urlMask ? [urlMask] : [];
@@ -362,18 +380,20 @@ async function cleanExpiredCache({ mode = 'max-age-expired', urlMask = null } = 
                             ? r => r && checkCacheMaxAge(r)     // Remove only with expired max-age (default)
                             : r => r && checkCacheMaxAge(r);    // Remove only with expired max-age (unknown)
     
+    let countRemoved = 0;
     const promises = keys.map(async (request) => {
         const url = request.url;
         const matchesMask = regexps.length !== 0 && regexps.some(rx => rx.test(url));
         const response = await cache.match(request);
         if (!matchesMask && isResponseOk(response)) return;
 
+        countRemoved++;
         return cache.delete(request);
     });
 
     await Promise.all(promises);
 
-    return 'Cache cleared';
+    return `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`;
 }
 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
@@ -401,7 +421,7 @@ async function cacheGet(request) { // Get response from cache
     return cacheFetch(request);
 }
 
-async function cachePut(request, response) { // Put response in cache
-    const cache = await caches.open(SW_CONFIG.cache);
+async function cachePut(request, response, cacheName) { // Put response in cache
+    const cache = await caches.open(cacheName);
     return await cache.put(request, response);
 }

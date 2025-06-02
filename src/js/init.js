@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 5,
+    version: 6,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -36,7 +36,7 @@ const SETTINGS = {
     sort: 'Highest Rated',
     sort_images: 'Newest',
     period: 'Month',
-    period_images: 'Month',
+    period_images: 'AllTime',
     baseModels: [],
     blackListTags: [], // TODO: Doesn't work on images (pictures don't have tags), need to poke around the API, maybe there's some field like excludedTags...
     nsfw: true,
@@ -143,17 +143,12 @@ class CivitaiAPI {
         return data;
     }
 
-    async fetchImageMeta(options = {}) {
-        const {
-            id,
-            nsfw = false,
-        } = options;
-
+    async fetchImageMeta(id, nsfwLevel) {
         const url = new URL(`${this.baseURL}/images`);
         url.searchParams.append('limit', 1);
 
         if (id) url.searchParams.append('imageId', id);
-        if (nsfw) url.searchParams.append('nsfw', 'true');
+        if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
 
         const data = await this.#getJSON({ url, target: `image meta (id: ${id})` });
         return data?.items?.[0] ?? null;
@@ -304,7 +299,7 @@ class Controller {
         else if (pageId === '#images') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
             if (!params.image) promise = this.gotoImages();
-            else promise = this.gotoImage(params.image);
+            else promise = this.gotoImage(params.image, params.nsfw);
         }
 
         if (promise) promise.finally(finishPageLoading);
@@ -414,11 +409,11 @@ class Controller {
         this.appElement.appendChild(appContent);
     }
 
-    static gotoImage(imageId) {
+    static gotoImage(imageId, nsfwLevel) {
         const pageNavigation = this.#pageNavigation;
         const appContent = createElement('div', { class: 'app-content-wide full-image-page' });
 
-        return this.api.fetchImageMeta({ id: imageId, nsfw: SETTINGS.nsfw }).then(media => {
+        return this.api.fetchImageMeta(imageId, nsfwLevel).then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.log('Loaded image info', media);
             if (!media) throw new Error('No Meta');
@@ -456,13 +451,19 @@ class Controller {
             // Generation info
             if (media.meta) metaContainer.appendChild(this.#genImageGenerationMeta(media.meta));
 
-            insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+            insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
             appContent.appendChild(metaContainer);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+
+            if (error?.message === 'No Meta') {
+                appContent.style.flexDirection = 'column';
+                insertElement('p', appContent, { class: 'error-text' }, 'Some images cannot be retrieved via API, you can try opening this image on the original site');
+                insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+            }
         }).finally(() => {
             if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
@@ -511,7 +512,7 @@ class Controller {
             appContent.appendChild(this.#genModelPage(data, version));
 
             // Images
-            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide' });
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide images-list-container' });
             const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
             onTargetInViewport(imagesListTrigger, () => {
                 imagesListTrigger.remove();
@@ -745,9 +746,8 @@ class Controller {
         const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
         const previewList = modelVersion.images.map((media, index) => {
             const ratio = +(media.width/media.height).toFixed(3);
-            const item = createElement('div', { style: `aspect-ratio: ${ratio};` });
-            // const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1]; // This id is not real and there will always be an error
-            // const item = createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}` : ', style: `aspect-ratio: ${ratio};`, tabindex: -1 });
+            const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
+            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${media.nsfwLevel >= 8}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
             const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
             const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, lazy: index > 3, taget: 'model-preview' });
             item.appendChild(mediaElement);
@@ -760,15 +760,6 @@ class Controller {
             return { element: item, isWide: ratio > 1.5 };
         });
         modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
-
-        // Model creator
-        if (model.creator) {
-            const creatorWrap = insertElement('div', page, { class: 'user-info' });
-            const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
-            if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
-            else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
-            insertElement('div', creatorWrap, undefined, model.creator.username);
-        }
 
         // Model version description
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
@@ -784,6 +775,13 @@ class Controller {
                 insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, word);
             });
         }
+        if (model.creator) {
+            const creatorWrap = insertElement('div', modelVersionDescription, { class: 'user-info' });
+            const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
+            if (model.creator.image) insertElement('img', creatorWrap, { crossorigin: 'anonymous', alt: 'creator-picture', src: `${model.creator.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
+            else insertElement('div', creatorWrap, { class: 'no-media' }, model.creator.username.substring(0, 2));
+            insertElement('div', creatorWrap, undefined, model.creator.username);
+        }
         if (modelVersion.description) modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
 
         // Model descrition
@@ -795,7 +793,7 @@ class Controller {
         this.#analyzeModelDescription(modelDescription);
 
         // Open in CivitAI
-        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, class: 'link-button', style: 'display: flex; width: 20ch;margin: 2em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 2em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
         // Comments
         // ...
@@ -904,7 +902,8 @@ class Controller {
 
         const updateColumns = () => {
             columns = [];
-            let columnsCount = Math.floor(window.innerWidth / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
+            // padding left + N columns with padding right, padding on the right of the container is taken into account as padding of the last column
+            const columnsCount = Math.floor((window.innerWidth - CONFIG.appearance.card.gap) / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
             for(let i = 0; i < columnsCount; i++) {
                 columns.push({
                     height: 0,
@@ -1230,54 +1229,90 @@ class Controller {
 
             if (resourcePromises.length) {
                 Promise.all(resourcePromises).then(result => {
-                    result = result.filter(item => item);
-                    const trainedWords = [];
-                    const triggerTooltips = {};
+                    result = result.filter(Boolean);
+                    const trainedWords = new Set();
+                    const rawTooltips = {};
                     console.log('Loaded resources', result);
 
                     result.forEach(item => {
                         const type = item?.model?.type;
                         if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length) return;
 
+                        const modelName = item.model.name;
+                        if (!modelName) return;
+
                         item.trainedWords.forEach(word => {
-                            word = word.indexOf(',') === -1 ? word : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
-                            trainedWords.push(word);
-                            if (item.model.name) {
-                                if (triggerTooltips[word]) triggerTooltips[word] += `, ${item.model.name}`;
-                                else triggerTooltips[word] = item.model.name;
-                            }
+                            word = word.indexOf(',') === -1 ? word.trim() : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                            const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
+
+                            splitWords.forEach(w => {
+                                trainedWords.add(w);
+                                if (!rawTooltips[w]) rawTooltips[w] = new Set();
+                                rawTooltips[w].add(modelName);
+                            });
                         });
                     });
 
-                    if (trainedWords.length > 0) {
-                        const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
+                    const triggerTooltips = {};
+                    trainedWords.forEach(word => {
+                        if (rawTooltips[word]) {
+                            triggerTooltips[word.toLowerCase()] = `<ul>${Array.from(rawTooltips[word]).map(w => `<li>${w}</li>`).join('')}</ul>`;
+                        }
+                    });
 
-                        codeBlocks.forEach(code => {
-                            const children = Array.from(code.childNodes);
+                    if (!trainedWords.size) return;
 
-                            children.forEach(node => {
-                                if (node.nodeType !== Node.TEXT_NODE) return;
+                    const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
 
-                                const text = node.textContent;
-                                const indexes = trainedWords.map(key => [ key, text.indexOf(key) ]).filter(a => a[1] !== -1).sort((a, b) => a[1] - b[1]);
+                    const escapedWords = Array.from(trainedWords).map(w =>
+                        w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    );
+                    const wordRegex = new RegExp(`\\b(${escapedWords.join('|')})\\b`, 'gi');
 
-                                if (indexes.length <= 0) return;
+                    codeBlocks.forEach(code => {
+                        const children = Array.from(code.childNodes);
 
-                                const fragment = new DocumentFragment();
-                                const startText = text.substring(0, indexes[0][1]);
-                                if (startText) fragment.appendChild(document.createTextNode(startText));
-                                indexes.forEach(([key, index], i) => {
-                                    const postText = text.substring(index + key.length, indexes[i + 1]?.[1] ?? undefined );
-                                    const span = insertElement('span', fragment, { class: 'trigger' }, key);
-                                    if (triggerTooltips[key]) span.setAttribute('lilpipe-text', triggerTooltips[key]);
-                                    if (postText) fragment.appendChild(document.createTextNode(postText));
+                        children.forEach(node => {
+                            if (node.nodeType !== Node.TEXT_NODE) return;
+
+                            const text = node.textContent;
+                            if (!text) return;
+
+                            const matches = [];
+                            let match;
+                            while ((match = wordRegex.exec(text)) !== null) {
+                                matches.push({
+                                    key: match[0],
+                                    index: match.index
                                 });
+                            }
 
-                                code.replaceChild(fragment, node);
-                                return fragment;
+                            if (matches.length === 0) return;
+
+                            matches.sort((a, b) => a.index - b.index);
+                            const fragment = new DocumentFragment();
+                            let lastIndex = 0;
+
+                            matches.forEach(({ key, index }) => {
+                                if (index > lastIndex) {
+                                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
+                                }
+
+                                const span = insertElement('span', fragment, { class: 'trigger' }, key);
+
+                                const tooltip = triggerTooltips[key.toLowerCase()];
+                                if (tooltip) span.setAttribute('lilpipe-text', tooltip);
+
+                                lastIndex = index + key.length;
                             });
+
+                            if (lastIndex < text.length) {
+                                fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+                            }
+
+                            code.replaceChild(fragment, node);
                         });
-                    }
+                    });
                 }).finally(() => {
                     resourcesContainer.classList.remove('meta-resources-loading');
                 });
@@ -1337,7 +1372,7 @@ class Controller {
     }
 
     static #genImageCard(image) {
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.nsfwLevel >= 8}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
 
         // Image
         if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
@@ -1439,7 +1474,7 @@ class Controller {
         const previewUrl = media.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${ratio < 1 ? blurSize : Math.round(blurSize/ratio)}&height=${ratio < 1 ? Math.round(blurSize/ratio) : blurSize}` : '';
         if (media.type === 'image') {
             const src = SETTINGS.autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
-            mediaElement = createElement('img', { class: 'loading',  alt: 'image', crossorigin: 'anonymous', src: lazy ? '' : src });
+            mediaElement = createElement('img', { class: 'loading',  alt: 'image', crossorigin: 'anonymous', src: lazy ? '' : src, 'data-nsfw-level': media.nsfwLevel });
             if (lazy) {
                 onTargetInViewport(mediaElement, () => {
                     mediaElement.src = src;
@@ -1449,7 +1484,7 @@ class Controller {
             const src = url.replace('optimized=true', 'optimized=true,transcode=true');
             const poster = resize ? `${src}&format=webp` : src;
             const videoSrc = src.replace(/anim=false,?/, '');
-            mediaElement = createElement('video', { class: 'loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none' });
+            mediaElement = createElement('video', { class: 'loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none', 'data-nsfw-level': media.nsfwLevel });
             mediaElement.volume = 0;
             mediaElement.muted = true;
             mediaElement.loop = true;
@@ -1849,7 +1884,8 @@ function getFollowingTagGroup(startElem, tagName) {
 
     return result;
 }
-
+let viewportRequestedCallbacks = [];
+let viewportRequestAnimationFrame = null;
 function onTargetInViewport(target, callback) {
     if (!target || typeof callback !== 'function') return;
 
@@ -1861,7 +1897,13 @@ function onTargetInViewport(target, callback) {
     }, { threshold: 0.05 });
 
     // This requestAnimationFrame is needed to make sure that the element is in the DOM
-    requestAnimationFrame(() => observer.observe(target));
+    // This array is needed to avoid setting hundreds of frame requests in a row
+    viewportRequestedCallbacks.push(() => observer.observe(target));
+    if (viewportRequestAnimationFrame === null) viewportRequestAnimationFrame = requestAnimationFrame(() => {
+        viewportRequestAnimationFrame = null;
+        viewportRequestedCallbacks.forEach(a => a());
+        viewportRequestedCallbacks = [];
+    });
 }
 
 function savePageSettings() {
@@ -2030,6 +2072,7 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
 let prevLilpipeEvenetTime = 0, prevLilpipeTimer = null;
 function startLilpipeEvent(e, options = { fromFocus: false }) {
     const target = e.eventTarget;
+    const animationDuration = 150;
 
     // Remove old tooltip
     document.getElementById('tooltip')?.remove();
@@ -2080,11 +2123,11 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
 
             parent.appendChild(tooltip);
             tooltip.setAttribute('data-animation', 'in');
-            setTimeout(() => tooltip.removeAttribute('data-animation'), 100);
+            setTimeout(() => tooltip.removeAttribute('data-animation'), animationDuration);
         }, delay);
     } else {
         tooltip.setAttribute('data-animation', 'in');
-        setTimeout(() => tooltip.removeAttribute('data-animation'), 100);
+        setTimeout(() => tooltip.removeAttribute('data-animation'), animationDuration);
     }
 
     if (options.fromFocus) target.addEventListener('blur', onmouseleave, { once: true, capture: true });
