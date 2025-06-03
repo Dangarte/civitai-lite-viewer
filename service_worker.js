@@ -174,7 +174,7 @@ async function resizeBlobImage(blob, options) { // Resize image blob
         }
 
         const newRatio = newWidth / newHeight;
-        if (fit !== 'fill' && (targetWidth || targetHeight) && originalRatio !== newRatio) {
+        if (fit !== 'fill' && (targetWidth || targetHeight) && Math.abs(originalRatio - newRatio) >= .001) {
             cropWidth = Math.min(width, Math.round(height * newRatio));
             cropHeight = Math.min(height, Math.round(width / newRatio));
             offsetX = Math.round((width - cropWidth) / 2);

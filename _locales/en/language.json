@@ -13,6 +13,8 @@
         "resurces_used": "Resources Used",
         "openOnCivitAI": "Open on CivitAI",
         "sort": "Sort",
+        "hasMeta": "Generation info",
+        "noMeta": "No generation info",
         "language": "Language",
         "sortOptions": {
             "Highest Rated": "Highest Rated",

@@ -13,6 +13,8 @@
         "resurces_used": "使用的资源",
         "openOnCivitAI": "在 CivitAI 上打开",
         "sort": "排序",
+        "hasMeta": "生成信息",
+        "noMeta": "没有生成信息",
         "language": "语言",
         "sortOptions": {
             "Highest Rated": "最高评分",

@@ -13,6 +13,8 @@
         "resurces_used": "Використані ресурси",
         "openOnCivitAI": "Відкрити на CivitAI",
         "sort": "Сортування",
+        "hasMeta": "Інфо про генерацію",
+        "noMeta": "Немає інформації про генерацію",
         "language": "Мова",
         "sortOptions": {
             "Highest Rated": "Найвищий рейтинг",
