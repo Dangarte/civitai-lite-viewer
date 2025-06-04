@@ -638,7 +638,7 @@ footer p {
     transform: rotate(calc(-180deg / var(--count) * var(--num)))
                translate(var(--r))
                rotate(calc(180deg / var(--count) * var(--num)));
-    transition: all .4s ease-out, scale 0s .2s linear;
+    transition: all .4s ease-out, scale .2s calc(var(--num, 0) * 0.05s) cubic-bezier(0.175, 0.885, 0.32, 1.275);
     border-radius: var(--radius);
     scale: 0;
 }
@@ -678,24 +678,13 @@ footer p {
 }
 
 #language-list:not(.hidden) li {
-    animation: scaleUp .2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-    animation-delay: calc(var(--num, 0) * 0.05s);
+    scale: 1;
 }
 
 #language-list.hidden li {
-    scale: 1;
+    scale: 0;
     pointer-events: none;
     user-select: none;
-    animation: scaleDown .2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-    animation-delay: calc(var(--num, 0) * 0.05s);
-}
-
-@keyframes scaleUp {
-    to { scale: 1; }
-}
-
-@keyframes scaleDown {
-    to { scale: 0; }
 }
 
 .error-block {
@@ -735,6 +724,7 @@ footer p {
 
 #app {
     margin-block-end: 6em;
+    transition: 0s;
 }
 
 #app[data-page="#models"]:has(.models-list),
@@ -752,6 +742,7 @@ footer p {
 #app .app-content-wide {
     max-width: 100vw;
     padding-inline: 1em;
+    box-sizing: border-box;
 }
 
 #tooltip {
@@ -854,7 +845,7 @@ footer p {
     width: var(--carousel-item-width, 450px);
     flex-shrink: 0;
     border-radius: var(--radius);
-    transition: transform 0s .1s;
+    transition: transform 0s .1s ease-out;
 }
 
 .carousel-item-wide {
@@ -896,6 +887,7 @@ footer p {
 
 .carousel-button:focus-visible,
 .carousel-button:hover {
+    transition: .1s ease-out;
     background-color: var(--c-bg-light);
     color: var(--c-main-text);
     opacity: 1 !important;
@@ -1045,7 +1037,7 @@ footer p {
 }
 
 .card-background .no-media,
-.card-background .media-container {
+.card-background {
     display: block;
     width: 100%;
     height: 100%;
@@ -1053,8 +1045,8 @@ footer p {
     transition: .1s ease-out;
 }
 
-.card-background .media-container img,
-.card-background .media-container video {
+.card-background img,
+.card-background video {
     object-fit: cover;
 }
 
@@ -1323,6 +1315,7 @@ img.loading:not([src]) {
     border-radius: var(--radius);
     max-width: 27%;
     padding: 1em;
+    box-sizing: border-box;
 }
 
 .media-full-meta,

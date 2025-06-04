@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 7,
+    version: 8,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -40,6 +40,9 @@ const SETTINGS = {
     baseModels: [],
     blackListTags: [], // TODO: Doesn't work on images (pictures don't have tags), need to poke around the API, maybe there's some field like excludedTags...
     nsfw: true,
+    nsfwLevel: 'X',
+    browsingLevel: 16,
+    hideImagesWithNoMeta: true
 };
 
 Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
@@ -55,13 +58,14 @@ class CivitaiAPI {
 
     async #getJSON({ url, target }) {
         try {
-            const data = await fetchJSON(url.toString(), {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                },
-            });
+            const headers = {
+                'Accept': 'application/json'
+            };
+            // if (SETTINGS.api_key) headers['Authorization'] = `Bearer ${SETTINGS.api_key}`; // Need to check
+
+            const data = await fetchJSON(url.toString(), { method: 'GET', headers });
             if (data.error) throw new Error(data.error);
+
             return data;
         } catch (error) {
             console.error(`Failed to fetch ${target ?? 'something'}:`, error?.message ?? error);
@@ -72,7 +76,7 @@ class CivitaiAPI {
     async fetchModels(options = {}) {
         const {
             limit = 20,
-            page = 1,
+            cursor,
             query = '',
             tag = '',
             username = '',
@@ -80,7 +84,7 @@ class CivitaiAPI {
             types = [],
             baseModels = [],
             checkpointType = 'All',
-            browsingLevel = '', // Is it work?
+            browsingLevel = 0, // ERROR: The server expects a number... but always gets a string from the url as output... as a result it returns an error that the input type is incorrect...
             sort = '',
             period = '',
             rating = '',
@@ -92,7 +96,7 @@ class CivitaiAPI {
 
         const url = new URL(`${this.baseURL}/models`);
         url.searchParams.append('limit', limit);
-        url.searchParams.append('page', page);
+        if (cursor) url.searchParams.append('cursor', cursor);
 
         if (query) url.searchParams.append('query', query);
         if (tag) url.searchParams.append('tag', tag);
@@ -105,9 +109,9 @@ class CivitaiAPI {
         if (rating) url.searchParams.append('rating', rating);
         if (favorites) url.searchParams.append('favorites', 'true');
         if (hidden) url.searchParams.append('hidden', 'true');
-        if (nsfw) url.searchParams.append('nsfw', 'true');
+        if (nsfw) url.searchParams.append('nsfw', nsfw);
         if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true');
-        if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // Is it work?
+        if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // ERROR: (see above)
         if (status) url.searchParams.append('status', status);
 
         const data = await this.#getJSON({ url, target: 'models' });
@@ -117,7 +121,7 @@ class CivitaiAPI {
     async fetchImages(options = {}) {
         const {
             limit = 20,
-            page = 1,
+            cursor,
             modelId,
             modelVersionId,
             username = '',
@@ -129,7 +133,7 @@ class CivitaiAPI {
 
         const url = new URL(`${this.baseURL}/images`);
         url.searchParams.append('limit', limit);
-        url.searchParams.append('page', page);
+        if (cursor) url.searchParams.append('cursor', cursor);
 
         if (username) url.searchParams.append('username', username);
         if (modelId) url.searchParams.append('modelId', modelId);
@@ -137,7 +141,7 @@ class CivitaiAPI {
         if (sort) url.searchParams.append('sort', sort);
         if (period) url.searchParams.append('period', period);
         if (hidden) url.searchParams.append('hidden', 'true');
-        if (nsfw) url.searchParams.append('nsfw', 'true');
+        if (nsfw) url.searchParams.append('nsfw', nsfw);
 
         const data = await this.#getJSON({ url, target: 'images' });
         return data;
@@ -246,8 +250,13 @@ class Controller {
 
         const pageNavigation = this.#pageNavigation = Date.now();
 
+        this.appElement.querySelectorAll('video').forEach(video => {
+            video.pause();
+            disableAutoPlayOnVisible(video);
+        });
+
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
-        onTargetInViewport();
+        onTargetInViewportClearAll();
         this.appElement.classList.add('page-loading');
         this.appElement.setAttribute('data-page', pageId);
         if (paramString) this.appElement.setAttribute('data-params', paramString);
@@ -292,14 +301,15 @@ class Controller {
         else if (pageId === '#models') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
             if (params.hash) promise = this.gotoModelByHash(params.hash);
-            else if (!params.model) promise = this.gotoModels({ tag: params.tag });
-            else promise = this.gotoModel(params.model, params.version);
+            else if (params.model) promise = this.gotoModel(params.model, params.version);
+            else promise = this.gotoModels({ tag: params.tag, query: params.query, username: params.username });
         }
         else if (pageId === '#articles') promise = this.gotoArticles();
         else if (pageId === '#images') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (!params.image) promise = this.gotoImages();
-            else promise = this.gotoImage(params.image, params.nsfw);
+            if (params.image) promise = this.gotoImage(params.image, params.nsfw);
+            else if (params.modelversion || params.username) promise = this.gotoImages({ modelId: params.model, modelVersionId: params.modelversion, username: params.username }); // Only model dont search any
+            else promise = this.gotoImages();
         }
 
         if (promise) promise.finally(finishPageLoading);
@@ -385,11 +395,13 @@ class Controller {
 
                 buttonRemoveOld.addEventListener('click', () => {
                     clearCache('old');
-                    setTimeout(updateCacheSize(), 300);
+                    setTimeout(updateCacheSize(), 500);
+                    setTimeout(updateCacheSize(), 2500);
                 });
                 buttonRemoveAll.addEventListener('click', () => {
                     clearCache('all');
-                    setTimeout(updateCacheSize(), 300);
+                    setTimeout(updateCacheSize(), 500);
+                    setTimeout(updateCacheSize(), 2500);
                 });
             }
         });
@@ -419,11 +431,10 @@ class Controller {
             if (!media) throw new Error('No Meta');
 
             // Full image
-            const mediaContainer = createElement('div', { class: 'media-full-preview' });
-            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', controls: true, autoplay: true });
+            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true });
             mediaElement.style.width = `${media.width}px`;
-            mediaContainer.appendChild(mediaElement);
-            appContent.appendChild(mediaContainer);
+            mediaElement.classList.add('media-full-preview');
+            appContent.appendChild(mediaElement);
 
             const metaContainer = createElement('div', { class: 'media-full-meta' });
 
@@ -468,7 +479,19 @@ class Controller {
         });
     }
 
-    static gotoImages() {
+    static gotoImages(options = {}) {
+        const { modelId, username, modelVersionId } = options;
+
+        if (username || modelVersionId) {
+            const appContentWide = createElement('div', { class: 'app-content app-content-wide images-list-container' });
+            const imagesList = this.#genImages({ modelId, modelVersionId, username });
+            appContentWide.appendChild(imagesList);
+
+            this.appElement.textContent = '';
+            this.appElement.appendChild(appContentWide);
+            return;
+        }
+
         const appContent = createElement('div', { class: 'app-content' });
         document.title = `${CONFIG.title} - ${window.languagePack?.text?.images ?? 'Images'}`;
         insertElement('p', appContent, undefined, "Work In Progress");
@@ -510,6 +533,10 @@ class Controller {
 
             // Images
             const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide images-list-container' });
+            const imagesTitle = insertElement('h1', appContentWide, { style: 'justify-content: center;;' });
+            imagesTitle.appendChild(getIcon('image'));
+            insertElement('a', imagesTitle, { href: `#images?model=${id}&modelversion=${modelVersion.id}` }, window.languagePack?.text?.images ?? 'Images');
+
             const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
             onTargetInViewport(imagesListTrigger, () => {
                 imagesListTrigger.remove();
@@ -528,12 +555,13 @@ class Controller {
     }
 
     static gotoModels(options = {}) {
-        const { tag = '' } = options;
-        let nextPageUrl = null;
+        const { tag = '', query: searchQuery, username: searchUsername } = options;
+        let query;
         const appContent = createElement('div', { class: 'app-content app-content-wide' });
         const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-list models-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; --gap: ${CONFIG.appearance.card.gap}px;` });
 
         let allCards = [];
+        let displayedCards = new Set();
         let fakeIndex = 0;
         const setFakeFocus = index => {
             listWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
@@ -577,33 +605,41 @@ class Controller {
         });
 
         const insertModels = models => {
+            const pageNavigation = this.#pageNavigation;
             console.log('Loaded models:', models);
+
+            const fragment = new DocumentFragment();
             models.forEach(model => {
-                if (!model.modelVersions?.length || model.tags.some(tag => SETTINGS.blackListTags.includes(tag)) || listWrap.querySelector(`.card[data-id="${model.id}"]`)) return;
+                if (!model.modelVersions?.length || displayedCards.has(model.id) || model.tags.some(tag => SETTINGS.blackListTags.includes(tag))) return;
+                displayedCards.add(model.id);
                 const card = this.#genModelCard(model);
                 card.setAttribute('tabindex', -1);
                 allCards.push(card);
-                listWrap.appendChild(card);
+                fragment.appendChild(card);
             });
-            if (nextPageUrl) {
-                const loadMoreTrigger = insertElement('div', listWrap, { id: 'load-more' });
+
+            if (query.cursor) {
+                const loadMoreTrigger = insertElement('div', fragment, { id: 'load-more' });
                 loadMoreTrigger.appendChild(getIcon('infinity'));
                 onTargetInViewport(loadMoreTrigger, () => {
+                    if (pageNavigation !== this.#pageNavigation) return;
                     loadMore().then(() => loadMoreTrigger.remove());
                 });
             } else {
-                const loadNoMore = insertElement('div', listWrap, { id: 'load-no-more' });
+                const loadNoMore = insertElement('div', fragment, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
             }
+
+            listWrap.appendChild(fragment);
         };
 
         const loadMore = () => {
             const pageNavigation = this.#pageNavigation;
-            if (!nextPageUrl) return;
-            return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
+            if (!query.cursor) return;
+            return this.api.fetchModels(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                nextPageUrl = data.metadata?.nextPage ?? null;
+                query.cursor = data.metadata?.nextCursor ?? null;
                 insertModels(data.items);
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
@@ -612,12 +648,11 @@ class Controller {
         };
 
         const loadModels = () => {
-            const pageNavigation = this.#pageNavigation;
-
-            return this.api.fetchModels({
+            query = {
                 limit: 100,
-                page: 1,
                 tag,
+                query: searchQuery,
+                username: searchUsername,
                 types: SETTINGS.types,
                 sort: SETTINGS.sort,
                 period: SETTINGS.period,
@@ -625,9 +660,17 @@ class Controller {
                 primaryFileOnly: true,
                 baseModels: SETTINGS.baseModels,
                 nsfw: SETTINGS.nsfw,
-            }).then(data => {
+            };
+            listWrap.querySelectorAll('video').forEach(video => {
+                video.pause();
+                disableAutoPlayOnVisible(video);
+            });
+            const pageNavigation = this.#pageNavigation;
+            displayedCards = new Set();
+
+            return this.api.fetchModels(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                nextPageUrl = data.metadata?.nextPage ?? null;
+                query.cursor = data.metadata?.nextCursor ?? null;
                 allCards = [];
                 listWrap.textContent = '';
                 insertModels(data.items);
@@ -741,16 +784,26 @@ class Controller {
 
         // Model preview
         const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
-        const previewList = modelVersion.images.map((media, index) => {
+        const previewList = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel).map((media, index) => {
             const ratio = +(media.width/media.height).toFixed(3);
             const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
-            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${media.nsfwLevel >= 4}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
+            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
             const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
             const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, lazy: index > 3, taget: 'model-preview' });
             item.appendChild(mediaElement);
             return { element: item, isWide: ratio > 1.5 };
         });
         modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
+
+        // const hideLongDescription = el => {
+        //     el.classList.add('hide-long-description');
+        //     const showMore = createElement('button', { class: 'show-more' }, 'Show more');
+        //     el.prepend(showMore);
+        //     showMore.addEventListener('click', () => {
+        //         el.classList.remove('hide-long-description');
+        //         showMore.remove();
+        //     }, { once: true });
+        // };
 
         // Model version description
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
@@ -767,12 +820,16 @@ class Controller {
             });
         }
         if (model.creator) modelVersionDescription.appendChild(this.#genUserBlock(model.creator));
-        if (modelVersion.description) modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
+        if (modelVersion.description) {
+            modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
+            // if (calcCharsInString(modelVersion.description, '\n', 40)) hideLongDescription(modelVersionDescription);
+        }
 
         // Model descrition
         const modelDescription = insertElement('div', page, { class: 'model-description' });
         model.description = this.#analyzeModelDescriptionString(model.description);
         modelDescription.appendChild(safeParseHTML(model.description));
+        // if (calcCharsInString(model.description, '\n', 40)) hideLongDescription(modelDescription);
 
         // Analyze descriptions and find patterns to improve display
         this.#analyzeModelDescription(modelDescription);
@@ -787,16 +844,14 @@ class Controller {
     }
 
     // TODO: change number of columns when browser resizes
-    static #genImages({ modelId, modelVersionId }) {
-        let nextPageUrl = null;
+    static #genImages(options = {}) {
+        const { modelId, modelVersionId, username } = options;
+        let query;
         const fragment = new DocumentFragment();
-        const imagesTitle = insertElement('h1', fragment, { style: 'justify-content: center;;' });
-        imagesTitle.appendChild(getIcon('image'));
-        insertElement('span', imagesTitle, undefined, window.languagePack?.text?.images ?? 'Images');
-
         const listWrap = createElement('div', { id: 'images-list', class: 'cards-list images-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --gap: ${CONFIG.appearance.card.gap}px;` });
 
         let allImages = [];
+        let displayedCards = new Set();
         let columns = [];
         let fakeIndex = 0;
         let fakeTableIndex = 0;
@@ -874,11 +929,11 @@ class Controller {
         fragment.appendChild(listWrap);
 
         const loadMore = () => {
-            if (!nextPageUrl) return;
+            if (!query.cursor) return;
             const pageNavigation = this.#pageNavigation;
-            return fetchJSON(nextPageUrl, { method: 'GET', headers: { 'Accept': 'application/json' } }).then(data => {
+            return this.api.fetchImages(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                nextPageUrl = data.metadata?.nextPage ?? null;
+                query.cursor = data.metadata?.nextCursor ?? null;
                 insertImages(data.items);
             }).catch(error => {
                 console.error('Failed to fetch images:', error?.message ?? error);
@@ -898,6 +953,7 @@ class Controller {
             }
 
             if (allImages.length) {
+                displayedCards = new Set();
                 insertImages(allImages);
                 allImages[0].element.setAttribute('tabindex', 0);
                 fakeIndex = 0;
@@ -906,9 +962,18 @@ class Controller {
         };
 
         const insertImages = images => {
+            const pageNavigation = this.#pageNavigation;
             console.log('Loaded images:', images);
+
+            if (SETTINGS.hideImagesWithNoMeta) {
+                const countAll = images.length;
+                images = images.filter(image => image.meta);
+                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without meta information about generation`);
+            }
+
             images.forEach(image => {
-                if (listWrap.querySelector(`.card[data-id="${image.id}"]`)) return;
+                if (displayedCards.has(image.id)) return;
+                displayedCards.add(image.id);
 
                 const card = image.element ?? this.#genImageCard(image);
                 card.setAttribute('tabindex', -1);
@@ -931,10 +996,11 @@ class Controller {
                 return col.height < minCol.height ? col : minCol;
             }, columns[0]);
 
-            if (nextPageUrl) {
+            if (query.cursor) {
                 const loadMoreTrigger = insertElement('div', targetColumn.element, { id: 'load-more' });
                 loadMoreTrigger.appendChild(getIcon('infinity'));
                 onTargetInViewport(loadMoreTrigger, () => {
+                    if (pageNavigation !== this.#pageNavigation) return;
                     loadMore().then(() => loadMoreTrigger.remove());
                 });
             } else {
@@ -945,24 +1011,30 @@ class Controller {
         };
 
         const loadImages = () => {
+            query = {
+                limit: 100,
+                sort: SETTINGS.sort_images,
+                period: SETTINGS.period_images,
+                nsfw: SETTINGS.nsfwLevel,
+                modelId,
+                modelVersionId,
+                username
+            };
+            listWrap.querySelectorAll('video').forEach(video => {
+                video.pause();
+                disableAutoPlayOnVisible(video);
+            });
             const pageNavigation = this.#pageNavigation;
+            displayedCards = new Set();
             allImages = [];
             updateColumns();
 
-            return this.api.fetchImages({
-                limit: 100,
-                page: 1,
-                sort: SETTINGS.sort_images,
-                period: SETTINGS.period_images,
-                nsfw: SETTINGS.nsfw,
-                modelId,
-                modelVersionId
-            }).then(data => {
+            return this.api.fetchImages(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                nextPageUrl = data.metadata?.nextPage ?? null;
+                query.cursor = data.metadata?.nextCursor ?? null;
+                insertImages(data.items);
                 listWrap.textContent = '';
                 columns.forEach(col => listWrap.appendChild(col.element));
-                insertImages(data.items);
                 allImages[0]?.element?.setAttribute('tabindex', 0);
                 fakeIndex = 0;
                 fakeTableIndex = 0;
@@ -1045,12 +1117,7 @@ class Controller {
         // If a block of code has a lot of commas, it's probably a prompt block
         description.querySelectorAll('code:not(.prompt)').forEach(code => {
             const text = code.textContent;
-            let count = 0;
-            let pos = text.indexOf(',');
-            while (pos !== -1 || count < 3) {
-                count++;
-                pos = text.indexOf(',', pos + 1);
-            }
+            const count = calcCharsInString(text, ',', 3);
 
             if (count > 3) code.classList.add('prompt');
             else if (text.indexOf('\n') !== -1) {
@@ -1312,20 +1379,22 @@ class Controller {
 
     static #genModelCard(model) {
         const modelVersion = model.modelVersions[0];
-        const previewMedia = modelVersion.images[0];
+        const previewMedia = modelVersion.images.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
         const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}` });
-        const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
-        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
 
         // Image
         if (previewMedia?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: CONFIG.appearance.card.width, height: CONFIG.appearance.card.height, resize: SETTINGS.resize, target: 'model-card' });
-            cardBackgroundWrap.appendChild(mediaElement);
+            const mediaElement = this.#genMediaElement({ media: previewMedia, width: CONFIG.appearance.card.width, height: CONFIG.appearance.card.height, resize: SETTINGS.resize, target: 'model-card', lazy: true });
+            mediaElement.classList.add('card-background');
+            card.appendChild(mediaElement);
         } else {
+            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
             const noMedia = insertElement('div', cardBackgroundWrap, { class: 'no-media' }, window.languagePack?.errors?.no_media ?? 'No Media');
             noMedia.appendChild(getIcon('image'));
         }
+
+        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
 
         // Model Type
         const modelTypeWrap = insertElement('div', cardContentWrap, { class: 'model-type' });
@@ -1356,14 +1425,15 @@ class Controller {
     }
 
     static #genImageCard(image) {
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.nsfw}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
-        const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
-        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
 
         // Image
         if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         const mediaElement = this.#genMediaElement({ media: image, width: CONFIG.appearance.card.width, resize: SETTINGS.resize, target: 'image-card', lazy: true });
-        cardBackgroundWrap.appendChild(mediaElement);
+        mediaElement.classList.add('card-background');
+        card.appendChild(mediaElement);
+
+        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
 
         // Badges
         const badgesContainer = insertElement('div', cardContentWrap, { class: 'badges other-badges' });
@@ -1402,7 +1472,10 @@ class Controller {
 
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
-            if (userInfo.image) insertElement('img', container, { crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src: `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image` });
+            if (userInfo.image) {
+                const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image`;
+                insertElement('img', container, { crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+            }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
         }
         insertElement('div', container, undefined, userInfo.username);
@@ -1473,7 +1546,7 @@ class Controller {
         const previewUrl = media.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${ratio < 1 ? blurSize : Math.round(blurSize/ratio)}&height=${ratio < 1 ? Math.round(blurSize/ratio) : blurSize}` : '';
         if (media.type === 'image') {
             const src = autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
-            mediaElement = insertElement('img', mediaContainer, { class: 'loading',  alt: 'image', crossorigin: 'anonymous', src: lazy ? '' : src, 'data-nsfw-level': media.nsfwLevel });
+            mediaElement = insertElement('img', mediaContainer, { class: 'loading',  alt: ' ', crossorigin: 'anonymous', src: lazy ? '' : src, 'data-nsfw-level': media.nsfwLevel });
             if (lazy) {
                 onTargetInViewport(mediaElement, () => {
                     mediaElement.src = src;
@@ -1500,7 +1573,8 @@ class Controller {
                 mediaElement.src = videoSrc;
             }
             if (autoplay) {
-                mediaContainer.classList.add('media-video');
+                enableAutoPlayOnVisible(mediaElement);
+                mediaContainer.classList.add('media-video', 'video-autoplay');
                 mediaElement.autoplay = true;
             } else {
                 mediaContainer.classList.add('media-video', 'video-hover-play');
@@ -1535,13 +1609,22 @@ class Controller {
         const filterPeriodList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'period' });
         filterPeriodList.appendChild(periodList.element);
 
-        // NSFW toggle
-        const filterNSFW = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'nsfw' });
-        const nsfwToggle = this.#genBoolean({ onchange: ({ newValue }) => {
-            SETTINGS.nsfw = newValue;
+        // NSFW list
+        const browsingLevels = {
+            'None': 0,
+            'Soft': 2,
+            'Mature': 4,
+            'X': 16,
+            'true': 32,
+        };
+        const nsfwOptions = [ 'None', 'Soft', 'Mature', 'X', 'true' ];
+        const nsfwList = this.#genList({ onchange: ({ newValue }) => {
+            SETTINGS.nsfwLevel = newValue;
+            SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
             onAnyChange?.();
-        }, value: SETTINGS.nsfw, label: 'NSFW' });
-        filterNSFW.appendChild(nsfwToggle.element);
+        }, value: SETTINGS.nsfwLevel, options: nsfwOptions, labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ])) });
+        const filterNsfwList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'nsfwLevel' });
+        filterNsfwList.appendChild(nsfwList.element);
 
         return filterWrap;
     }
@@ -1667,6 +1750,7 @@ class Controller {
             'HTTP 500': 'src/icons/500.png',
             'HTTP 404': 'src/icons/404.png',
             'Model not found': 'src/icons/404.png',
+            'No Meta': 'src/icons/404.png',
             'HTTP 401': 'src/icons/403.png',
             'HTTP 403': 'src/icons/403.png'
         };
@@ -1825,9 +1909,67 @@ class Controller {
 
         return { element, setValue };
     }
+
+    static #convertNSFWLevelToString(nsfwLevel) {
+        // Not sure about the correct number to word match, but seems to work fine
+        const levels = [
+            { minLevel: 32, string: 'true' },
+            { minLevel: 8, string: 'X' },
+            { minLevel: 4, string: 'Mature' },
+            { minLevel: 2, string: 'Soft' },
+            { minLevel: 0, string: 'None' },
+        ]
+
+        return levels.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
+    }
 }
 
 // ==============================
+
+const videPlaybackObservedElements = new Set();
+const videPlaybackObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+        const video = entry.target;
+        if (entry.isIntersecting) video.play().catch(() => null);
+        else video.pause();
+    });
+}, { threshold: .25 });
+
+function enableAutoPlayOnVisible(video) {
+    if (videPlaybackObservedElements.has(video)) return;
+    videPlaybackObserver.observe(video);
+    videPlaybackObservedElements.add(video);
+}
+
+function disableAutoPlayOnVisible(video) {
+    videPlaybackObserver.unobserve(video);
+    videPlaybackObservedElements.delete(video);
+}
+
+const onTargetInViewportCallbacks = new Map();
+const onTargetInViewportObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const target = entry.target;
+            onTargetInViewportObserver.unobserve(target);
+            onTargetInViewportCallbacks.get(target)?.();
+            onTargetInViewportCallbacks.delete(target);
+        }
+    });
+}, { threshold: 0.1, rootMargin: '150px 0px' });
+
+function onTargetInViewport(target, callback) {
+    onTargetInViewportCallbacks.set(target, callback);
+    onTargetInViewportObserver.observe(target);
+}
+
+function onTargetInViewportClearAll() {
+    onTargetInViewportCallbacks.keys().forEach(element => {
+        onTargetInViewportObserver.unobserve(element);
+        onTargetInViewportCallbacks.delete(element);
+    });
+}
+
 
 const iconsCache = new Map();
 function addIconToCache(name, original) {
@@ -1881,6 +2023,17 @@ function loadLanguagePack(language, forceReload = false) {
     }
 }
 
+function calcCharsInString(string, char, maxCount = 999) {
+    let count = 0;
+    let pos = string.indexOf(char);
+    while (pos !== -1 || count < maxCount) {
+        count++;
+        pos = string.indexOf(char, pos + 1);
+    }
+
+    return count;
+}
+
 function getFollowingTagGroup(startElem, tagName) {
     const result = [];
     let next = startElem.nextElementSibling;
@@ -1893,27 +2046,6 @@ function getFollowingTagGroup(startElem, tagName) {
     }
 
     return result;
-}
-let viewportRequestedCallbacks = [];
-let viewportRequestAnimationFrame = null;
-function onTargetInViewport(target, callback) {
-    if (!target || typeof callback !== 'function') return;
-
-    const observer = new IntersectionObserver(([entry], obs) => {
-        if (entry.isIntersecting) {
-            obs.disconnect();
-            callback();
-        }
-    }, { threshold: 0.01 });
-
-    // This requestAnimationFrame is needed to make sure that the element is in the DOM
-    // This array is needed to avoid setting hundreds of frame requests in a row
-    viewportRequestedCallbacks.push(() => observer.observe(target));
-    if (viewportRequestAnimationFrame === null) viewportRequestAnimationFrame = requestAnimationFrame(() => {
-        viewportRequestAnimationFrame = null;
-        viewportRequestedCallbacks.forEach(a => a());
-        viewportRequestedCallbacks = [];
-    });
 }
 
 function savePageSettings() {
@@ -2017,13 +2149,19 @@ document.addEventListener('focus', e => {
 }, { capture: true, passive: true });
 
 document.addEventListener('canplay', e => {
-    e.target.classList.remove('loading');
-    e.target.style.backgroundImage = '';
+    const target = e.target;
+    requestAnimationFrame(() => {
+        target.classList.remove('loading');
+        target.style.backgroundImage = '';
+    });
 }, { passive: true, capture: true });
 
 document.addEventListener('load', e => {
-    e.target.classList.remove('loading');
-    e.target.style.backgroundImage = '';
+    const target = e.target;
+    requestAnimationFrame(() => {
+        target.classList.remove('loading');
+        target.style.backgroundImage = '';
+    });
 }, { passive: true, capture: true });
 
 window.addEventListener('popstate', () => {
@@ -2069,13 +2207,19 @@ document.getElementById('language-toggle').addEventListener('click', e => {
 function startVideoPlayEvent(target, options = { fromFocus: false }) {
     const video = target.querySelector('video:not([data-focus-play])');
     if (!video) return;
-    video.play().catch(() => null);
+
     const pause = video => {
         video.removeAttribute('data-focus-play');
         video.pause();
     };
     document.querySelectorAll('video[data-focus-play]').forEach(pause);
+
     video.setAttribute('data-focus-play', '');
+    // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
+    setTimeout(() => {
+        if (video.hasAttribute('data-focus-play')) video.play().catch(() => null);
+    }, 150);
+
     target.addEventListener(options.fromFocus ? 'blur' : 'mouseleave', () => pause(video), { once: true, passive: true });
 }
 

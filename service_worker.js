@@ -360,6 +360,11 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
 }
 
 async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) { // Check and remove all old data (max-age expired)
+    if (mode === 'all') {
+        await caches.delete(cacheName);
+        return `Cache ${cacheName} removed`;
+    }
+
     const cache = await caches.open(cacheName);
     const keys = await cache.keys();
 
@@ -374,12 +379,10 @@ async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask 
         return new RegExp(regexStr);
     });
 
-    const isResponseOk = mode === 'all'
-                            ? r => false                        // Remove ALL
-                            : mode === 'max-age-expired'
-                            ? r => r && checkCacheMaxAge(r)     // Remove only with expired max-age (default)
-                            : r => r && checkCacheMaxAge(r);    // Remove only with expired max-age (unknown)
-    
+    const isResponseOk = mode === 'max-age-expired'
+                        ? r => r && checkCacheMaxAge(r)     // Remove only with expired max-age (default)
+                        : r => r && checkCacheMaxAge(r);    // Remove only with expired max-age (unknown)
+
     let countRemoved = 0;
     const promises = keys.map(async (request) => {
         const url = request.url;
