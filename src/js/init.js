@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 8,
+    version: 9,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -29,7 +29,7 @@ const SETTINGS = {
     api_key: null,
     language: 'en',
     theme: 'default',
-    autoplay: true,
+    autoplay: false,
     resize: false,
     checkpointType: 'All',
     types: [ 'Checkpoint' ],
@@ -52,6 +52,8 @@ Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settin
 navigator.serviceWorker.register(`service_worker.js?v=${Number(CONFIG.version)}`, { scope: './' });
 
 class CivitaiAPI {
+    // https://github.com/civitai/civitai/tree/main/src/pages/api/v1
+
     constructor(baseURL = CONFIG.api_url) {
         this.baseURL = baseURL;
     }
@@ -75,7 +77,7 @@ class CivitaiAPI {
 
     async fetchModels(options = {}) {
         const {
-            limit = 20,
+            limit = 20, // 0 ... 100
             cursor,
             query = '',
             tag = '',
@@ -120,13 +122,17 @@ class CivitaiAPI {
 
     async fetchImages(options = {}) {
         const {
-            limit = 20,
+            limit = 20, // 0 ... 200
             cursor,
             modelId,
             modelVersionId,
+            postId,
             username = '',
+            type = '',
             nsfw = false,
             hidden = false,
+            withMeta = false,
+            requiringMeta = false,
             sort = '',
             period = '',
         } = options;
@@ -138,10 +144,14 @@ class CivitaiAPI {
         if (username) url.searchParams.append('username', username);
         if (modelId) url.searchParams.append('modelId', modelId);
         if (modelVersionId) url.searchParams.append('modelVersionId', modelVersionId);
+        if (postId) url.searchParams.append('postId', postId);
         if (sort) url.searchParams.append('sort', sort);
         if (period) url.searchParams.append('period', period);
         if (hidden) url.searchParams.append('hidden', 'true');
+        if (type) url.searchParams.append('type', type);
         if (nsfw) url.searchParams.append('nsfw', nsfw);
+        if (withMeta) url.searchParams.append('withMeta', 'true');
+        if (requiringMeta) url.searchParams.append('requiringMeta', 'true');
 
         const data = await this.#getJSON({ url, target: 'images' });
         return data;
@@ -297,7 +307,17 @@ class Controller {
         this.#errorTimer = setTimeout(showTimeOutError, CONFIG.timeOut);
 
         let promise;
-        if (pageId === '#home') promise = this.gotoHome();
+        if (pageId === '#home') {
+            if (paramString) {
+                try {
+                    const params = Object.fromEntries(new URLSearchParams(paramString));
+                    if (params.url) promise = this.openFromCivitUrl(params.url);
+                    else promise = this.gotoHome();
+                } catch(_) {
+                    promise = this.gotoHome();
+                }
+            } else promise = this.gotoHome();
+        }
         else if (pageId === '#models') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
             if (params.hash) promise = this.gotoModelByHash(params.hash);
@@ -431,7 +451,7 @@ class Controller {
             if (!media) throw new Error('No Meta');
 
             // Full image
-            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true });
+            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true, original: true });
             mediaElement.style.width = `${media.width}px`;
             mediaElement.classList.add('media-full-preview');
             appContent.appendChild(mediaElement);
@@ -451,7 +471,7 @@ class Controller {
                 { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
                 { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
                 { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
-                { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+                // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
             ];
             metaContainer.appendChild(this.#genStats(statsList));
 
@@ -704,6 +724,33 @@ class Controller {
         });
     }
 
+    static openFromCivitUrl(href) {
+        try {
+            const url = new URL(href);
+            if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
+            const searchParams = Object.fromEntries(url.searchParams);
+            if (url.pathname.indexOf('/models/') === 0) {
+                const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
+                if (!modelId) throw new Error('There is no model id in the link');
+                let redirectUrl = `#models?model=${modelId}`;
+                if (searchParams.modelVersionId) redirectUrl += `&version${searchParams.modelVersionId}`;
+                window.location.href = redirectUrl;
+            } else if (url.pathname.indexOf('/images/') === 0) {
+                const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
+                if (!imageId) throw new Error('There is no image id in the link');
+                const redirectUrl = `#images?image=${imageId}`;
+                window.location.href = redirectUrl;
+            } else throw new Error('Unsupported url');
+        } catch(error) {
+            const appContent = createElement('div', { class: 'app-content' });
+
+            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Bad url'));
+
+            this.appElement.textContent = '';
+            this.appElement.appendChild(appContent);
+        }
+    }
+
     static #genModelPage(model, version = null) {
         const modelVersion = version ? model.modelVersions.find(v => v.name === version) ?? model.modelVersions[0] : model.modelVersions[0];
         const page = createElement('div', { class: 'model-page', 'data-model-id': model.id });
@@ -714,7 +761,7 @@ class Controller {
         const statsList = [
             { icon: 'like', value: model.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
             { icon: 'download', value: model.stats.downloadCount, formatter: formatNumber, unit: 'download' },
-            { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' },
+            // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
             { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
         ];
         const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : (new Date() - new Date(modelVersion.publishedAt) < 3 * 24 * 60 * 60 * 1000) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
@@ -752,11 +799,11 @@ class Controller {
         const publishedAt = new Date(modelVersion.publishedAt);
         insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': `${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}` }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
         const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
-        model.tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${tag}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
+        model.tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
 
         const modelVersionsWrap = insertElement('div', page, { class: 'badges model-versions' });
         model.modelVersions.forEach(version => {
-            const href = `#models?model=${model.id}&version=${version.name}`;
+            const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.name)}`;
             const isActive = version.name === modelVersion.name;
             version.element = insertElement('a', modelVersionsWrap, { class: isActive ? 'badge active' : 'badge', href, tabindex: -1 }, version.name);
         });
@@ -821,7 +868,10 @@ class Controller {
         }
         if (model.creator) modelVersionDescription.appendChild(this.#genUserBlock(model.creator));
         if (modelVersion.description) {
-            modelVersionDescription.appendChild(safeParseHTML(modelVersion.description));
+            modelVersion.description = this.#analyzeModelDescriptionString(modelVersion.description);
+            const modelVersionContainer = safeParseHTML(modelVersion.description);
+            modelVersionDescription.appendChild(modelVersionContainer);
+            this.#analyzeModelDescription(modelVersionContainer);
             // if (calcCharsInString(modelVersion.description, '\n', 40)) hideLongDescription(modelVersionDescription);
         }
 
@@ -1071,8 +1121,6 @@ class Controller {
         return statsWrap;
     }
 
-    // TODO: Add BibTeX support https://ru.wikipedia.org/wiki/BibTeX
-    // BibTeX: It is in the description of this model (modelId: 958009)
     static #analyzeModelDescriptionString(description) {
         // There should be rules here to improve formatting...
         // But... all creators have their own description format, and they don't really fit together,
@@ -1080,11 +1128,24 @@ class Controller {
         const rules = [
             //
             { regex: '<br /></p>', replacement: '</p>'  },
+            { regex: /(<p>@\w+{[\s\S]*?>}<\/p>)/gim, replacement: block => {
+                const flat = block
+                    .replace(/<\/?p>/gi, '')   // Remove <p> and </p>
+                    .replace(/\s*\n\s*/g, ' ') // Remove \n
+                    .trim();
+
+                try {
+                    return bibtexToHtml(flat);
+                } catch (e) {
+                    console.warn('BibTeX parsing error:', e);
+                    return block; // Return original, if error
+                }
+            }},
             // Handle potential prompt blocks with poorly formatted text
             { regex: /<p>\s*(positive\s+)?prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, __, promptText) => `<p>Positive Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
             { regex: /<p>\s*negative\s+prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, promptText) => `<p>Negative Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
             // Sometimes descriptions contain homemade separators... along with the usual <hr>...
-            { regex: /<p>\s*([\-=_*+])\1{4,}\s*<\/p>/gi, replacement: '<hr>' },
+            { regex: /<p>\s*([\-=_*+])\1{2,}\s*<\/p>/gi, replacement: '<hr>' },
             { regex: /(?:^|\n)\s*([\-=_*+])\1{4,}\s*(?=\n|$)/g, replacement: '\n<hr>\n' },
         ];
 
@@ -1187,91 +1248,115 @@ class Controller {
             this.#analyzePromptCode(code);
         }
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
-        if (meta.Size) insertElement('code', otherMetaContainer, undefined, `Size: ${meta.Size}`);
+        const insertOtherMeta = (key, value) => {
+            const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? `${key}: ` : '');
+            if (value) insertElement('span', item, { class: 'meta-value' }, value);
+            return item;
+        };
+        if (meta.Size) insertOtherMeta('Size', meta.Size);
         if (meta.cfgScale) {
             const cfg = +(meta.cfgScale).toFixed(4);
-            const code = insertElement('code', otherMetaContainer, undefined, `CFG: ${cfg}`);
-            if (cfg !== meta.cfgScale) code.setAttribute('lilpipe-text', meta.cfgScale);
+            const item = insertOtherMeta('CFG', cfg);
+            if (cfg !== meta.cfgScale) item.setAttribute('lilpipe-text', meta.cfgScale);
         }
-        if (meta.sampler) insertElement('code', otherMetaContainer, undefined, `Sampler: ${meta.sampler}`);
-        if (meta['Schedule type'] || meta.scheduler ) insertElement('code', otherMetaContainer, undefined, `Sheduler: ${meta['Schedule type'] || meta.scheduler}`);
-        if (meta.steps) insertElement('code', otherMetaContainer, undefined, `Steps: ${meta.steps}`);
-        if (meta.clipSkip) insertElement('code', otherMetaContainer, undefined, `clipSkip: ${meta.clipSkip}`);
-        if (meta.seed) insertElement('code', otherMetaContainer, undefined, `Seed: ${meta.seed}`);
-        if (meta['Denoising strength'] || meta.denoise) insertElement('code', otherMetaContainer, undefined, `Denoising: ${meta['Denoising strength'] || meta.denoise}`);
-        if (meta.workflow) insertElement('code', otherMetaContainer, undefined, meta.workflow);
+        if (meta.sampler) insertOtherMeta('Sampler', meta.sampler);
+        if (meta['Schedule type'] || meta.scheduler ) insertOtherMeta('Sheduler', meta['Schedule type'] || meta.scheduler);
+        if (meta.steps) insertOtherMeta('Steps', meta.steps);
+        if (meta.clipSkip) insertOtherMeta('clipSkip', meta.clipSkip);
+        if (meta.seed) insertOtherMeta('Seed', meta.seed);
+        if (meta['Denoising strength'] || meta.denoise) insertOtherMeta('Denoising', meta['Denoising strength'] || meta.denoise);
+        if (meta.workflow) insertOtherMeta('', meta.workflow);
         if (meta.comfy) {
             const comfyJSON = meta.comfy;
-            const code = insertElement('code', otherMetaContainer, { class: 'copy' }, 'ComfyUI');
-            code.appendChild(getIcon('copy'));
-            code.addEventListener('click', () => {
+            const item = insertOtherMeta('ComfyUI');
+            item.classList.add('copy');
+            item.appendChild(getIcon('copy'));
+            item.addEventListener('click', () => {
                 toClipBoard(comfyJSON);
                 console.log('Copied to clipboard, TODO: notifications'); // TODO: notifications
                 console.log('ComfyUI: ', JSON.parse(comfyJSON));
             }, { passive: true });
         }
         if (meta['Hires upscaler']) {
-            const code = insertElement('code', otherMetaContainer, undefined, `Hires: ${meta['Hires upscaler']}`);
-            if (meta['Hires upscale']) insertElement('i', code, undefined, ` x${meta['Hires upscale']}`);
+            const tooltip = Object.keys(meta).filter(key => key.indexOf('Hires') === 0).map(key => `<tr><td>${key.replace('Hires', '').trim()}</td><td>${typeof meta[key] === 'string' ? meta[key] : JSON.stringify(meta[key])}</td></tr>`).join('');
+            const item = insertOtherMeta('Hires', meta['Hires upscaler']);
+            if (meta['Hires upscale']) insertElement('i', item, undefined, ` x${meta['Hires upscale']}`);
+            if (tooltip) {
+                item.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
+                item.setAttribute('lilpipe-type', 'meta-adetailer');
+            }
         }
         if (meta['ADetailer model']) {
             const tooltip = Object.keys(meta).filter(key => key.indexOf('ADetailer') === 0).map(key => `<tr><td>${key.replace('ADetailer', '').trim()}</td><td>${typeof meta[key] === 'string' ? meta[key] : JSON.stringify(meta[key])}</td></tr>`).join('');
-            const code = insertElement('code', otherMetaContainer, undefined, `ADetailer: ${meta['ADetailer model']}`);
+            const item = insertOtherMeta('ADetailer', meta['ADetailer model']);
             if (tooltip) {
-                code.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
-                code.setAttribute('lilpipe-type', 'meta-adetailer');
+                item.setAttribute('lilpipe-text', `<table class='tooltip-table-only' style='text-transform:capitalize;'>${tooltip}</table>`);
+                item.setAttribute('lilpipe-type', 'meta-adetailer');
             }
         }
 
         // Resources
-        if (meta.civitaiResources?.length || meta.resources?.length || (meta.hashes && Object.keys(meta.hashes)?.length)) {
+        const resourceHashes = new Set();
+        const resources = [];
+        const addResourceToList = resource => {
+            if (resource.name?.indexOf('urn:') === 0 && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
+            const key = resource.hash || resource.modelVersionId;
+            if (resourceHashes.has(key)) return;
+            resourceHashes.add(key);
+            resources.push({ ...resource });
+        };
+        meta.civitaiResources?.forEach(addResourceToList);
+        meta.resources?.forEach(addResourceToList);
+        meta.additionalResources?.forEach(addResourceToList);
+        if (meta.hashes) Object.keys(meta.hashes)?.forEach(key => addResourceToList({ hash: meta.hashes[key], name: key }));
+        if (meta['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
+
+        if (resources.length) {
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
             const resourcesTitle = insertElement('h3', resourcesContainer);
             resourcesTitle.appendChild(getIcon('database'));
             insertElement('span', resourcesTitle, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used')
 
-            const resources = [ ...(meta.civitaiResources || []), ...(meta.resources || []), ...(meta.additionalResources || [])];
-            const processedResources = new Set();
             const resourcePromises = [];
 
-            // Not sure if this is necessary...
-            if (meta.hashes && Object.keys(meta.hashes)?.length) {
-                Object.keys(meta.hashes).forEach(key => {
-                    const hash = meta.hashes[key];
-                    if (resources.some(item => item.hash === hash)) return;
+            const createResourceRowContent = info => {
+                const { title, version, href, weight = 1, type, baseModel } = info;
 
-                    resources.push({ hash, name: key });
-                });
-            }
+                const el = createElement(href ? 'a' : 'div', { class: 'meta-resource', href });
+                const titleElement = insertElement('span', el, { class: 'meta-resource-name' }, `${title} ` );
+                insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': baseModel }, type);
+                if(version) insertElement('strong', titleElement, undefined, version)
+                if (weight !== 1) insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, `:${weight}`);
+                return el;
+            };
 
             resources.forEach(item => {
-                if (item.modelVersionId) {
-                    if (processedResources.has(item.modelVersionId)) return;
-                    else processedResources.add(item.modelVersionId)
-                }
-
-                const el = insertElement('div', resourcesContainer, { class: 'meta-resource', 'data-resource-hash': item.hash ?? '' });
-                // TODO: Understand where to get the names and id for the link...
-                const nameEl = insertElement('span', el, { class: 'meta-resource-name' }, item.name || `${item.modelVersionId} ${item.modelVersionName}` );
-                insertElement('span', el, { class: 'meta-resource-type' }, item.type ?? '???');
-                if (item.weight && item.weight !== 1) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+                const el = createResourceRowContent({
+                    title: item.name || (item.modelVersionId ? `VersionId: ${item.modelVersionId}` : undefined) || (item.hash ? `Hash: ${item.hash}` : undefined) || 'Unknown',
+                    version: item.modelVersionName,
+                    weight: item.weight,
+                    type: item.type ?? 'Unknown',
+                    baseModel: 'Unknown base model'
+                });
+                resourcesContainer.appendChild(el);
 
                 let fetchPromise = null;
-
                 if (item.modelVersionId) fetchPromise = this.api.fetchModelVersionInfo(item.modelVersionId);
                 else if (item.hash) fetchPromise = this.api.fetchModelVersionInfo(item.hash, true);
-
                 if (!fetchPromise) return;
 
                 el.classList.add('meta-resource-loading');
                 const promise = fetchPromise.then(info => {
                     if (!info) return info;
-
-                    el.textContent = '';
-                    const nameEl = insertElement('a', el, { href: `#models?model=${info.modelId}&version=${info.name}`, class: 'meta-resource-name' }, `${info?.model?.name} ` );
-                    insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': info.baseModel }, info?.model?.type);
-                    insertElement('strong', nameEl, undefined, info.name)
-                    if (item.weight && item.weight !== 1) insertElement('span', nameEl, { class: 'meta-resource-weight' }, `:${item.weight}`);
+                    const newEl = createResourceRowContent({
+                        title: info?.model?.name,
+                        version: info.name,
+                        baseModel: info.baseModel,
+                        type: info?.model?.type,
+                        weight: item.weight,
+                        href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
+                    });
+                    resourcesContainer.replaceChild(newEl, el);
                     return info;
                 }).finally(() => {
                     el.classList.remove('meta-resource-loading');
@@ -1415,9 +1500,9 @@ class Controller {
         // Stats
         const statsList = [
             { icon: 'download', value: model.stats.downloadCount, formatter: formatNumber, unit: 'download' },
-            { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' },
-            { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
             { icon: 'like', value: model.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
+            { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+            // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
         ];
         cardContentWrap.appendChild(this.#genStats(statsList));
 
@@ -1460,7 +1545,7 @@ class Controller {
             { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber },
             { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber },
             { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber },
-            { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+            // { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
         ];
         cardContentWrap.appendChild(this.#genStats(statsList));
 
@@ -1533,7 +1618,7 @@ class Controller {
         return carousel;
     }
 
-    static #genMediaElement({ media, width, height = undefined, resize = true, lazy = false, target = null, controls = false, autoplay = SETTINGS.autoplay }) {
+    static #genMediaElement({ media, width, height = undefined, resize = true, lazy = false, target = null, controls = false, original = false, autoplay = SETTINGS.autoplay }) {
         const mediaContainer = createElement('div', { class: 'media-container' });
         let mediaElement;
         const targetWidth = Math.round(width * this.#devicePixelRatio);
@@ -1541,8 +1626,8 @@ class Controller {
         const blurSize = CONFIG.appearance.blurHashSize;
         const ratio = media.width / media.height;
         const newRequestSize = ratio < 1 || !targetHeight ? `width=${targetWidth}` : `height=${targetHeight}`;
-        const params = resize ? `?width=${targetWidth}${targetHeight ? `&height=${targetHeight}` : ''}&fit=crop` : '';
-        const url = `${media.url.replace(/\/width=\d+\//, `/${newRequestSize},anim=false,optimized=true/`)}${target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params}`;
+        const params = resize && !original ? `?width=${targetWidth}${targetHeight ? `&height=${targetHeight}` : ''}&fit=crop` : '';
+        const url = `${original ? media.url : media.url.replace(/\/width=\d+\//, `/${newRequestSize},anim=false,optimized=true/`)}${target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params}`;
         const previewUrl = media.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${ratio < 1 ? blurSize : Math.round(blurSize/ratio)}&height=${ratio < 1 ? Math.round(blurSize/ratio) : blurSize}` : '';
         if (media.type === 'image') {
             const src = autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
@@ -1911,9 +1996,9 @@ class Controller {
     }
 
     static #convertNSFWLevelToString(nsfwLevel) {
-        // Not sure about the correct number to word match, but seems to work fine
         const levels = [
-            { minLevel: 32, string: 'true' },
+            { minLevel: 32, string: 'Blocked' },
+            { minLevel: 16, string: 'X' },
             { minLevel: 8, string: 'X' },
             { minLevel: 4, string: 'Mature' },
             { minLevel: 2, string: 'Soft' },
@@ -2026,7 +2111,7 @@ function loadLanguagePack(language, forceReload = false) {
 function calcCharsInString(string, char, maxCount = 999) {
     let count = 0;
     let pos = string.indexOf(char);
-    while (pos !== -1 || count < maxCount) {
+    while (pos !== -1 && count < maxCount) {
         count++;
         pos = string.indexOf(char, pos + 1);
     }

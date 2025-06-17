@@ -219,13 +219,79 @@ function pluralize(count, [one, few, many]) {
     if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
     return many;
 }
-  
 
 function formatNumber(number) {
     if (number >= 1000000) return (number / 1000000).toFixed(number % 1000000 < 100000 ? 1 : 0) + 'M';
     if (number >= 1000) return (number / 1000).toFixed(number % 1000 < 100 ? 1 : 0) + 'k';
     return number.toString();
 }
+
+function bibtexToHtml(bibtex) {
+    const entry = {};
+    const typeMatch = bibtex.match(/^@(\w+)\s*{\s*([^,]+),/);
+    if (!typeMatch) return '<div class="bib-entry"></div>';
+
+    entry.entryType = typeMatch[1];
+    entry.citationKey = typeMatch[2];
+
+    // Delete the first line @type{key,
+    const fieldsPart = bibtex.replace(/^@\w+\s*{[^,]+,\s*/, '').replace(/}\s*$/, '');
+
+    // Break it down into key={value} or key="value"
+    const fieldRegex = /(\w+)\s*=\s*({([^{}]*)}|\"([^\"]*)\")/g;
+    let match;
+
+    let attempt = 0;
+    while ((match = fieldRegex.exec(fieldsPart)) !== null && attempt < 20) {
+        attempt++;
+        const key = match[1].toLowerCase();
+        const rawValue = match[3] || match[4] || '';
+        const cleanValue = rawValue
+            .replace(/\\["{}]/g, '')         // \" → "
+            .replace(/\{\\[a-z]+\}/g, '')    // {\\"e} → e
+            .replace(/\\[a-z]+\s*/g, '')     // \textit, \and, ...
+            .replace(/[{}]/g, '')            // remove remaining braces
+            .trim();
+
+        entry[key] = cleanValue;
+    }
+
+    // Forming HTML
+    let html = `<div class="bib-entry" data-bibtex-type="${entry.entryType ?? 'unknown'}" data-bibtex-citationKey="${entry.citationKey ?? 'none'}">`;
+    if (entry.author) html += `<strong>${entry.author}</strong>. `;
+    if (entry.title) html += `<em>${entry.title}</em>. `;
+
+    if (entry.journal) {
+        html += `${entry.journal}`;
+        if (entry.volume) html += ` <strong>${entry.volume}</strong>`;
+        if (entry.number) html += `(${entry.number})`;
+        html += '. ';
+    }
+
+    if (entry.booktitle) html += `In <em>${entry.booktitle}</em>. `;
+    if (entry.institution) html += `${entry.institution}. `;
+    if (entry.organization) html += `${entry.organization}. `;
+    if (entry.publisher) html += `${entry.publisher}. `;
+    if (entry.year) html += `${entry.year}. `;
+    if (entry.pages) html += `pp. ${entry.pages}. `;
+    if (entry.note) html += `${entry.note}. `;
+
+    if (entry.doi) {
+        html += `<a href="https://doi.org/${entry.doi}" target="_blank">DOI</a>. `;
+    } else if (entry.url) {
+        if (entry.url.indexOf('<a ') === 0 && entry.url.indexOf('href="') !== -1) {
+            // Fix if there is an html link provided (it can only be there because of a crooked CivitAI parser)
+            const hrefIndex = entry.url.indexOf('href="') + 'href="'.length;
+            const hrefIndexEnd = entry.url.indexOf('"', hrefIndex);
+            entry.url = entry.url.substring(hrefIndex, hrefIndexEnd !== -1 ? hrefIndexEnd : undefined);
+        }
+        html += `<a href="${entry.url}" target="_blank">Link</a>. `;
+    }
+    html += '</div>';
+
+    return html;
+}
+
 
 function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
     try {
