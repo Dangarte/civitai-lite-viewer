@@ -22,7 +22,7 @@ const SW_CONFIG = {
         'unknown': 60 * 60,                 // Unknown target:                           1 hour
         'large-file': 15 * 60,              // Дarge files (14+ mb)                     15 mins
         'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                           5 days
-        'lite-viewer-core': 3 * 60,         // Main files from the repo                  3 mins
+        'lite-viewer-core': 3 * 60,         // Main file from the repo (index.html)      3 mins
         'blur-hash': 60 * 60                // blurHash                                  1 hour
     },
     api_key: null,
@@ -76,7 +76,7 @@ function onMessage(e) { // Messages
 
 function onFetch(e) { // Request interception
     if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
-    if (e.request.url.indexOf('https') === -1) return; // Allow only from https
+    if (e.request.url.indexOf('https') === -1 || e.request.destination === 'video') return; // Allow only from https and skip video
     e.respondWith(cacheGet(e.request));
 }
 
@@ -89,12 +89,8 @@ async function cacheFetch(request, cacheControl) {
 
     if (request.url.indexOf(SW_CONFIG.base_url) === 0) {
         if (!cacheControl) {
-            if ( // Cache for a 3 mins only
-                url.pathname === '/civitai-lite-viewer/' ||
-                url.pathname === '/civitai-lite-viewer/index.html' ||
-                url.pathname.indexOf('service_worker.js') !== -1
-            ) {
-                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer-core']}`;
+            if (url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html') {
+                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer-core']}`; // Cache for a 3 mins only 
             } else {
                 cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer']}`;
             }
@@ -113,9 +109,10 @@ async function cacheFetch(request, cacheControl) {
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
-        if (params && blob.type.indexOf('image/') === 0 && (params.width || params.height || params.type) && !([ 'image/gif', 'image/apng' ].includes(blob.type))) {
+        const forceDisableAnimation = request.url.includes(',anim=false,');
+        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.type) && !([ 'image/gif', 'image/apng' ].includes(blob.type))) || (forceDisableAnimation && await isImageAnimated(blob)))) {
             const { width, height , format, quality, fit } = params;
-            blob = (await resizeBlobImage(blob, { width, height, quality, format, fit })) || blob;
+            blob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceDisableAnimation ? 'webp' : undefined), fit })) || blob;
         }
 
         if (!cacheControl) {
@@ -163,7 +160,7 @@ async function resizeBlobImage(blob, options) { // Resize image blob
         const bmp = await createImageBitmap(blob);
         const { width, height } = bmp;
         const originalRatio = width / height;
-        let cropWidth = width, cropHeight = height, offsetX = 0, offsetY = 0, newWidth = targetWidth ?? Math.round(targetHeight * originalRatio), newHeight = targetHeight ?? Math.round(targetWidth / originalRatio);
+        let cropWidth = width, cropHeight = height, offsetX = 0, offsetY = 0, newWidth = targetWidth ?? (targetHeight ? Math.round(targetHeight * originalRatio) : width), newHeight = targetHeight ?? (targetWidth ? Math.round(targetWidth / originalRatio) : height);
 
         if ((fit === 'scale-up' || fit === 'contain') && targetWidth && targetHeight) {
             const scaleX = targetWidth / width;
@@ -202,23 +199,24 @@ async function resizeBlobImage(blob, options) { // Resize image blob
 async function isImageAnimated(blob) {
     if (blob.type === 'image/apng') return true;
     if (!([ 'image/avif', 'image/gif', 'image/webp' ].includes(blob.type))) return false;
-    const buffer = await blob.arrayBuffer();
+    const buffer = await blob.slice(0, 512).arrayBuffer();
     const bytes = new Uint8Array(buffer);
+    const decoder = new TextDecoder();
 
-    if (blob.type === 'image/webp' && new TextDecoder().decode(bytes.slice(0, 4)) === 'RIFF' && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP') {
+    if (blob.type === 'image/webp' && decoder.decode(bytes.slice(0, 4)) === 'RIFF' && decoder.decode(bytes.slice(8, 12)) === 'WEBP') {
         for (let i = 12; i < bytes.length - 4; i++) {
             const chunk = String.fromCharCode(...bytes.slice(i, i + 4));
             if (chunk === "ANIM" || chunk === "ANMF") return true;
         }
         return false;
     }
-    if (blob.type === 'image/avif' && new TextDecoder().decode(bytes.slice(0, 4)) === 'ftyp' && new TextDecoder().decode(bytes.slice(4, 8)) === 'avif') {
+    if (blob.type === 'image/avif' && decoder.decode(bytes.slice(0, 4)) === 'ftyp' && decoder.decode(bytes.slice(4, 8)) === 'avif') {
         const avifFlags = bytes.slice(12, 16);
         if (avifFlags[0] === 0x01) return true;
         return false;
     }
-    if (blob.type === 'image/gif' && new TextDecoder().decode(bytes.slice(0, 3)) === 'GIF') {
-        const gifHeader = new TextDecoder().decode(bytes.slice(3, 6));
+    if (blob.type === 'image/gif' && decoder.decode(bytes.slice(0, 3)) === 'GIF') {
+        const gifHeader = decoder.decode(bytes.slice(3, 6));
         if (gifHeader === '89a') {
             const logicalScreenDescriptor = bytes.slice(6, 13);
             const gifFlags = logicalScreenDescriptor[4];
@@ -254,17 +252,14 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
     const e = 269.025;
     const sRGBToLinear = value => value > 10.31475 ? pow(value / e + 0.052132, 2.4) : value / d;
     const linearTosRGB = v => ~~(v > 0.00001227 ? e * pow(v, 0.416666) - 13.025 : v * d + 1);
-    const signSqr = x => (x < 0 ? -1 : 1) * x * x;
+    const signSqr = x => x < 0 ? - x * x : x * x;
 
     /**
      * Fast approximate cosine implementation
      * Based on FTrig https://github.com/netcell/FTrig
      */
     const fastCos = (x) => {
-        x += PI / 2;
-        while (x > PI) {
-            x -= PI2;
-        }
+        x = ((x + PI * 1.5) % PI2 + PI2) % PI2 - PI;
         const cos = 1.27323954 * x - 0.405284735 * signSqr(x);
         return 0.225 * (signSqr(cos) - cos) + cos;
     };
@@ -295,7 +290,7 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
 
         const maximumValue = ((decode83(blurHash, 1, 2) + 1) / 13446) * (punch | 1);
 
-        const colors = new Float64Array(size * 3);
+        const colors = new Float32Array(size * 3);
 
         const averageColor = getBlurHashAverageColor(blurHash);
         for (i = 0; i < 3; i++) {
@@ -309,8 +304,8 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
             colors[i * 3 + 2] = signSqr((value % 19) - 9) * maximumValue;
         }
 
-        const cosinesY = new Float64Array(numY * height);
-        const cosinesX = new Float64Array(numX * width);
+        const cosinesY = new Float32Array(numY * height);
+        const cosinesX = new Float32Array(numX * width);
         for (j = 0; j < numY; j++) {
             for (y = 0; y < height; y++) {
                 cosinesY[j * height + y] = fastCos((PI * y * j) / height);
@@ -352,8 +347,7 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
     const pixels = decodeBlurHash(blurhash, width, height, punch);
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    const imageData = ctx.createImageData(width, height);
-    imageData.data.set(pixels);
+    const imageData = new ImageData(pixels, width, height);
     ctx.putImageData(imageData, 0, 0);
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     return blob;

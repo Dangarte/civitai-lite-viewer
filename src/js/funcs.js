@@ -226,6 +226,11 @@ function formatNumber(number) {
     return number.toString();
 }
 
+const defaultNumberFormant = new Intl.NumberFormat();
+function formatNumberIntl(number) {
+    return defaultNumberFormant.format(number);
+}
+
 function bibtexToHtml(bibtex) {
     const entry = {};
     const typeMatch = bibtex.match(/^@(\w+)\s*{\s*([^,]+),/);
@@ -292,11 +297,364 @@ function bibtexToHtml(bibtex) {
     return html;
 }
 
-
 function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
     try {
         return JSON.parse((fromSessionStorage ? sessionStorage : localStorage).getItem(key)) ?? errorValue;
     } catch(_) {
         return errorValue;
+    }
+}
+
+// TODO: Animate scroll to element
+// TODO: Editing elements (change data and recreate)
+class MasonryLayout {
+    #container;
+    #generator;
+    #options;
+    #isPassive;
+
+    #columns = [];
+    #items = [];
+    #itemsById = new Map();
+    #inViewport = new Set();
+    #focusedItem = null;
+    #bounds;
+
+    #onScroll;
+    #onResize;
+    #onKeydown;
+
+    #onElementRemove;
+
+    constructor(container, options) {
+        this.#container = container;
+        this.#generator = options.generator;
+        this.#isPassive = options.passive ?? false;
+        this.#options = {
+            itemWidth: options.itemWidth ?? 300,
+            itemHeight: options.itemHeight ?? null,
+            gap: options.gap ?? 8,
+            overscan: options.overscan ?? 1,
+            disableVirtualScroll: options.disableVirtualScroll ?? false,
+        };
+        this.#onElementRemove = options.onElementRemove;
+
+        this.#columns = [];
+        this.#items = [];
+        this.#inViewport = new Set();
+        this.#itemsById = new Map();
+        this.#focusedItem = null;
+
+        this.#onScroll = !this.#options.disableVirtualScroll ? this.#handleScroll.bind(this) : null;
+        this.#onResize = this.#handleResize.bind(this);
+        this.#onKeydown = this.#handleKeydown.bind(this);
+
+        this.#init();
+    }
+
+    resize() {
+        const options = this.#options;
+        this.#bounds = {
+            windowHeight: window.innerHeight,
+            containerOffsetTop: this.#container.offsetTop
+        };
+        this.#columns = [];
+        const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
+        for(let i = 0; i < columnsCount; i++) {
+            this.#columns.push({
+                height: 0,
+                index: this.#columns.length
+            });
+        }
+
+        this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
+
+        // Recalculate the position of all elements
+        const items = this.#items;
+        if (items.length) {
+            this.#items.forEach(item => {
+                if (item.inDOM) {
+                    item.inDOM = false;    
+                    item.element.remove();
+                    this.#onElementRemove?.(item.element, item.data);
+                    delete item.element;
+                }
+            });
+            this.#items = [];
+            this.#inViewport = new Set();
+            this.#itemsById = new Map();
+            this.addItems(items);
+        }
+    }
+
+    addItems(items) {
+        const options = this.#options;
+        items.forEach(item => {
+            if (this.#itemsById.has(item.id)) return;
+
+            const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
+            const cardHeight = options.itemHeight ?? Math.round(options.itemWidth / item.aspectRatio);
+
+            const gridItem = {
+                id: item.id,
+                data: item.data,
+                aspectRatio: item.aspectRatio,
+                boundLeft: targetColumn.index * (options.itemWidth + options.gap),
+                boundTop: targetColumn.height,
+                boundBottom: targetColumn.height + cardHeight,
+                center: Math.round(targetColumn.height + cardHeight / 2),
+                inDOM: false
+            };
+
+            targetColumn.height += cardHeight + options.gap;
+
+            this.#items.push(gridItem);
+            this.#itemsById.set(item.id, gridItem);
+        });
+
+        const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
+        this.#container.style.height = `${largestColumn.height - options.gap}px`;
+
+        if (!this.#options.disableVirtualScroll) this.#handleScroll();
+        else {
+            this.#items.forEach(item => {
+                if (item.inDOM) return;
+                item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false });
+                item.element.tabIndex = -1;
+                item.element.style.left = `${item.boundLeft}px`;
+                item.element.style.top = `${item.boundTop}px`;
+
+                this.#container.appendChild(item.element);
+                item.inDOM = true;
+                this.#inViewport.add(item);
+            });
+        }
+    }
+
+    clear() {
+        this.#items = [];
+        this.#inViewport = new Set();
+        this.#itemsById = new Map();
+        this.#focusedItem = null;
+        this.resize();
+    }
+
+    destroy(options) {
+        if (!this.#isPassive) {
+            document.removeEventListener('scroll', this.#onScroll);
+            document.removeEventListener('resize', this.#onResize);
+        }
+        this.#container.removeEventListener('keydown', this.#onKeydown);
+        this.#items.forEach(item => {
+            if (item.inDOM) {
+                item.inDOM = false;    
+                if (!options?.preventRemoveItemsFromDOM) item.element.remove();
+                this.#onElementRemove?.(item.element, item.data);
+                delete item.element;
+            }
+        });
+        this.#columns = null;
+        this.#items = null;
+        this.#inViewport = null;
+        this.#itemsById = null;
+        this.#focusedItem = null;
+    }
+
+    getCallbacks() {
+        if (this.#isPassive) return { onScroll: this.#onScroll, onResize: this.#onResize };
+        else return {};
+    }
+
+    #init() {
+        if (!this.#isPassive) {
+            document.addEventListener('scroll', this.#onScroll, { passive: true });
+            document.addEventListener('resize', this.#onResize, { passive: true });
+        }
+        this.#container.addEventListener('keydown', this.#onKeydown, { capture: true });
+        this.resize();
+    }
+
+    #findStartIndex(overscanTop) {
+        let low = 0;
+        let high = this.#items.length - 1;
+        let result = this.#items.length;
+
+        while (low <= high) {
+            const mid = (low + high) >> 1;
+            if (this.#items[mid].boundBottom >= overscanTop) {
+                result = mid;
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        return result;
+    }
+
+    #setFocus(item, preventScroll = false) {
+        if (this.#focusedItem?.element) {
+            this.#focusedItem.element.tabIndex = -1;
+        }
+
+        this.#focusedItem = item;
+
+        if (item?.element) {
+            item.element.tabIndex = 0;
+            item.element.focus?.({ preventScroll });
+        }
+    }
+
+    #findNearestInDirection(currentItem, direction) {
+        let best = null;
+        let bestScore = Infinity;
+        direction = [ 'up', 'down', 'left', 'right' ].findIndex(d => d === direction);
+
+        this.#inViewport.forEach(item => {
+            if (item.id === currentItem.id || (direction < 2 && item.boundLeft !== currentItem.boundLeft)) return;
+
+            const dx = item.boundLeft - currentItem.boundLeft;
+            const dy = item.boundTop - currentItem.boundTop;
+
+            // Filter by direction
+            if (
+                (direction === 0 && dy >= 0) ||
+                (direction === 1 && dy <= 0) ||
+                (direction === 2 && dx >= 0) ||
+                (direction === 3 && dx <= 0)
+            ) {
+                return;
+            }
+
+            // Metric: Priority to direction, then distance
+            const score = direction < 2 ? Math.abs(dy) + Math.abs(dx) * 0.25 : Math.abs(dx) + Math.abs(dy) * 0.25;
+
+            if (score < bestScore) {
+                best = item;
+                bestScore = score;
+            }
+        });
+
+        return best;
+    }
+
+    #handleKeydown(e) {
+        let direction = null;
+
+        switch (e.key) {
+            case 'ArrowUp':
+            case 'w': case 'W':
+                direction = 'up';
+                break;
+            case 'ArrowDown':
+            case 's': case 'S':
+                direction = 'down';
+                break;
+            case 'ArrowLeft':
+            case 'a': case 'A':
+                direction = 'left';
+                break;
+            case 'ArrowRight':
+            case 'd': case 'D':
+                direction = 'right';
+                break;
+            default:
+                return;
+        }
+
+        e.preventDefault();
+
+        const current = this.#focusedItem;
+        if (!current) return;
+
+        const next = this.#findNearestInDirection(current, direction);
+        if (next) {
+            this.#setFocus(next, true);
+            next.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        }
+    }
+
+    #handleScroll(e) {
+        const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#bounds.containerOffsetTop;
+        const options = this.#options;
+        const screenTop = innerScrollTop;
+        const screenBottom = innerScrollTop + this.#bounds.windowHeight;
+        const overscan = this.#bounds.windowHeight * options.overscan;
+        const overscanTop = screenTop - overscan;
+        const overscanBottom = screenBottom + overscan;
+
+        let hasChanges = false;
+
+        // Remove items that are no longer visible
+        this.#inViewport.forEach(item => {
+            if (item.boundBottom < overscanTop || item.boundTop > overscanBottom) {
+                item.inDOM = false;
+                item.element.remove();
+                this.#inViewport.delete(item);
+                this.#onElementRemove?.(item.element, item.data);
+                delete item.element;
+                hasChanges = true;
+            }
+        });
+
+        // Insert elements that are now visible
+        const startIndex = this.#findStartIndex(overscanTop);
+        for (let i = startIndex; i < this.#items.length; i++) {
+            const item = this.#items[i];
+            if (item.boundTop > overscanBottom) break;
+
+            if (!item.inDOM) {
+                item.inDOM = true;
+                item.element = this.#generator(item.data, {
+                    itemWidth: options.itemWidth,
+                    itemHeight: options.itemHeight,
+                    isVisible: true || item.boundBottom > screenTop && item.boundTop < screenBottom // isVisible - disable lazy loading
+                });
+
+                item.element.tabIndex = -1;
+                item.element.style.left = `${item.boundLeft}px`;
+                item.element.style.top = `${item.boundTop}px`;
+
+                this.#inViewport.add(item);
+                this.#container.appendChild(item.element);
+                hasChanges = true;
+            }
+        }
+
+        if (hasChanges) {
+            const focusedItem = this.#focusedItem;
+            if (!focusedItem || !focusedItem.inDOM || focusedItem.boundBottom < screenTop || focusedItem.boundTop > screenBottom) {
+                let best = null;
+                let bestScore = Infinity;
+                this.#inViewport.forEach(item => {
+                    if (item.boundBottom < screenTop || item.boundTop > screenBottom) return;
+
+                    const dx = item.boundLeft - (focusedItem?.boundLeft ?? 0);
+                    const dy = item.boundTop - (focusedItem?.boundTop ?? 0);
+                    const score = Math.abs(dy) + Math.abs(dx);
+
+                    if (score < bestScore) {
+                        best = item;
+                        bestScore = score;
+                    }
+                });
+
+                if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = -1;
+                this.#focusedItem = best || [...this.#inViewport][0];
+                if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = 0;
+            }
+        }
+    }
+
+    #handleResize() {
+        const options = this.#options;
+        const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
+        if (columnsCount !== this.#columns.length) this.resize();
+        else {
+            this.#bounds = {
+                windowHeight: window.innerHeight,
+                containerOffsetTop: this.#container.offsetTop
+            };
+        }
     }
 }

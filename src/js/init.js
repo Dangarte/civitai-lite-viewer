@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 9,
+    version: 10,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -12,7 +12,11 @@ const CONFIG = {
     },
     langauges: [ 'en', 'ru', 'zh', 'uk' ],
     appearance: {
-        card: {
+        imageCard: {
+            width: 360,
+            gap: 16
+        },
+        modelCard: {
             width: 300,
             height: 450,
             gap: 16
@@ -22,7 +26,11 @@ const CONFIG = {
         },
         blurHashSize: 32, // minimum size of blur preview
     },
-    timeOut: 20000, // 20 sec (API is very slow)
+    perRequestLimits: {
+        models: 60,
+        images: 180
+    },
+    timeOut: 20000, // 20 sec
 };
 
 const SETTINGS = {
@@ -38,11 +46,13 @@ const SETTINGS = {
     period: 'Month',
     period_images: 'AllTime',
     baseModels: [],
-    blackListTags: [], // TODO: Doesn't work on images (pictures don't have tags), need to poke around the API, maybe there's some field like excludedTags...
+    blackListTags: [], // Doesn't work on images (pictures don't have tags)
     nsfw: true,
     nsfwLevel: 'X',
     browsingLevel: 16,
-    hideImagesWithNoMeta: true
+    hideImagesWithNoMeta: true,
+    disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
+    disableVirtualScroll: false,    // Completely disable virtual scroll
 };
 
 Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
@@ -183,6 +193,7 @@ class CivitaiAPI {
     }
 }
 
+// TODO: ! IMPORTANT ! Fix performance on model page with autoplay
 class Controller {
     static api = new CivitaiAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
@@ -190,12 +201,24 @@ class Controller {
     static #errorTimer = null;
     static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
     static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
+    static #activeMasonryLayout = null;
+    static #onScroll = null;
+    static #onResize = null;
+    static #state = {};
+
+    static #cache = {
+        images: new Map(),          // dummy cache for transferring information about images from the list to fullscreen mode
+        posts: new Map(),           // dummy cache for transferring information about posts from the list to fullscreen mode
+        models: new Map(),          // Cache for quickly obtaining information about models
+        modelVersions: new Map(),   // Cache for quickly obtaining information about model versions
+        history: new Map()          // History cache (for fast back and forth)
+    };
 
     static #types = {
         'Checkpoint': 'Checkpoint',
         'Embedding': 'Embedding',
         'Hypernetwork': 'Hypernetwork',
-        'Aesthetic Gracdient': 'Aesthetic Gracdient',
+        'Aesthetic Gradient': 'Aesthetic Gradient',
         'LoRa': 'LoRa',
         'LyCORIS': 'LyCORIS',
         'DoRA': 'DoRA',
@@ -220,18 +243,19 @@ class Controller {
         'SD 3': 'SD 3',
         'SD 3.5': 'SD 3.5',
         'SD 3.5 Medium': 'SD 3.5 M',
-        'SD 3.5 Large': 'SD 3.5 L T',
-        'SD 3.5 Large Turbo': 'SD 3.5 L',
+        'SD 3.5 Large': 'SD 3.5 L',
+        'SD 3.5 Large Turbo': 'SD 3.5 L T',
         'Pony': 'Pony',
         'Flux.1 S': 'F1 S',
         'Flux.1 D': 'F1',
-        'Aura Flow': 'AF',
+        'Flux.1 Kontext': 'F1 Kontext',
+        'Aura Flow': 'Aura',
         'SDXL Lightning': 'XL Lightning',
         'SDXL Hyper': 'XL Hyper',
-        'SVD': 'XVD',
+        'SVD': 'SVD',
         'PixArt α': 'PA α',
         'PixArt Σ': 'PA Σ',
-        'Hunyuan 1': 'H1',
+        'Hunyuan 1': 'Hunyuan',
         'Hunyuan Video': 'Hunyuan Video',
         'Lumina': 'Lumina',
         'Kolors': 'Kolors',
@@ -240,8 +264,12 @@ class Controller {
         'LTXV': 'LTXV',
         'CogVideoX': 'Cog',
         'NoobAI': 'NAI',
-        'WAN Video': 'WAN',
-        'HiDream': 'HID',
+        'Wan Video': 'Wan',
+        'Wan Video 1.3B t2v': 'Wan 1.3B t2v',
+        'Wan Video 14B t2v': 'Wan 14B t2v',
+        'Wan Video 14B i2v 480p': 'Wan 14B i2v 480p',
+        'Wan Video 14B i2v 720p': 'Wan 14B i2v 720p',
+        'HiDream': 'HiD',
         'Other': 'Other'
     };
 
@@ -254,30 +282,42 @@ class Controller {
         menu.querySelector('a[href="#images"] span').textContent = window.languagePack?.text?.images ?? 'Images';
     }
 
-    static gotoPage(page) {
+    static gotoPage(page, savedState) {
+        if (this.#state.id && savedState && this.#state.id === savedState?.id) return; // Do nothing if the transition was processed somewhere else
+
         const [ pageId, paramString ] = page?.split('?') ?? [];
         document.title = CONFIG.title;
 
+        if (typeof savedState === 'object' && !Array.isArray(savedState)) this.#state = {...savedState};
+        else this.#state = {};
+        if (!this.#state.id) this.#state.id = Date.now();
+
+        const navigationScrollTop = this.#state.scrollTop || 0;
+
+        this.#activeMasonryLayout?.destroy({ preventRemoveItemsFromDOM: true });
+        this.#activeMasonryLayout = null;
+        this.#onScroll = null;
+        this.#onResize = null;
         const pageNavigation = this.#pageNavigation = Date.now();
-
-        this.appElement.querySelectorAll('video').forEach(video => {
-            video.pause();
-            disableAutoPlayOnVisible(video);
-        });
-
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
-        onTargetInViewportClearAll();
+
+        this.appElement.querySelectorAll('video').forEach(el => el.pause());
+        this.appElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
+        this.appElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
+        this.appElement.querySelector('#tooltip')?.remove();
         this.appElement.classList.add('page-loading');
         this.appElement.setAttribute('data-page', pageId);
         if (paramString) this.appElement.setAttribute('data-params', paramString);
         else this.appElement.removeAttribute('data-params');
         document.querySelector('#main-menu .menu a.active')?.classList.remove('active');
         if (pageId) document.querySelector(`#main-menu .menu a[href="${pageId}"]`)?.classList.add('active');
-        document.documentElement.scrollTo({ top: 0, behavior: 'smooth' }); // Not sure about this...
 
         const finishPageLoading = () => {
             hideTimeError();
-            if (pageNavigation === this.#pageNavigation) this.appElement.classList.remove('page-loading');
+            if (pageNavigation === this.#pageNavigation) {
+                this.appElement.classList.remove('page-loading');
+                if (navigationScrollTop) document.documentElement.scrollTo({ top: navigationScrollTop, behavior: 'instant' });
+            }
         };
 
         // Clear all errors and prepare new timer
@@ -317,20 +357,20 @@ class Controller {
                     promise = this.gotoHome();
                 }
             } else promise = this.gotoHome();
-        }
-        else if (pageId === '#models') {
+        } else if (pageId === '#models') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
             if (params.hash) promise = this.gotoModelByHash(params.hash);
             else if (params.model) promise = this.gotoModel(params.model, params.version);
-            else promise = this.gotoModels({ tag: params.tag, query: params.query, username: params.username });
-        }
-        else if (pageId === '#articles') promise = this.gotoArticles();
+            else promise = this.gotoModels({ tag: params.tag, query: params.query, username: params.username || params.user });
+        } else if (pageId === '#articles') promise = this.gotoArticles();
         else if (pageId === '#images') {
             const params = Object.fromEntries(new URLSearchParams(paramString));
             if (params.image) promise = this.gotoImage(params.image, params.nsfw);
-            else if (params.modelversion || params.username) promise = this.gotoImages({ modelId: params.model, modelVersionId: params.modelversion, username: params.username }); // Only model dont search any
+            else if (params.model || params.modelversion || params.username || params.user || params.post) promise = this.gotoImages({ modelId: params.model, modelVersionId: params.modelversion, username: params.username || params.user, postId: params.post });
             else promise = this.gotoImages();
         }
+
+        document.documentElement.scrollTo({ top: 0, behavior: 'smooth' }); // Not sure about this...
 
         if (promise) promise.finally(finishPageLoading);
         else finishPageLoading();
@@ -442,46 +482,24 @@ class Controller {
     }
 
     static gotoImage(imageId, nsfwLevel) {
-        const pageNavigation = this.#pageNavigation;
         const appContent = createElement('div', { class: 'app-content-wide full-image-page' });
 
+        const cachedMedia = this.#cache.images.get(`${imageId}`);
+        if (cachedMedia) {
+            console.log('Loaded image info (cache)', cachedMedia);
+            appContent.appendChild(this.#genImageFullPage(cachedMedia));
+            this.appElement.textContent = '';
+            this.appElement.appendChild(appContent);
+            return;
+        }
+
+        const pageNavigation = this.#pageNavigation;
         return this.api.fetchImageMeta(imageId, nsfwLevel).then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.log('Loaded image info', media);
             if (!media) throw new Error('No Meta');
 
-            // Full image
-            const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true, original: true });
-            mediaElement.style.width = `${media.width}px`;
-            mediaElement.classList.add('media-full-preview');
-            appContent.appendChild(mediaElement);
-
-            const metaContainer = createElement('div', { class: 'media-full-meta' });
-
-            // NSFW LEvel
-            if (media.nsfwLevel !== 'None') insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, `NSFW: ${media.nsfwLevel}`);
-
-            // Creator
-            metaContainer.appendChild(this.#genUserBlock({ username: media.username }));
-
-            // Stats
-            const statsList = [
-                { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
-                { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
-                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
-                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
-                // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
-            ];
-            metaContainer.appendChild(this.#genStats(statsList));
-
-            // Generation info
-            if (media.meta) metaContainer.appendChild(this.#genImageGenerationMeta(media.meta));
-            else insertElement('div', metaContainer, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
-
-            insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
-
-            appContent.appendChild(metaContainer);
+            appContent.appendChild(this.#genImageFullPage(media));
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
@@ -490,7 +508,7 @@ class Controller {
             if (error?.message === 'No Meta') {
                 appContent.style.flexDirection = 'column';
                 insertElement('p', appContent, { class: 'error-text' }, 'Some images cannot be retrieved via API, you can try opening this image on the original site');
-                insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 1em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+                insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
             }
         }).finally(() => {
             if (pageNavigation !== this.#pageNavigation) return;
@@ -500,12 +518,13 @@ class Controller {
     }
 
     static gotoImages(options = {}) {
-        const { modelId, username, modelVersionId } = options;
+        const { modelId, username, modelVersionId, postId } = options;
 
-        if (username || modelVersionId) {
-            const appContentWide = createElement('div', { class: 'app-content app-content-wide images-list-container' });
-            const imagesList = this.#genImages({ modelId, modelVersionId, username });
+        if (username || modelVersionId || modelId || postId) {
+            const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+            const imagesList = this.#genImages({ modelId, modelVersionId, username, postId });
             appContentWide.appendChild(imagesList);
+            appContentWide.appendChild(this.#genScrollToTopButton());
 
             this.appElement.textContent = '';
             this.appElement.appendChild(appContentWide);
@@ -542,27 +561,50 @@ class Controller {
         const pageNavigation = this.#pageNavigation;
         const fragment = new DocumentFragment();
         const appContent = insertElement('div', fragment, { class: 'app-content' });
+        const navigationState = {...this.#state};
 
-        return this.api.fetchModelInfo(id)
-        .then(data => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            console.log('Loaded model:', data);
-            const modelVersion = version ? data.modelVersions.find(v => v.name === version) ?? data.modelVersions[0] : data.modelVersions[0];
-            document.title = `${data.name} - ${modelVersion.name} | ${modelVersion.baseModel} | ${data.type} | ${CONFIG.title}`;
-            appContent.appendChild(this.#genModelPage(data, version));
+        const insertModelPage = model => {
+            const modelVersion = version ? model.modelVersions.find(v => v.name === version) ?? model.modelVersions[0] : model.modelVersions[0];
+            document.title = `${model.name} - ${modelVersion.name} | ${modelVersion.baseModel} | ${model.type} | ${CONFIG.title}`;
+            appContent.appendChild(this.#genModelPage(model, version));
 
             // Images
-            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide images-list-container' });
-            const imagesTitle = insertElement('h1', appContentWide, { style: 'justify-content: center;;' });
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
+            const imagesTitle = insertElement('h1', appContentWide, { style: 'justify-content: center;' });
             imagesTitle.appendChild(getIcon('image'));
             insertElement('a', imagesTitle, { href: `#images?model=${id}&modelversion=${modelVersion.id}` }, window.languagePack?.text?.images ?? 'Images');
 
-            const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
-            onTargetInViewport(imagesListTrigger, () => {
-                imagesListTrigger.remove();
-                const imagesList = this.#genImages({ modelId: data.id, modelVersionId: modelVersion.id });
+            if (this.#state.imagesLoaded) {
+                const imagesList = this.#genImages({ modelId: model.id, modelVersionId: modelVersion.id, state: navigationState });
                 appContentWide.appendChild(imagesList);
-            });
+                appContentWide.appendChild(this.#genScrollToTopButton());
+            } else {
+                const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
+                onTargetInViewport(imagesListTrigger, () => {
+                    imagesListTrigger.remove();
+                    this.#state.imagesLoaded = true;
+                    const imagesList = this.#genImages({ modelId: model.id, modelVersionId: modelVersion.id, state: navigationState });
+                    appContentWide.appendChild(imagesList);
+                    appContentWide.appendChild(this.#genScrollToTopButton());
+                });
+            }
+        };
+
+        const cachedModel = this.#cache.models.get(`${id}`);
+        if (cachedModel) {
+            console.log('Loaded model (cache):', cachedModel);
+            insertModelPage(cachedModel);
+            this.appElement.textContent = '';
+            this.appElement.appendChild(fragment);
+            return;
+        }
+
+        return this.api.fetchModelInfo(id)
+        .then(data => {
+            if (data.id) this.#cache.models.set(`${data.id}`, data);
+            if (pageNavigation !== this.#pageNavigation) return;
+            console.log('Loaded model:', data);
+            insertModelPage(data);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
@@ -577,81 +619,47 @@ class Controller {
     static gotoModels(options = {}) {
         const { tag = '', query: searchQuery, username: searchUsername } = options;
         let query;
-        const appContent = createElement('div', { class: 'app-content app-content-wide' });
-        const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-list models-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --card-height: ${CONFIG.appearance.card.height}px; --gap: ${CONFIG.appearance.card.gap}px;` });
+        const appContent = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+        const listWrap = insertElement('div', appContent, { id: 'models-list', class: 'cards-loading' });
+        const listElement = insertElement('div', listWrap, { class: 'cards-list models-list' });
+        appContent.appendChild(this.#genScrollToTopButton());
 
-        let allCards = [];
-        let displayedCards = new Set();
-        let fakeIndex = 0;
-        const setFakeFocus = index => {
-            listWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
-            allCards[index].setAttribute('tabindex', 0);
-            allCards[index].focus();
-        };
-        listWrap.addEventListener('keydown', e => {
-            if (e.ctrlKey) return;
 
-            const columns = Math.floor(window.innerWidth / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
-
-            if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                if (Math.floor((fakeIndex + 1) / columns) === Math.floor(fakeIndex / columns)) {
-                    fakeIndex++;
-                    setFakeFocus(fakeIndex);
-                }
-                
-            } else if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                if (Math.floor((fakeIndex - 1) / columns) === Math.floor(fakeIndex / columns)) {
-                    fakeIndex--;
-                    setFakeFocus(fakeIndex);
-                }
-                
-            } else if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                if (fakeIndex + columns < allCards.length) {
-                    fakeIndex += columns;
-                    setFakeFocus(fakeIndex);
-                }
-                
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                if (fakeIndex >= columns) {
-                    fakeIndex -= columns;
-                    setFakeFocus(fakeIndex);
-                }
-                
-            }
+        const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
+            gap: CONFIG.appearance.modelCard.gap,
+            itemWidth: CONFIG.appearance.modelCard.width,
+            itemHeight: CONFIG.appearance.modelCard.height,
+            generator: (data, options) => this.#genModelCard(data, options),
+            overscan: 1.5,
+            passive: true,
+            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
+            onElementRemove: (card, item) => this.#onCardRemoved(card, item)
         });
+
+        const { onScroll, onResize } = layout.getCallbacks();
+        this.#onScroll = onScroll;
+        this.#onResize = onResize;
 
         const insertModels = models => {
             const pageNavigation = this.#pageNavigation;
             console.log('Loaded models:', models);
 
-            const fragment = new DocumentFragment();
-            models.forEach(model => {
-                if (!model.modelVersions?.length || displayedCards.has(model.id) || model.tags.some(tag => SETTINGS.blackListTags.includes(tag))) return;
-                displayedCards.add(model.id);
-                const card = this.#genModelCard(model);
-                card.setAttribute('tabindex', -1);
-                allCards.push(card);
-                fragment.appendChild(card);
-            });
+            models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
+
+            layout.addItems(models.map(data => ({ id: data.id, data })));
 
             if (query.cursor) {
-                const loadMoreTrigger = insertElement('div', fragment, { id: 'load-more' });
+                const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
                 loadMoreTrigger.appendChild(getIcon('infinity'));
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     loadMore().then(() => loadMoreTrigger.remove());
                 });
             } else {
-                const loadNoMore = insertElement('div', fragment, { id: 'load-no-more' });
+                const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
             }
-
-            listWrap.appendChild(fragment);
         };
 
         const loadMore = () => {
@@ -669,7 +677,7 @@ class Controller {
 
         const loadModels = () => {
             query = {
-                limit: 100,
+                limit: CONFIG.perRequestLimits.models,
                 tag,
                 query: searchQuery,
                 username: searchUsername,
@@ -681,21 +689,19 @@ class Controller {
                 baseModels: SETTINGS.baseModels,
                 nsfw: SETTINGS.nsfw,
             };
-            listWrap.querySelectorAll('video').forEach(video => {
-                video.pause();
-                disableAutoPlayOnVisible(video);
-            });
+
+            listElement.querySelectorAll('video').forEach(el => el.pause());
+            listElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
+            listElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
+
             const pageNavigation = this.#pageNavigation;
-            displayedCards = new Set();
+            layout.clear();
 
             return this.api.fetchModels(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 query.cursor = data.metadata?.nextCursor ?? null;
-                allCards = [];
-                listWrap.textContent = '';
+                listElement.textContent = '';
                 insertModels(data.items);
-                allCards[0]?.setAttribute('tabindex', 0);
-                fakeIndex = 0;
                 document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
@@ -703,6 +709,7 @@ class Controller {
                 listWrap.textContent = '';
                 listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
             }).finally(() => {
+                if (pageNavigation !== this.#pageNavigation) return;
                 listWrap.classList.remove('cards-loading');
             });
         };
@@ -726,28 +733,43 @@ class Controller {
 
     static openFromCivitUrl(href) {
         try {
-            const url = new URL(href);
-            if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
-            const searchParams = Object.fromEntries(url.searchParams);
-            if (url.pathname.indexOf('/models/') === 0) {
-                const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
-                if (!modelId) throw new Error('There is no model id in the link');
-                let redirectUrl = `#models?model=${modelId}`;
-                if (searchParams.modelVersionId) redirectUrl += `&version${searchParams.modelVersionId}`;
-                window.location.href = redirectUrl;
-            } else if (url.pathname.indexOf('/images/') === 0) {
-                const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
-                if (!imageId) throw new Error('There is no image id in the link');
-                const redirectUrl = `#images?image=${imageId}`;
-                window.location.href = redirectUrl;
-            } else throw new Error('Unsupported url');
+            let redirectUrl = this.convertCivUrlToLocal(href);
+            if (!redirectUrl) throw new Error('Unsupported url');
+            window.location.href = redirectUrl;
         } catch(error) {
             const appContent = createElement('div', { class: 'app-content' });
-
-            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Bad url'));
+            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Unsupported url'));
 
             this.appElement.textContent = '';
             this.appElement.appendChild(appContent);
+        }
+    }
+
+    static convertCivUrlToLocal(href) {
+        try {
+            const url = new URL(href);
+            if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
+            const searchParams = Object.fromEntries(url.searchParams);
+            let localUrl;
+            if (url.pathname.indexOf('/models/') === 0) {
+                const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
+                if (!modelId) throw new Error('There is no model id in the link');
+                localUrl = `#models?model=${modelId}`;
+                if (searchParams.modelVersionId) localUrl += `&version${searchParams.modelVersionId}`;
+            } else if (url.pathname.indexOf('/images/') === 0) {
+                const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
+                if (!imageId) throw new Error('There is no image id in the link');
+                localUrl = `#images?image=${imageId}`;
+            } else if (url.pathname.indexOf('/posts/') === 0) {
+                const postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1];
+                if (!postId) throw new Error('There is no post id in the link');
+                localUrl = `#images?posts=${postId}`;
+            }
+            if (!localUrl) throw new Error('Unsupported url');
+            return localUrl;
+        } catch(_) {
+            console.warn(_?.message ?? _);
+            return null;
         }
     }
 
@@ -777,14 +799,14 @@ class Controller {
             a.appendChild(getIcon('download'));
             if (file.type === 'Model') {
                 const downloadTitle = `${download} ${file.metadata.fp ?? ''} (${fileSize})` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
-                insertElement('span', a, undefined, downloadTitle);
+                a.appendChild(document.createTextNode(` ${downloadTitle}`));
             } else if (file.type === 'Archive') {
                 const downloadTitle = `${download} (${fileSize})`;
-                insertElement('span', a, undefined, downloadTitle);
+                a.appendChild(document.createTextNode(` ${downloadTitle}`));
                 a.appendChild(getIcon('file_zip'));
             } else {
                 const downloadTitle = `${download} (${fileSize})` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
-                insertElement('span', a, undefined, downloadTitle);
+                a.appendChild(document.createTextNode(` ${downloadTitle}`));
                 a.appendChild(getIcon('file'));
             }
             if (file.virusScanResult !== 'Success') {
@@ -834,13 +856,18 @@ class Controller {
         const previewList = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel).map((media, index) => {
             const ratio = +(media.width/media.height).toFixed(3);
             const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
-            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
+            if (!media.id && id) media.id = id;
+            const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, 'data-id': id ?? -1, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
             const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
-            const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, lazy: index > 3, taget: 'model-preview' });
+            const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, loading: index > 3 ? 'lazy' : undefined, taget: 'model-preview', allowAnimated: true });
             item.appendChild(mediaElement);
             return { element: item, isWide: ratio > 1.5 };
         });
         modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
+        // modelPreviewWrap.addEventListener('click', e => {
+        //     const a = e.target.closest('a[href][data-id]');
+        //     const id = Number(a?.getAttribute('data-id'));
+        // }, { capture: true });
 
         // const hideLongDescription = el => {
         //     el.classList.add('hide-long-description');
@@ -852,7 +879,7 @@ class Controller {
         //     }, { once: true });
         // };
 
-        // Model version description
+        // Model version description block
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
         const modelVersionNameWrap = insertElement('h2', modelVersionDescription, { class: 'model-version' }, modelVersion.name);
         const versionStatsList = [
@@ -860,18 +887,41 @@ class Controller {
             { icon: 'download', value: modelVersion.stats.downloadCount, formatter: formatNumber, unit: 'download' },
         ];
         modelVersionNameWrap.appendChild(this.#genStats(versionStatsList));
+
+        // Trigger words
         if (modelVersion.trainedWords?.length > 0) {
             const trainedWordsContainer = insertElement('div', modelVersionDescription, { class: 'trigger-words' });
             modelVersion.trainedWords.forEach(word => {
-                insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, word);
+                // Remove commas at the end or beginning of the trigger, it seems that constructions like "some_tag, " are not what should be there
+                word = word.trim();
+                if (word.startsWith(',')) word = word.slice(1);
+                if (word.endsWith(',')) word = word.slice(0, -1);
+                word = word.trim();
+
+                const item = insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, word);
+                const copyButton = getIcon('copy');
+                item.appendChild(copyButton);
+                copyButton.addEventListener('click', () => {
+                    toClipBoard(word);
+                    console.log('Copied to clipboard, TODO: notifications'); // TODO: notifications
+                    console.log(`Trigger word: ${word}`);
+                });
             });
         }
-        if (model.creator) modelVersionDescription.appendChild(this.#genUserBlock(model.creator));
+
+        // Creattor
+        if (model.creator) {
+            const userInfo = {...model.creator};
+            if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
+            modelVersionDescription.appendChild(this.#genUserBlock(userInfo));
+        }
+
+        // Version description
         if (modelVersion.description) {
             modelVersion.description = this.#analyzeModelDescriptionString(modelVersion.description);
             const modelVersionContainer = safeParseHTML(modelVersion.description);
             modelVersionDescription.appendChild(modelVersionContainer);
-            this.#analyzeModelDescription(modelVersionContainer);
+            this.#analyzeModelDescription(modelVersionDescription);
             // if (calcCharsInString(modelVersion.description, '\n', 40)) hideLongDescription(modelVersionDescription);
         }
 
@@ -885,7 +935,7 @@ class Controller {
         this.#analyzeModelDescription(modelDescription);
 
         // Open in CivitAI
-        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button', style: 'display: flex; width: 20ch;margin: 2em auto;' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
         // Comments
         // ...
@@ -893,78 +943,131 @@ class Controller {
         return page;
     }
 
-    // TODO: change number of columns when browser resizes
-    static #genImages(options = {}) {
-        const { modelId, modelVersionId, username } = options;
-        let query;
+    static #genImageFullPage(media) {
         const fragment = new DocumentFragment();
-        const listWrap = createElement('div', { id: 'images-list', class: 'cards-list images-list cards-loading', style: `--card-width: ${CONFIG.appearance.card.width}px; --gap: ${CONFIG.appearance.card.gap}px;` });
 
-        let allImages = [];
-        let displayedCards = new Set();
-        let columns = [];
-        let fakeIndex = 0;
-        let fakeTableIndex = 0;
-        const setFakeFocus = index => {
-            listWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
-            allImages[index].element.setAttribute('tabindex', 0);
-            allImages[index].element.focus();
-        };
-        listWrap.addEventListener('keydown', e => {
-            if (e.ctrlKey) return;
+        // Full image
+        const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager' });
+        mediaElement.style.width = `${media.width}px`;
+        mediaElement.classList.add('media-full-preview');
+        fragment.appendChild(mediaElement);
 
-            if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                if (fakeTableIndex + 1 < columns.length) {
-                    const currentColumn = columns[fakeTableIndex].positions;
-                    const currentImageTop = currentColumn.find(e => e.index === fakeIndex).top;
-    
-                    fakeTableIndex = fakeTableIndex + 1;
-                    const nextColumn = columns[fakeTableIndex].positions;
-                    const closestImage = nextColumn.reduce((closest, item) => {
-                        const diff = Math.abs(item.top - currentImageTop);
-                        const closestDiff = Math.abs(closest.top - currentImageTop);
-                        return diff < closestDiff ? item : closest;
-                    });
-                    fakeIndex = closestImage.index;
-                    setFakeFocus(fakeIndex);
+        // Try to insert a picture from the previous page, if available
+        const previewImage = document.querySelector(`.media-container[data-id="${media.id}"] .media-element:not(.loading)`)?.cloneNode(true);
+        if (previewImage) {
+            const fullMedia = mediaElement.querySelector('.media-element');
+            const isImage = fullMedia.tagName === 'IMG';
+
+            const onFullMediaReady = () => {
+                animateElement(previewImage, {
+                    keyframes: { opacity: [1, 0] },
+                    duration: 200,
+                    easing: 'ease'
+                }).then(() => previewImage.remove());
+            };
+
+            previewImage.classList.add('full-image-preview');
+            mediaElement.prepend(previewImage);
+
+            const waitForReady = async () => {
+                if (isImage) {
+                    if (fullMedia.complete && fullMedia.naturalWidth !== 0) {
+                        await fullMedia.decode?.().catch(() => {});
+                        onFullMediaReady();
+                    } else {
+                        fullMedia.addEventListener('load', async () => {
+                            await fullMedia.decode?.().catch(() => {});
+                            onFullMediaReady();
+                        }, { once: true });
+                    }
+                } else {
+                    if (fullMedia.readyState >= 2) {
+                        requestAnimationFrame(onFullMediaReady);
+                    } else {
+                        fullMedia.addEventListener('loadeddata', () => {
+                            requestAnimationFrame(onFullMediaReady);
+                        }, { once: true });
+                    }
                 }
-            } else if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                if (fakeTableIndex > 0) {
-                    const currentColumn = columns[fakeTableIndex].positions;
-                    const currentImageTop = currentColumn.find(e => e.index === fakeIndex).top;
-    
-                    fakeTableIndex = fakeTableIndex - 1;
-                    const nextColumn = columns[fakeTableIndex].positions;
-                    const closestImage = nextColumn.reduce((closest, item) => {
-                        const diff = Math.abs(item.top - currentImageTop);
-                        const closestDiff = Math.abs(closest.top - currentImageTop);
-                        return diff < closestDiff ? item : closest;
-                    });
-                    fakeIndex = closestImage.index;
-                    setFakeFocus(fakeIndex);
-                }
-            } else if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                const column = columns[fakeTableIndex].positions;
-                const currentImageIndex = column.findIndex(e => e.index === fakeIndex);
-                if (currentImageIndex < column.length) {
-                    const closestImage = column[currentImageIndex + 1];
-                    fakeIndex = closestImage.index;
-                    setFakeFocus(fakeIndex);
-                }
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                const column = columns[fakeTableIndex].positions;
-                const currentImageIndex = column.findIndex(e => e.index === fakeIndex);
-                if (currentImageIndex > 0) {
-                    const closestImage = column[currentImageIndex - 1];
-                    fakeIndex = closestImage.index;
-                    setFakeFocus(fakeIndex);
-                }
-            }
+            };
+
+            waitForReady();
+        }
+
+        const metaContainer = createElement('div', { class: 'media-full-meta' });
+
+        // Creator
+        metaContainer.appendChild(this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` }));
+
+        // Stats
+        const statsList = [
+            { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
+            { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
+            { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
+            { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
+            { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
+            // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
+        ];
+        metaContainer.appendChild(this.#genStats(statsList));
+
+        // Post link
+        const postInfo = media.postId ? this.#cache.posts.get(`${media.postId}`) : null;
+        if (media.postId && (!postInfo || postInfo.size > 1)) {
+            const postLink = insertElement('a', metaContainer, { class: 'image-post badge', href: `#images?post=${media.postId}` });
+            if (postInfo) postLink.appendChild(document.createTextNode(`x${postInfo.size}`));
+            postLink.appendChild(getIcon('image'));
+            postLink.appendChild(document.createTextNode(window.languagePack?.text?.view_post ?? 'View Post'));
+        }
+
+        // NSFW LEvel
+        if (media.nsfwLevel !== 'None') insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+
+        // Generation info
+        if (media.meta) metaContainer.appendChild(this.#genImageGenerationMeta(media.meta));
+        else insertElement('div', metaContainer, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
+
+        insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
+        fragment.appendChild(metaContainer);
+
+        return fragment;
+    }
+
+    // TODO: Add support for grouping images by posts
+    // TODO: Add attempt to restore previous list when navigating through history
+    static #genImages(options = {}) {
+        const { modelId, modelVersionId, postId, username, state: navigationState = {...this.#state} } = options;
+        let query;
+        const firstPageNavigation = this.#pageNavigation;
+        const fragment = new DocumentFragment();
+        const listWrap = createElement('div', { id: 'images-list', class: 'cards-loading' });
+        const listElement = insertElement('div', listWrap, { class: 'cards-list images-list' });
+
+        const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
+            gap: CONFIG.appearance.imageCard.gap,
+            itemWidth: CONFIG.appearance.imageCard.width,
+            generator: (data, options) => this.#genImageCard(data, options),
+            overscan: 1.5,
+            passive: true,
+            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
+            onElementRemove: (card, item) => this.#onCardRemoved(card, item)
         });
+
+        const { onScroll, onResize } = layout.getCallbacks();
+        this.#onScroll = onScroll;
+        this.#onResize = onResize;
+
+        let imagesMetaById = new Map();
+        let postsById = new Map();
+        listElement.addEventListener('click', e => {
+            const a = e.target.closest('a[data-id]');
+            const id = Number(a?.getAttribute('data-id'));
+            if (!imagesMetaById.has(id)) return;
+            const imageMeta = imagesMetaById.get(id);
+            const postInfo = imageMeta.postId ? postsById.get(imageMeta.postId) : null;
+            this.#cache.images.set(`${id}`, imageMeta);
+            if (postInfo) this.#cache.posts.set(`${imageMeta.postId}`, postInfo);
+        }, { capture: true });
 
         fragment.appendChild(this.#genImagesListFilters(() => {
             savePageSettings();
@@ -973,7 +1076,7 @@ class Controller {
             loadImages();
         }));
 
-        const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more' });
+        const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
         firstLoadingPlaceholder.appendChild(getIcon('infinity'));
 
         fragment.appendChild(listWrap);
@@ -990,27 +1093,6 @@ class Controller {
             });
         };
 
-        const updateColumns = () => {
-            columns = [];
-            // padding left + N columns with padding right, padding on the right of the container is taken into account as padding of the last column
-            const columnsCount = Math.floor((window.innerWidth - CONFIG.appearance.card.gap) / (CONFIG.appearance.card.width + CONFIG.appearance.card.gap));
-            for(let i = 0; i < columnsCount; i++) {
-                columns.push({
-                    height: 0,
-                    element: createElement('div', { class: 'images-column' }),
-                    positions: []
-                });
-            }
-
-            if (allImages.length) {
-                displayedCards = new Set();
-                insertImages(allImages);
-                allImages[0].element.setAttribute('tabindex', 0);
-                fakeIndex = 0;
-                fakeTableIndex = 0;
-            }
-        };
-
         const insertImages = images => {
             const pageNavigation = this.#pageNavigation;
             console.log('Loaded images:', images);
@@ -1021,85 +1103,82 @@ class Controller {
                 if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without meta information about generation`);
             }
 
+            layout.addItems(images.map(data => {
+                const aspectRatio = data.width / data.height;
+                return { id: data.id, aspectRatio, data };
+            }));
+
             images.forEach(image => {
-                if (displayedCards.has(image.id)) return;
-                displayedCards.add(image.id);
+                if (imagesMetaById.has(image.id)) return;
+                imagesMetaById.set(image.id, image);
 
-                const card = image.element ?? this.#genImageCard(image);
-                card.setAttribute('tabindex', -1);
-                const ratio = image.width / image.height;
-
-                if (!image.element) image.element = card;
-                allImages.push(image);
-
-                const targetColumn = columns.reduce((minCol, col) => {
-                    return col.height < minCol.height ? col : minCol;
-                }, columns[0]);
-
-                targetColumn.element.appendChild(card);
-                const cardHeight = Math.round(CONFIG.appearance.card.width / ratio);
-                targetColumn.positions.push({ element: card, top: Math.round(targetColumn.height + cardHeight / 2), index: allImages.length - 1 });
-                targetColumn.height += cardHeight + CONFIG.appearance.card.gap;
+                if (image.postId) {
+                    if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
+                    postsById.get(image.postId).add(image);
+                }
             });
 
-            const targetColumn = columns.reduce((minCol, col) => {
-                return col.height < minCol.height ? col : minCol;
-            }, columns[0]);
-
             if (query.cursor) {
-                const loadMoreTrigger = insertElement('div', targetColumn.element, { id: 'load-more' });
+                const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
                 loadMoreTrigger.appendChild(getIcon('infinity'));
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     loadMore().then(() => loadMoreTrigger.remove());
                 });
             } else {
-                const loadNoMore = insertElement('div', targetColumn.element, { id: 'load-no-more' });
+                const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
             }
+
+            console.log('TODO: Add support for grouping images by posts', postsById);
         };
 
         const loadImages = () => {
             query = {
-                limit: 100,
+                limit: CONFIG.perRequestLimits.images,
                 sort: SETTINGS.sort_images,
                 period: SETTINGS.period_images,
                 nsfw: SETTINGS.nsfwLevel,
                 modelId,
                 modelVersionId,
-                username
+                username,
+                postId
             };
-            listWrap.querySelectorAll('video').forEach(video => {
-                video.pause();
-                disableAutoPlayOnVisible(video);
-            });
+            this.#state.imagesFilter = JSON.stringify(query);
+
+            listElement.querySelectorAll('video').forEach(el => el.pause());
+            listElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
+            listElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
+
             const pageNavigation = this.#pageNavigation;
-            displayedCards = new Set();
-            allImages = [];
-            updateColumns();
+            imagesMetaById = new Map();
+            postsById = new Map();
 
             return this.api.fetchImages(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 query.cursor = data.metadata?.nextCursor ?? null;
+                layout.clear();
+                listElement.textContent = '';
                 insertImages(data.items);
-                listWrap.textContent = '';
-                columns.forEach(col => listWrap.appendChild(col.element));
-                allImages[0]?.element?.setAttribute('tabindex', 0);
-                fakeIndex = 0;
-                fakeTableIndex = 0;
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 console.error('Error:', error?.message ?? error);
                 listWrap.textContent = '';
                 listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
             }).finally(() => {
+                if (pageNavigation !== this.#pageNavigation) return;
                 listWrap.classList.remove('cards-loading');
             });
         };
 
         loadImages().finally(() => {
             firstLoadingPlaceholder.remove();
+
+            if (this.#pageNavigation === firstPageNavigation && navigationState.imagesFilter === this.#state.imagesFilter) {
+                console.log('[WIP] TODO: restore scroll');
+                if (navigationState.scrollTop) document.documentElement.scrollTo({ top: navigationState.scrollTop, behavior: 'instant' });
+            }
         });
 
         return fragment;
@@ -1109,14 +1188,15 @@ class Controller {
         const statsWrap = createElement('div', { class: 'badges' });
         stats.forEach(({ icon, iconString, value, formatter, unit, type }) => {
             const statWrap = insertElement('div', statsWrap, { class: 'badge', 'data-value': value });
+            const lilpipeValue = typeof value === 'number' ? formatNumberIntl(value) : value;
             if (unit) {
-                const untis = window.languagePack?.units?.[unit];
-                if (untis) statWrap.setAttribute('lilpipe-text', `${value} ${pluralize(value, untis)}`);
-            } else if (!type) statWrap.setAttribute('lilpipe-text', value);
+                const units = window.languagePack?.units?.[unit];
+                statWrap.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${pluralize(value, units)}` : lilpipeValue);
+            } else if (!type) statWrap.setAttribute('lilpipe-text', lilpipeValue);
             if (type) statWrap.setAttribute('data-badge', type);
             if (icon) statWrap.appendChild(getIcon(icon));
             if (iconString) statWrap.appendChild(document.createTextNode(iconString));
-            insertElement('span', statWrap, undefined, formatter?.(value) ?? value);
+            statWrap.appendChild(document.createTextNode(` ${formatter?.(value) ?? value}`));
         });
         return statsWrap;
     }
@@ -1158,14 +1238,14 @@ class Controller {
 
         description.querySelectorAll('p:has(+pre)').forEach(p => {
             const text = p.textContent.trim().toLowerCase();
-            if (text === 'positive prompt' || text.indexOf('+prompt') === 0 || text.indexOf('positive prompt') === 0) {
+            if (text === 'positive prompt' || text.indexOf('+prompt') === 0 || text.indexOf('+ prompt') === 0 || text.indexOf('positive prompt') === 0) {
                 getFollowingTagGroup(p, 'pre').forEach(pre => {
                     const code = pre.querySelector('code');
                     if (!code) return;
 
                     code.classList.add('prompt', 'prompt-positive');
                 });
-            } else if (text === 'negative prompt' || text.indexOf('-prompt') === 0 || text.indexOf('negative prompt') === 0) {
+            } else if (text === 'negative prompt' || text.indexOf('-prompt') === 0 || text.indexOf('- prompt') === 0 || text.indexOf('negative prompt') === 0) {
                 getFollowingTagGroup(p, 'pre').forEach(pre => {
                     const code = pre.querySelector('code');
                     if (!code) return;
@@ -1187,7 +1267,25 @@ class Controller {
             }
         });
 
-        description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
+        // Add _blank and noopener to all links
+        description.querySelectorAll('a').forEach(a => {
+            const rel = (a.rel || '').split(' ');
+            if (!rel.includes('noopener')) rel.push('noopener');
+            a.setAttribute('rel', rel.join(' ').trim());
+            a.setAttribute('target', '_blank');
+
+            // const href = a.href;
+            // if (href.indexOf(CONFIG.civitai_url) === 0) {
+            //     const localUrl = this.convertCivUrlToLocal(href);    
+            //     if (localUrl) {
+            //         a.href = localUrl;
+            //         if (a.textContent === href) a.textContent = localUrl;
+            //         a.removeAttribute('target');
+            //     }
+            // }
+        });
+
+        if (!SETTINGS.disablePromptFormatting) description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
     }
 
     static #analyzePromptCode(codeElement) {
@@ -1207,20 +1305,17 @@ class Controller {
                 fragment.appendChild(lastTextNode);
             }
         };
-        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
+        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|https:\/\/civitai\.com\/[^\s]+|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
 
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i];
 
-            if (/^<lora:[^:>]+:[^>]+>$/.test(token)) {
-                insertElement('span', fragment, { class: 'lora' }, token);
-            } else if (/^[\[\]()]+$/.test(token)) {
-                insertElement('span', fragment, { class: 'bracket' }, token);
-            } else if (/^:-?[0-9.]+$/.test(token) && tokens[i + 1]?.[0] === ')') {
-                insertElement('span', fragment, { class: 'weight' }, token);
-            } else if (keywords.has(token)) {
-                insertElement('span', fragment, { class: 'keyword' }, token);
-            } else {
+            if (/^<lora:[^:>]+:[^>]+>$/.test(token)) insertElement('span', fragment, { class: 'lora' }, token);
+            else if (token.indexOf('https://civitai.com/') === 0 && isURL(token)) insertElement('a', fragment, { class: 'link', href: token, target: '_blank', rel: 'noopener' }, token);
+            else if (/^[\[\]()]+$/.test(token)) insertElement('span', fragment, { class: 'bracket' }, token);
+            else if (/^:-?[0-9.]+$/.test(token) && tokens[i + 1]?.[0] === ')') insertElement('span', fragment, { class: 'weight' }, token);
+            else if (keywords.has(token)) insertElement('span', fragment, { class: 'keyword' }, token);
+            else {
                 pushText(token);
                 continue;
             }
@@ -1241,31 +1336,49 @@ class Controller {
         if (meta.baseModel) insertElement('code', container, { class: 'prompt meta-baseModel' }, meta.baseModel);
         if (meta.prompt) {
             const code = insertElement('code', container, { class: 'prompt prompt-positive' }, meta.prompt);
-            this.#analyzePromptCode(code);
+            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code);
         }
         if (meta.negativePrompt) {
             const code = insertElement('code', container, { class: 'prompt prompt-negative' }, meta.negativePrompt);
-            this.#analyzePromptCode(code);
+            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code);
         }
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
         const insertOtherMeta = (key, value) => {
             const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? `${key}: ` : '');
-            if (value) insertElement('span', item, { class: 'meta-value' }, value);
+            if (value) {
+                if (value instanceof HTMLElement) {
+                    value.classList.add('meta-value');
+                    item.appendChild(value);
+                } else if (typeof value === 'string') insertElement('span', item, { class: 'meta-value' }, value);
+                else insertElement('span', item, { class: 'meta-value' }, value);
+            }
             return item;
         };
         if (meta.Size) insertOtherMeta('Size', meta.Size);
         if (meta.cfgScale) {
-            const cfg = +(meta.cfgScale).toFixed(4);
+            const cfgOriginal = Number(meta.cfgScale);
+            const cfg = +(cfgOriginal).toFixed(4);
             const item = insertOtherMeta('CFG', cfg);
-            if (cfg !== meta.cfgScale) item.setAttribute('lilpipe-text', meta.cfgScale);
+            if (cfg !== cfgOriginal) item.setAttribute('lilpipe-text', cfgOriginal);
         }
         if (meta.sampler) insertOtherMeta('Sampler', meta.sampler);
         if (meta['Schedule type'] || meta.scheduler ) insertOtherMeta('Sheduler', meta['Schedule type'] || meta.scheduler);
         if (meta.steps) insertOtherMeta('Steps', meta.steps);
         if (meta.clipSkip) insertOtherMeta('clipSkip', meta.clipSkip);
         if (meta.seed) insertOtherMeta('Seed', meta.seed);
-        if (meta['Denoising strength'] || meta.denoise) insertOtherMeta('Denoising', meta['Denoising strength'] || meta.denoise);
+        if (meta.RNG) insertOtherMeta('RNG', meta.RNG);
+        if (meta['Denoising strength'] || meta.denoise) {
+            const denoiseOriginal = Number(meta['Denoising strength'] ?? meta.denoise);
+            const denoise = +(denoiseOriginal).toFixed(4);
+            const item = insertOtherMeta('Denoising', denoise);
+            if (denoise !== denoiseOriginal) item.setAttribute('lilpipe-text', denoiseOriginal);
+        }
         if (meta.workflow) insertOtherMeta('', meta.workflow);
+        // if (meta.sourceImage && meta.sourceImage.url) { // Doesn't work? Links lead to 404?
+        //     const sourceSize = meta.sourceImage.width && meta.sourceImage.height ? `${meta.sourceImage.width}x${meta.sourceImage.height}` : null;
+        //     const a = createElement('a', { href: meta.sourceImage.url, target: '_blank' }, sourceSize ? `image (${sourceSize})` : 'image');
+        //     insertOtherMeta('Source Image', a);
+        // }
         if (meta.comfy) {
             const comfyJSON = meta.comfy;
             const item = insertOtherMeta('ComfyUI');
@@ -1309,6 +1422,7 @@ class Controller {
         meta.resources?.forEach(addResourceToList);
         meta.additionalResources?.forEach(addResourceToList);
         if (meta.hashes) Object.keys(meta.hashes)?.forEach(key => addResourceToList({ hash: meta.hashes[key], name: key }));
+        // if (meta['TI hashes']) Object.keys(meta['TI hashes'])?.forEach(key => addResourceToList({ hash: meta['TI hashes'][key], name: key })); // There always seem to be no models for these hashes on CivitAI // The image where this key was seen: 82695882
         if (meta['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
 
         if (resources.length) {
@@ -1318,7 +1432,6 @@ class Controller {
             insertElement('span', resourcesTitle, undefined, window.languagePack?.text?.resurces_used ?? 'Resources used')
 
             const resourcePromises = [];
-
             const createResourceRowContent = info => {
                 const { title, version, href, weight = 1, type, baseModel } = info;
 
@@ -1326,19 +1439,123 @@ class Controller {
                 const titleElement = insertElement('span', el, { class: 'meta-resource-name' }, `${title} ` );
                 insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': baseModel }, type);
                 if(version) insertElement('strong', titleElement, undefined, version)
-                if (weight !== 1) insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, `:${weight}`);
+                if (weight !== 1) {
+                    const weightRounded = +weight.toFixed(4);
+                    const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, `:${weightRounded}`);
+                    if (weightRounded !== weight) span.setAttribute('lilpipe-text', weight);
+                }
                 return el;
             };
+            const processResources = items => {
+                items = items.filter(Boolean);
+                const trainedWords = new Set();
+                const rawTooltips = {};
+                console.log('Loaded resources', items);
 
+                items.forEach(item => {
+                    const type = item?.model?.type;
+                    if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length) return;
+
+                    const modelName = item.model.name;
+                    if (!modelName) return;
+
+                    item.trainedWords.forEach(word => {
+                        word = word.indexOf(',') === -1 ? word.trim() : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                        const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
+
+                        splitWords.forEach(w => {
+                            trainedWords.add(w);
+                            if (!rawTooltips[w]) rawTooltips[w] = new Set();
+                            rawTooltips[w].add(modelName);
+                        });
+                    });
+                });
+
+                const triggerTooltips = {};
+                trainedWords.forEach(word => {
+                    if (rawTooltips[word]) {
+                        const words = Array.from(rawTooltips[word]);
+                        triggerTooltips[word.toLowerCase()] = words.length > 1 ? `<ul>${words.map(w => `<li>${w}</li>`).join('')}</ul>` : words[0];
+                    }
+                });
+
+                if (!trainedWords.size || SETTINGS.disablePromptFormatting) return;
+
+                const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
+
+                const escapedWords = Array.from(trainedWords).map(w =>
+                    w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                );
+                const wordRegex = new RegExp(`\\b(${escapedWords.join('|')})\\b`, 'gi');
+
+                codeBlocks.forEach(code => {
+                    const children = Array.from(code.childNodes);
+
+                    children.forEach(node => {
+                        if (node.nodeType !== Node.TEXT_NODE) return;
+
+                        const text = node.textContent;
+                        if (!text) return;
+
+                        const matches = [];
+                        let match;
+                        while ((match = wordRegex.exec(text)) !== null) {
+                            matches.push({
+                                key: match[0],
+                                index: match.index
+                            });
+                        }
+
+                        if (matches.length === 0) return;
+
+                        matches.sort((a, b) => a.index - b.index);
+                        const fragment = new DocumentFragment();
+                        let lastIndex = 0;
+
+                        matches.forEach(({ key, index }) => {
+                            if (index > lastIndex) {
+                                fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
+                            }
+
+                            const span = insertElement('span', fragment, { class: 'trigger' }, key);
+
+                            const tooltip = triggerTooltips[key.toLowerCase()];
+                            if (tooltip) span.setAttribute('lilpipe-text', tooltip);
+
+                            lastIndex = index + key.length;
+                        });
+
+                        if (lastIndex < text.length) {
+                            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+                        }
+
+                        code.replaceChild(fragment, node);
+                    });
+                });
+            };
+
+            const resourcesFromCache = [];
             resources.forEach(item => {
+                const modelKey = item.modelVersionId || item.hash || null;
+                let modelInfo = undefined;
+                if (modelKey && this.#cache.modelVersions.has(modelKey)) {
+                    modelInfo = this.#cache.modelVersions.get(modelKey);
+                }
+
                 const el = createResourceRowContent({
-                    title: item.name || (item.modelVersionId ? `VersionId: ${item.modelVersionId}` : undefined) || (item.hash ? `Hash: ${item.hash}` : undefined) || 'Unknown',
-                    version: item.modelVersionName,
+                    title: modelInfo?.model?.name || item.name || (item.modelVersionId ? `VersionId: ${item.modelVersionId}` : undefined) || (item.hash ? `Hash: ${item.hash}` : undefined) || 'Unknown',
+                    version: modelInfo?.name || item.modelVersionName,
                     weight: item.weight,
-                    type: item.type ?? 'Unknown',
-                    baseModel: 'Unknown base model'
+                    type: modelInfo?.model?.type ?? item.type ?? 'Unknown',
+                    baseModel: modelInfo?.baseModel ?? 'Unknown base model',
+                    href: modelInfo?.modelId && modelInfo?.name ? `#models?model=${modelInfo.modelId}&version=${modelInfo.name}` : undefined
                 });
                 resourcesContainer.appendChild(el);
+
+                if (modelInfo !== undefined) {
+                    resourcesFromCache.push(modelInfo);
+                    return;
+                }
 
                 let fetchPromise = null;
                 if (item.modelVersionId) fetchPromise = this.api.fetchModelVersionInfo(item.modelVersionId);
@@ -1349,205 +1566,130 @@ class Controller {
                 const promise = fetchPromise.then(info => {
                     if (!info) return info;
                     const newEl = createResourceRowContent({
-                        title: info?.model?.name,
+                        title: info.model?.name,
                         version: info.name,
                         baseModel: info.baseModel,
-                        type: info?.model?.type,
+                        type: info.model?.type,
                         weight: item.weight,
                         href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
                     });
                     resourcesContainer.replaceChild(newEl, el);
+                    this.#cache.modelVersions.set(modelKey, info);
                     return info;
-                }).finally(() => {
+                })
+                .catch(() => {
+                    // This is to avoid trying to constantly send requests to the 404 model
+                    this.#cache.modelVersions.set(modelKey, null);
+                })
+                .finally(() => {
                     el.classList.remove('meta-resource-loading');
                 });
                 resourcePromises.push(promise);
             });
 
+            if (resourcesFromCache.length) processResources(resourcesFromCache);
+
             if (resourcePromises.length) {
-                Promise.all(resourcePromises).then(result => {
-                    result = result.filter(Boolean);
-                    const trainedWords = new Set();
-                    const rawTooltips = {};
-                    console.log('Loaded resources', result);
-
-                    result.forEach(item => {
-                        const type = item?.model?.type;
-                        if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length) return;
-
-                        const modelName = item.model.name;
-                        if (!modelName) return;
-
-                        item.trainedWords.forEach(word => {
-                            word = word.indexOf(',') === -1 ? word.trim() : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
-                            const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
-
-                            splitWords.forEach(w => {
-                                trainedWords.add(w);
-                                if (!rawTooltips[w]) rawTooltips[w] = new Set();
-                                rawTooltips[w].add(modelName);
-                            });
-                        });
-                    });
-
-                    const triggerTooltips = {};
-                    trainedWords.forEach(word => {
-                        if (rawTooltips[word]) {
-                            triggerTooltips[word.toLowerCase()] = `<ul>${Array.from(rawTooltips[word]).map(w => `<li>${w}</li>`).join('')}</ul>`;
-                        }
-                    });
-
-                    if (!trainedWords.size) return;
-
-                    const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
-
-                    const escapedWords = Array.from(trainedWords).map(w =>
-                        w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    );
-                    const wordRegex = new RegExp(`\\b(${escapedWords.join('|')})\\b`, 'gi');
-
-                    codeBlocks.forEach(code => {
-                        const children = Array.from(code.childNodes);
-
-                        children.forEach(node => {
-                            if (node.nodeType !== Node.TEXT_NODE) return;
-
-                            const text = node.textContent;
-                            if (!text) return;
-
-                            const matches = [];
-                            let match;
-                            while ((match = wordRegex.exec(text)) !== null) {
-                                matches.push({
-                                    key: match[0],
-                                    index: match.index
-                                });
-                            }
-
-                            if (matches.length === 0) return;
-
-                            matches.sort((a, b) => a.index - b.index);
-                            const fragment = new DocumentFragment();
-                            let lastIndex = 0;
-
-                            matches.forEach(({ key, index }) => {
-                                if (index > lastIndex) {
-                                    fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
-                                }
-
-                                const span = insertElement('span', fragment, { class: 'trigger' }, key);
-
-                                const tooltip = triggerTooltips[key.toLowerCase()];
-                                if (tooltip) span.setAttribute('lilpipe-text', tooltip);
-
-                                lastIndex = index + key.length;
-                            });
-
-                            if (lastIndex < text.length) {
-                                fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-                            }
-
-                            code.replaceChild(fragment, node);
-                        });
-                    });
-                }).finally(() => {
+                Promise.all(resourcePromises)
+                .then(processResources)
+                .finally(() => {
                     resourcesContainer.classList.remove('meta-resources-loading');
                 });
             } else {
                 resourcesContainer.classList.remove('meta-resources-loading');
             }
-
         }
 
         return container;
     }
 
-    static #genModelCard(model) {
+    static #genModelCard(model, options) {
+        const { isVisible, itemWidth, itemHeight } = options ?? {};
         const modelVersion = model.modelVersions[0];
         const previewMedia = modelVersion.images.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}` });
+        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;` });
 
         // Image
         if (previewMedia?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: CONFIG.appearance.card.width, height: CONFIG.appearance.card.height, resize: SETTINGS.resize, target: 'model-card', lazy: true });
+            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', loading: isVisible ? undefined : 'lazy' });
             mediaElement.classList.add('card-background');
             card.appendChild(mediaElement);
         } else {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
-            const noMedia = insertElement('div', cardBackgroundWrap, { class: 'no-media' }, window.languagePack?.errors?.no_media ?? 'No Media');
+            const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' }, window.languagePack?.errors?.no_media ?? 'No Media');
             noMedia.appendChild(getIcon('image'));
         }
 
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
+        const cardContentBottom = insertElement('div', cardContentWrap);
 
         // Model Type
-        const modelTypeWrap = insertElement('div', cardContentWrap, { class: 'model-type' });
-        if (this.#types[model.type]) insertElement('span', modelTypeWrap, undefined, this.#types[model.type]);
-        else insertElement('span', modelTypeWrap, undefined, model.type);
-        if (modelVersion.baseModel) insertElement('span', modelTypeWrap, { class: 'model-baseType' }, this.#baseModels[modelVersion.baseModel] ?? modelVersion.baseModel);
+        const modelTypeBadges = insertElement('div', cardContentTop, { class: 'badges model-type-badges' });
+        const modelTypeWrap = insertElement('div', modelTypeBadges, { class: 'badge model-type', 'lilpipe-text': `${model.type} | ${modelVersion.baseModel ?? '?'}` }, `${this.#types[model.type] || model.type} | ${this.#baseModels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
 
         // Availability
         const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : (new Date() - new Date(modelVersion.publishedAt) < 3 * 24 * 60 * 60 * 1000) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
-        if (availabilityBadge) insertElement('span', modelTypeWrap, { class: 'model-availability', 'data-availability': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+        if (availabilityBadge) insertElement('div', modelTypeBadges, { class: 'badge model-availability', 'data-availability': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
 
         // Creator
-        if (model.creator) cardContentWrap.appendChild(this.#genUserBlock(model.creator));
-    
+        if (model.creator) cardContentBottom.appendChild(this.#genUserBlock({ image: model.creator.image, username: model.creator.username }));
+
         // Model Name
-        insertElement('div', cardContentWrap, { class: 'model-name' }, model.name);
+        insertElement('div', cardContentBottom, { class: 'model-name' }, model.name);
 
         // Stats
-        const statsList = [
+        const statsContainer = this.#genStats([
             { icon: 'download', value: model.stats.downloadCount, formatter: formatNumber, unit: 'download' },
             { icon: 'like', value: model.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
             { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
             // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
-        ];
-        cardContentWrap.appendChild(this.#genStats(statsList));
+        ]);
+        cardContentBottom.appendChild(statsContainer);
 
         return card;
     }
 
-    static #genImageCard(image) {
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `--aspect-ratio: ${(image.width/image.height).toFixed(4)};` });
+    static #genImageCard(image, options) {
+        const { isVisible, itemWidth, itemHeight } = options ?? {};
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? Math.round(itemWidth / (image.width/image.height))}px;` });
 
         // Image
         if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
-        const mediaElement = this.#genMediaElement({ media: image, width: CONFIG.appearance.card.width, resize: SETTINGS.resize, target: 'image-card', lazy: true });
+        const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card', loading: isVisible ? undefined : 'lazy' });
         mediaElement.classList.add('card-background');
         card.appendChild(mediaElement);
 
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
 
-        // Badges
-        const badgesContainer = insertElement('div', cardContentWrap, { class: 'badges other-badges' });
-        // NSFW Level
-        if (image.nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
-        // Meta
-        if (image.meta) {
-            const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': window.languagePack?.text?.hasMeta ?? 'Generation info' });
-            metaIconContainer.appendChild(getIcon('tag'));
-        }
-        
         // Creator and Created At
         const creator = this.#genUserBlock({ username: image.username });
         if (image.createdAt) {
             const createdAt = new Date(image.createdAt);
             insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
         }
-        cardContentWrap.appendChild(creator);
-    
+        cardContentTop.appendChild(creator);
+
+        // Badges (NSFW Level and Has Meta)
+        const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
+        if (image.nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+        if (image.meta) {
+            const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': window.languagePack?.text?.hasMeta ?? 'Generation info' });
+            metaIconContainer.appendChild(getIcon('tag'));
+        }
+
         // Stats
-        const statsList = [
+        const statsContainer = this.#genStats([
             { iconString: '👍', value: image.stats.likeCount, formatter: formatNumber, unit: 'like' },
             { iconString: '👎', value: image.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
             { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber },
             { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber },
             { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber },
             // { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
-        ];
-        cardContentWrap.appendChild(this.#genStats(statsList));
+        ]);
+        cardContentWrap.appendChild(statsContainer);
 
         return card;
     }
@@ -1563,7 +1705,8 @@ class Controller {
             }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
         }
-        insertElement('div', container, undefined, userInfo.username);
+        if (userInfo.url) insertElement('a', container, { href: userInfo.url }, userInfo.username);
+        else insertElement('span', container, undefined, userInfo.username);
 
         return container;
     }
@@ -1618,31 +1761,37 @@ class Controller {
         return carousel;
     }
 
-    static #genMediaElement({ media, width, height = undefined, resize = true, lazy = false, target = null, controls = false, original = false, autoplay = SETTINGS.autoplay }) {
-        const mediaContainer = createElement('div', { class: 'media-container' });
+    static #genMediaElement({ media, width, height = undefined, resize = true, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false }) {
+        const mediaContainer = createElement('div', { class: 'media-container', 'data-id': media.id ?? -1 });
         let mediaElement;
+        const lazy = loading === 'lazy';
         const targetWidth = Math.round(width * this.#devicePixelRatio);
         const targetHeight = height ? Math.round(height * this.#devicePixelRatio) : null;
         const blurSize = CONFIG.appearance.blurHashSize;
         const ratio = media.width / media.height;
         const newRequestSize = ratio < 1 || !targetHeight ? `width=${targetWidth}` : `height=${targetHeight}`;
         const params = resize && !original ? `?width=${targetWidth}${targetHeight ? `&height=${targetHeight}` : ''}&fit=crop` : '';
-        const url = `${original ? media.url : media.url.replace(/\/width=\d+\//, `/${newRequestSize},anim=false,optimized=true/`)}${target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params}`;
+        const url = `${original ? media.url.replace(/\/width=\d+\//, '/original=true/') : media.url.replace(/\/width=\d+\//, `/${newRequestSize},anim=false,optimized=true/`)}${target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params}`;
         const previewUrl = media.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${ratio < 1 ? blurSize : Math.round(blurSize/ratio)}&height=${ratio < 1 ? Math.round(blurSize/ratio) : blurSize}` : '';
         if (media.type === 'image') {
-            const src = autoplay ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url);
-            mediaElement = insertElement('img', mediaContainer, { class: 'loading',  alt: ' ', crossorigin: 'anonymous', src: lazy ? '' : src, 'data-nsfw-level': media.nsfwLevel });
+            const src = original ? url : (autoplay  || allowAnimated ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url));
+            mediaElement = insertElement('img', mediaContainer, { class: 'media-element loading',  alt: ' ', crossorigin: 'anonymous', src: lazy ? '' : src, 'data-nsfw-level': media.nsfwLevel });
             if (lazy) {
                 onTargetInViewport(mediaElement, () => {
                     mediaElement.src = src;
                 });
+            } else if (loading === 'eager') {
+                mediaElement.loading = "eager";
+            }
+            if (decoding === 'sync') {
+                mediaElement.decoding = 'sync';
             }
             mediaContainer.classList.add('media-image');
         } else {
-            const src = url.replace('optimized=true', 'optimized=true,transcode=true');
-            const poster = resize ? `${src}&format=webp` : src;
+            const src = original ? url : url.replace('optimized=true', 'optimized=true,transcode=true');
+            const poster = resize && !original ? `${src}&format=webp` : src;
             const videoSrc = src.replace(/anim=false,?/, '');
-            mediaElement = insertElement('video', mediaContainer, { class: 'loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none', 'data-nsfw-level': media.nsfwLevel });
+            mediaElement = insertElement('video', mediaContainer, { class: 'media-element loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none', 'data-nsfw-level': media.nsfwLevel });
             mediaElement.volume = 0;
             mediaElement.muted = true;
             mediaElement.loop = true;
@@ -1661,6 +1810,7 @@ class Controller {
                 enableAutoPlayOnVisible(mediaElement);
                 mediaContainer.classList.add('media-video', 'video-autoplay');
                 mediaElement.autoplay = true;
+                mediaElement.setAttribute('data-autoplay-src', videoSrc);
             } else {
                 mediaContainer.classList.add('media-video', 'video-hover-play');
                 const videoPlayButton = getIcon('play');
@@ -1668,7 +1818,11 @@ class Controller {
                 mediaContainer.appendChild(videoPlayButton);
             }
         }
-        if (previewUrl) mediaElement.style.backgroundImage = `url(${previewUrl})`;
+        if (((media.type === 'image' && (!mediaElement.complete || mediaElement.naturalWidth === 0)) || (media.type === 'video' && mediaElement.readyState < 2))) {
+            if (previewUrl) mediaElement.style.backgroundImage = `url(${previewUrl})`;
+        } else {
+            mediaElement.classList.remove('loading');
+        }
         mediaElement.style.aspectRatio = (media.width/media.height).toFixed(4);
         return mediaContainer;
     }
@@ -1682,8 +1836,8 @@ class Controller {
             SETTINGS.sort_images = newValue;
             onAnyChange?.();
         }, value: SETTINGS.sort_images, options: sortOptions, labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ])) });
-        const filterSortList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'sort' });
-        filterSortList.appendChild(sortList.element);
+        sortList.element.classList.add('list-filter');
+        filterWrap.appendChild(sortList.element);
 
         // Period list
         const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
@@ -1691,8 +1845,8 @@ class Controller {
             SETTINGS.period_images = newValue;
             onAnyChange?.();
         }, value: SETTINGS.period_images, options: periodOptions, labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ])) });
-        const filterPeriodList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'period' });
-        filterPeriodList.appendChild(periodList.element);
+        periodList.element.classList.add('list-filter');
+        filterWrap.appendChild(periodList.element);
 
         // NSFW list
         const browsingLevels = {
@@ -1708,8 +1862,8 @@ class Controller {
             SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
             onAnyChange?.();
         }, value: SETTINGS.nsfwLevel, options: nsfwOptions, labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ])) });
-        const filterNsfwList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'nsfwLevel' });
-        filterNsfwList.appendChild(nsfwList.element);
+        nsfwList.element.classList.add('list-filter');
+        filterWrap.appendChild(nsfwList.element);
 
         return filterWrap;
     }
@@ -1739,6 +1893,7 @@ class Controller {
             "Pony",
             "Flux.1 S",
             "Flux.1 D",
+            "Flux.1 Kontext",
             "AuraFlow",
             "SDXL 1.0 LCM",
             "SDXL Distilled",
@@ -1767,15 +1922,16 @@ class Controller {
             "Wan Video 14B i2v 720p",
             "HiDream",
             "OpenAI",
+            "Imagen4",
             "Other"
         ];
         const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? value ]));
         const modelsList = this.#genList({ onchange: ({ newValue }) => {
             SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
             onAnyChange?.();
-        }, value: SETTINGS.baseModels.length ? SETTINGS.baseModels : 'All', options: modelsOptions, labels: modelLabels });
-        const filterModelsList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'model' });
-        filterModelsList.appendChild(modelsList.element);
+        }, value: SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All', options: modelsOptions, labels: modelLabels });
+        modelsList.element.classList.add('list-filter');
+        filterWrap.appendChild(modelsList.element);
 
         // Types list
         const typeOptions = [ "All", "Checkpoint", "TextualInversion", "Hypernetwork", "AestheticGradient", "LORA", "LoCon", "DoRA", "Controlnet", "Upscaler", "MotionModule", "VAE", "Poses", "Wildcards", "Workflows", "Detection", "Other" ];
@@ -1784,9 +1940,9 @@ class Controller {
         const typesList = this.#genList({ onchange: ({ newValue }) => {
             SETTINGS.types = newValue === 'All' ? [] : [ newValue ];
             onAnyChange?.();
-        }, value: SETTINGS.types.length ? SETTINGS.types : 'All', options: typeOptions, labels: typeLabels });
-        const filterTypesList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'type' });
-        filterTypesList.appendChild(typesList.element);
+        }, value: SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All', options: typeOptions, labels: typeLabels });
+        typesList.element.classList.add('list-filter');
+        filterWrap.appendChild(typesList.element);
 
         // Trained or merged
         const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
@@ -1795,8 +1951,8 @@ class Controller {
             SETTINGS.checkpointType = newValue;
             onAnyChange?.();
         }, value: SETTINGS.checkpointType, options: trainedOrMergedOptions, labels: trainedOrMergedLabels });
-        const filterTrainedOrMergedList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'checkpointType' });
-        filterTrainedOrMergedList.appendChild(trainedOrMergedList.element);
+        trainedOrMergedList.element.classList.add('list-filter');
+        filterWrap.appendChild(trainedOrMergedList.element);
 
         // Sort list
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
@@ -1804,8 +1960,8 @@ class Controller {
             SETTINGS.sort = newValue;
             onAnyChange?.();
         }, value: SETTINGS.sort, options: sortOptions, labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ])) });
-        const filterSortList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'sort' });
-        filterSortList.appendChild(sortList.element);
+        sortList.element.classList.add('list-filter');
+        filterWrap.appendChild(sortList.element);
 
         // Period list
         const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
@@ -1813,18 +1969,27 @@ class Controller {
             SETTINGS.period = newValue;
             onAnyChange?.();
         }, value: SETTINGS.period, options: periodOptions, labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ])) });
-        const filterPeriodList = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'period' });
-        filterPeriodList.appendChild(periodList.element);
+        periodList.element.classList.add('list-filter');
+        filterWrap.appendChild(periodList.element);
 
         // NSFW toggle
-        const filterNSFW = insertElement('div', filterWrap, { class: 'list-filter', 'data-filter': 'nsfw' });
         const nsfwToggle = this.#genBoolean({ onchange: ({ newValue }) => {
             SETTINGS.nsfw = newValue;
             onAnyChange?.();
         }, value: SETTINGS.nsfw, label: 'NSFW' });
-        filterNSFW.appendChild(nsfwToggle.element);
+        nsfwToggle.element.classList.add('list-filter');
+        filterWrap.appendChild(nsfwToggle.element);
 
         return filterWrap;
+    }
+
+    static #genScrollToTopButton() {
+        const button = createElement('button', { class: 'scroll-page-to-top' });
+        button.appendChild(getIcon('arrow_up_alt'));
+        button.addEventListener('click', () => {
+            document.documentElement.scrollTo({ top: 0, behavior: 'smooth' });
+        }, { passive: true });
+        return button;
     }
 
     static #genErrorPage(error) {
@@ -1884,7 +2049,7 @@ class Controller {
         const selectedOptionElement = insertElement('div', element, { class: 'list-selected' });
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
-        const optionsListElement = insertElement('div', element, { class: 'list-options' });
+        const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
         options.forEach(key => {
             listElements[key] = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key }, list[key]);
         });
@@ -1958,6 +2123,7 @@ class Controller {
         element.addEventListener('focus', onfocus);
         element.addEventListener('focusout', onfocusout);
         element.addEventListener('keydown', onkeydown);
+        optionsListElement.addEventListener('mousedown', e => e.preventDefault()); // Disable focus loss before click event when mouse is pressed
         optionsListElement.addEventListener('click', onclick);
 
         return { element, setValue };
@@ -2007,6 +2173,27 @@ class Controller {
 
         return levels.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
     }
+
+    static #onCardRemoved(card, item) {
+        const video = card.querySelector('.autoplay-observed');
+        if (video) disableAutoPlayOnVisible(video);
+
+        const inVIewportObserved = card.querySelector('.inviewport-observed');
+        if (inVIewportObserved) onTargetInViewportClearTarget(inVIewportObserved);
+    }
+
+    static onScroll(scrollTop) {
+        this.#state.scrollTop = scrollTop;
+        this.#onScroll?.({ scrollTop });
+    }
+
+    static onResize() {
+        this.#onResize?.();
+    }
+
+    static get state() {
+        return {...this.#state};
+    }
 }
 
 // ==============================
@@ -2016,12 +2203,13 @@ const videPlaybackObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
         const video = entry.target;
         if (entry.isIntersecting) video.play().catch(() => null);
-        else video.pause();
+        else if (!video.paused) video.pause();
     });
 }, { threshold: .25 });
 
 function enableAutoPlayOnVisible(video) {
     if (videPlaybackObservedElements.has(video)) return;
+    video.classList.add('autoplay-observed');
     videPlaybackObserver.observe(video);
     videPlaybackObservedElements.add(video);
 }
@@ -2029,6 +2217,7 @@ function enableAutoPlayOnVisible(video) {
 function disableAutoPlayOnVisible(video) {
     videPlaybackObserver.unobserve(video);
     videPlaybackObservedElements.delete(video);
+    video.classList.remove('autoplay-observed');
 }
 
 const onTargetInViewportCallbacks = new Map();
@@ -2036,23 +2225,40 @@ const onTargetInViewportObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
             const target = entry.target;
-            onTargetInViewportObserver.unobserve(target);
             onTargetInViewportCallbacks.get(target)?.();
-            onTargetInViewportCallbacks.delete(target);
+            onTargetInViewportClearTarget(target);
         }
     });
-}, { threshold: 0.1, rootMargin: '150px 0px' });
+}, { threshold: 0.01, rootMargin: '150px 0px' });
 
 function onTargetInViewport(target, callback) {
+    target.classList.add('inviewport-observed');
     onTargetInViewportCallbacks.set(target, callback);
     onTargetInViewportObserver.observe(target);
 }
 
+function onTargetInViewportClearTarget(target) {
+    onTargetInViewportObserver.unobserve(target);
+    onTargetInViewportCallbacks.delete(target);
+    target.classList.remove('inviewport-observed');
+}
+
 function onTargetInViewportClearAll() {
-    onTargetInViewportCallbacks.keys().forEach(element => {
-        onTargetInViewportObserver.unobserve(element);
-        onTargetInViewportCallbacks.delete(element);
-    });
+    onTargetInViewportCallbacks.keys().forEach(element => onTargetInViewportClearTarget);
+}
+
+function cleanupDetachedObservers() {
+    for (const el of videPlaybackObservedElements) {
+        if (!document.body.contains(el)) {
+            disableAutoPlayOnVisible(el);
+        }
+    }
+
+    for (const [el] of onTargetInViewportCallbacks) {
+        if (!document.body.contains(el)) {
+            onTargetInViewportClearTarget(el);
+        }
+    }
 }
 
 
@@ -2169,6 +2375,7 @@ function tryClearCache() {
 loadLanguagePack(SETTINGS.language);
 
 Controller.gotoPage(location.hash || '#home');
+history.replaceState({ id: Date.now() }, '', location.hash);
 
 if (!document.hidden) {
     tryClearCache();
@@ -2183,8 +2390,12 @@ document.addEventListener('click', e => {
     const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
     if (href) {
         e.preventDefault();
-        if (href !== location.hash) history.pushState(null, '', href);
-        Controller.gotoPage(href);
+        const newState = { id: Date.now() };
+        if (href !== location.hash) {
+            history.replaceState(Controller.state, '', location.hash);
+            history.pushState(newState, '', href);
+        }
+        Controller.gotoPage(href, newState);
     }
 });
 
@@ -2233,48 +2444,71 @@ document.addEventListener('focus', e => {
     if (videoPLayback) return startVideoPlayEvent(videoPLayback, { fromFocus: true });
 }, { capture: true, passive: true });
 
-document.addEventListener('canplay', e => {
-    const target = e.target;
-    requestAnimationFrame(() => {
-        target.classList.remove('loading');
-        target.style.backgroundImage = '';
-    });
-}, { passive: true, capture: true });
 
-document.addEventListener('load', e => {
-    const target = e.target;
-    requestAnimationFrame(() => {
-        target.classList.remove('loading');
-        target.style.backgroundImage = '';
-    });
-}, { passive: true, capture: true });
+const pendingMedia = new Set();
+let batchTimer = null;
+function markMediaAsLoadedWhenReady(el) {
+    if (!el.classList.contains('loading')) return;
 
-window.addEventListener('popstate', () => {
+    const tag = el.tagName;
+    if (tag !== 'IMG' && tag !== 'VIDEO') return;
+
+    pendingMedia.add(el);
+
+    if (!batchTimer) {
+        batchTimer = requestAnimationFrame(() => {
+            for (const media of pendingMedia) {
+                if (media.tagName === 'IMG' ? media.complete : media.readyState >= 2) {
+                    media.classList.remove('loading');
+                    media.style.backgroundImage = '';
+                }
+            }
+
+            pendingMedia.clear();
+            batchTimer = null;
+        });
+    }
+}
+document.addEventListener('load', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
+document.addEventListener('canplay', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
+
+
+window.addEventListener('popstate', e => {
+    const savedState = e.state;
     const hash = location.hash || '#home';
-    Controller.gotoPage(hash);
+    Controller.gotoPage(hash, savedState);
 }, { passive: true });
+
 
 let isPageScrolled = false;
-let pageScrollTimer = null;
-document.addEventListener('scroll', e => {
-    if (pageScrollTimer !== null) return;
-    pageScrollTimer = setTimeout(() => requestAnimationFrame(() => {
-        pageScrollTimer = null;
-        if (document.documentElement.scrollTop > 200) {
-            if (!isPageScrolled) {
-                isPageScrolled = true;
-                document.body.classList.add('page-scrolled');
-            }
-        } else if (isPageScrolled) {
-            isPageScrolled = false;
-            document.body.classList.remove('page-scrolled');
+function onScroll() {
+    const scrollTop = document.documentElement.scrollTop;
+    if (scrollTop > 200) {
+        if (!isPageScrolled) {
+            isPageScrolled = true;
+            document.body.classList.add('page-scrolled');
         }
-    }), 100);
-}, { passive: true });
+    } else if (isPageScrolled) {
+        isPageScrolled = false;
+        document.body.classList.remove('page-scrolled');
+    }
+
+    Controller.onScroll(scrollTop);
+}
+document.addEventListener('scroll', onScroll, { passive: true });
+
+function onResize() {
+    Controller.onResize();
+}
+window.addEventListener('resize', onResize, { passive: true });
 
 document.getElementById('language-toggle').addEventListener('click', e => {
     if (e.target.closest('#language-button')) {
         document.getElementById('language-list').classList.toggle('hidden');
+        document.querySelectorAll('#language-list li img[data-src]').forEach(img => {
+            img.src = img.getAttribute('data-src');
+            img.removeAttribute('data-src');
+        });
         return;
     }
 
@@ -2303,7 +2537,7 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
     // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
     setTimeout(() => {
         if (video.hasAttribute('data-focus-play')) video.play().catch(() => null);
-    }, 150);
+    }, Number.isNaN(video.duration) ? 150 : 50); // 
 
     target.addEventListener(options.fromFocus ? 'blur' : 'mouseleave', () => pause(video), { once: true, passive: true });
 }
@@ -2351,6 +2585,13 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
     const newY = isBelow ? top + height + 8 : targetY;
     const offsetX = targetX - newX;
 
+    const startAnimation = () => {
+        tooltip.setAttribute('data-animation', 'in');
+        setTimeout(() => {
+            if (tooltip.offsetParent !== null && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
+        }, animationDuration);
+    };
+
     tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
     if (isBelow) tooltip.setAttribute('tooltip-below', '');
 
@@ -2360,13 +2601,9 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
             prevLilpipeTimer = null;
 
             parent.appendChild(tooltip);
-            tooltip.setAttribute('data-animation', 'in');
-            setTimeout(() => tooltip.removeAttribute('data-animation'), animationDuration);
+            startAnimation();
         }, delay);
-    } else {
-        tooltip.setAttribute('data-animation', 'in');
-        setTimeout(() => tooltip.removeAttribute('data-animation'), animationDuration);
-    }
+    } else startAnimation();
 
     if (options.fromFocus) target.addEventListener('blur', onmouseleave, { once: true, capture: true });
     else target.addEventListener('mouseleave', onmouseleave, { once: true });

@@ -16,9 +16,9 @@
         html[color-scheme="light"] body { background: #fff; color: #555; }
     </style>
 
-    <link rel="stylesheet" href="src/css/styles.css?v=9">
+    <link rel="stylesheet" href="src/css/styles.css?v=10">
 
-    <script src="src/js/funcs.js?v=9"></script>
+    <script src="src/js/funcs.js?v=10"></script>
 </head>
 <body>
     <header>
@@ -41,22 +41,22 @@
 
     <footer>
         <p>Unofficial CivitAI frontend created by <a href="https://github.com/Dangarte/civitai-lite-viewer/" target="_blank"><b>Dangart</b></a></p>
-        <p>Powered by <a href="https://developer.civitai.com/docs/api/public-rest"><b>CivitAI public API</b></a></p>
-        <p>Original site <a href="https://civitai.com/"><b>CivitAI.com</b></a></p>
+        <p>Powered by <a href="https://developer.civitai.com/docs/api/public-rest" target="_blank"><b>CivitAI public API</b></a></p>
+        <p>Original site <a href="https://civitai.com/" target="_blank"><b>civitai.com</b></a></p>
         <div>
             <div id="language-toggle">
-                <button id="language-button"><svg class="icon" icon-id="language"><use href="#language"></use></svg></button>
+                <button id="language-button"><svg class="icon" icon-id="language" title="Language"><use href="#language"></use></svg></button>
                     <ul id="language-list" style="--count: 3;" class="hidden">
-                        <li data-language="en" style="--num: 0; background-image: url(src/icons/flags/GB.png);" class="active"><button>English</button></li>
-                        <li data-language="ru" style="--num: 1; background-image: url(src/icons/flags/RU.png);"><button>Русский</button></li>
-                        <li data-language="zh" style="--num: 2; background-image: url(src/icons/flags/CN.png);"><button>中文</button></li>
-                        <li data-language="uk" style="--num: 3; background-image: url(src/icons/flags/UA.png);"><button>Українська</button></li>
+                        <li data-language="en" style="--num: 0;" class="active"><button>English<img data-src="/src/icons/flags/GB.png" alt="GB" /></button></li>
+                        <li data-language="ru" style="--num: 1;"><button>Русский<img data-src="/src/icons/flags/RU.png" alt="RU" /></button></li>
+                        <li data-language="zh" style="--num: 2;"><button>中文<img data-src="/src/icons/flags/CN.png" alt="CN" /></button></li>
+                        <li data-language="uk" style="--num: 3;"><button>Українська<img data-src="/src/icons/flags/UA.png" alt="UA" /></button></li>
                     </ul>
             </button>
         </div>
     </footer>
 
-    <script src="src/js/init.js?v=9"></script>
+    <script src="src/js/init.js?v=10"></script>
 
     <svg id="svg-symbols" style="display: none;" xmlns="http://www.w3.org/2000/svg"><g>
         <symbol id="language" class="icon" viewBox="0 0 24 24">
