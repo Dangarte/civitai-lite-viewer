@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 10,
+    version: 11,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -22,7 +22,8 @@ const CONFIG = {
             gap: 16
         },
         modelPage: {
-            carouselItemWidth: 450
+            carouselItemWidth: 450,
+            carouselGap: 16
         },
         blurHashSize: 32, // minimum size of blur preview
     },
@@ -50,7 +51,8 @@ const SETTINGS = {
     nsfw: true,
     nsfwLevel: 'X',
     browsingLevel: 16,
-    hideImagesWithNoMeta: true,
+    groupImagesByPost: true,
+    hideImagesWithNoMeta: false,
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
 };
@@ -194,6 +196,7 @@ class CivitaiAPI {
 }
 
 // TODO: ! IMPORTANT ! Fix performance on model page with autoplay
+// UPD: These are some problems with Chromium, everything is fine in Firefox...
 class Controller {
     static api = new CivitaiAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
@@ -304,7 +307,7 @@ class Controller {
         this.appElement.querySelectorAll('video').forEach(el => el.pause());
         this.appElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
         this.appElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
-        this.appElement.querySelector('#tooltip')?.remove();
+        document.getElementById('tooltip')?.remove();
         this.appElement.classList.add('page-loading');
         this.appElement.setAttribute('data-page', pageId);
         if (paramString) this.appElement.setAttribute('data-params', paramString);
@@ -313,6 +316,7 @@ class Controller {
         if (pageId) document.querySelector(`#main-menu .menu a[href="${pageId}"]`)?.classList.add('active');
 
         const finishPageLoading = () => {
+            cleanupDetachedObservers();
             hideTimeError();
             if (pageNavigation === this.#pageNavigation) {
                 this.appElement.classList.remove('page-loading');
@@ -559,20 +563,23 @@ class Controller {
 
     static gotoModel(id, version = null) {
         const pageNavigation = this.#pageNavigation;
-        const fragment = new DocumentFragment();
-        const appContent = insertElement('div', fragment, { class: 'app-content' });
         const navigationState = {...this.#state};
 
         const insertModelPage = model => {
+            const appContent = createElement('div', { class: 'app-content' });
             const modelVersion = version ? model.modelVersions.find(v => v.name === version) ?? model.modelVersions[0] : model.modelVersions[0];
             document.title = `${model.name} - ${modelVersion.name} | ${modelVersion.baseModel} | ${model.type} | ${CONFIG.title}`;
             appContent.appendChild(this.#genModelPage(model, version));
 
+            this.appElement.textContent = '';
+            this.appElement.appendChild(appContent);
+
             // Images
-            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
+            const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
             const imagesTitle = insertElement('h1', appContentWide, { style: 'justify-content: center;' });
             imagesTitle.appendChild(getIcon('image'));
             insertElement('a', imagesTitle, { href: `#images?model=${id}&modelversion=${modelVersion.id}` }, window.languagePack?.text?.images ?? 'Images');
+            this.appElement.appendChild(appContentWide);
 
             if (this.#state.imagesLoaded) {
                 const imagesList = this.#genImages({ modelId: model.id, modelVersionId: modelVersion.id, state: navigationState });
@@ -594,8 +601,6 @@ class Controller {
         if (cachedModel) {
             console.log('Loaded model (cache):', cachedModel);
             insertModelPage(cachedModel);
-            this.appElement.textContent = '';
-            this.appElement.appendChild(fragment);
             return;
         }
 
@@ -608,11 +613,10 @@ class Controller {
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
+            const appContent = createElement('div', { class: 'app-content' });
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-        }).finally(() => {
-            if (pageNavigation !== this.#pageNavigation) return;
             this.appElement.textContent = '';
-            this.appElement.appendChild(fragment);
+            this.appElement.appendChild(appContent);
         });
     }
 
@@ -773,6 +777,7 @@ class Controller {
         }
     }
 
+    // TODO: Add collapsing descriptions if they are too long
     static #genModelPage(model, version = null) {
         const modelVersion = version ? model.modelVersions.find(v => v.name === version) ?? model.modelVersions[0] : model.modelVersions[0];
         const page = createElement('div', { class: 'model-page', 'data-model-id': model.id });
@@ -824,18 +829,20 @@ class Controller {
         model.tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
 
         const modelVersionsWrap = insertElement('div', page, { class: 'badges model-versions' });
+        const modelVersionsElements = [];
         model.modelVersions.forEach(version => {
             const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.name)}`;
             const isActive = version.name === modelVersion.name;
-            version.element = insertElement('a', modelVersionsWrap, { class: isActive ? 'badge active' : 'badge', href, tabindex: -1 }, version.name);
+            const button = insertElement('a', modelVersionsWrap, { class: isActive ? 'badge active' : 'badge', href, tabindex: -1 }, version.name);
+            modelVersionsElements.push(button);
         });
-        model.modelVersions[0]?.element.setAttribute('tabindex', 0);
+        modelVersionsElements[0]?.setAttribute('tabindex', 0);
         
         let fakeIndex = 0;
         const setFakeFocus = index => {
             modelVersionsWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
-            model.modelVersions[index].element.setAttribute('tabindex', 0);
-            model.modelVersions[index].element.focus();
+            modelVersionsElements[index].setAttribute('tabindex', 0);
+            modelVersionsElements[index].focus();
         };
         modelVersionsWrap.addEventListener('keydown', e => {
             if (e.ctrlKey) return;
@@ -853,31 +860,44 @@ class Controller {
 
         // Model preview
         const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
-        const previewList = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel).map((media, index) => {
-            const ratio = +(media.width/media.height).toFixed(3);
+        const previewImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+        const generateMediaPreview = media => {
+            const ratio = +(media.width/media.height).toFixed(4);
             const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
             if (!media.id && id) media.id = id;
             const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, 'data-id': id ?? -1, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
-            const itemWidth = ratio > 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
-            const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, loading: index > 3 ? 'lazy' : undefined, taget: 'model-preview', allowAnimated: true });
+            const itemWidth = ratio >= 1.5 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
+            const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, loading: undefined, taget: 'model-preview', allowAnimated: true });
             item.appendChild(mediaElement);
-            return { element: item, isWide: ratio > 1.5 };
+            return item;
+        };
+        const previewList = previewImages.map((media, index) => {
+            const element = index <= 2 ? generateMediaPreview(media) : null;
+            return { id: media.id, data: media, element, width: media.width, height: media.height, isWide: media.width/media.height >= 1.5 };
         });
-        modelPreviewWrap.appendChild(this.#genCarousel(previewList, { carouselItemWidth: CONFIG.appearance.modelPage.carouselItemWidth }));
-        // modelPreviewWrap.addEventListener('click', e => {
-        //     const a = e.target.closest('a[href][data-id]');
-        //     const id = Number(a?.getAttribute('data-id'));
-        // }, { capture: true });
+        // Try to insert a picture from the previous page, if available
+        if (previewList[0]) this.#genMediaPreviewFromPrevPage(previewList[0].element, previewList[0].id);
+        if (previewList[1]) this.#genMediaPreviewFromPrevPage(previewList[1].element, previewList[1].id);
 
-        // const hideLongDescription = el => {
-        //     el.classList.add('hide-long-description');
-        //     const showMore = createElement('button', { class: 'show-more' }, 'Show more');
-        //     el.prepend(showMore);
-        //     showMore.addEventListener('click', () => {
-        //         el.classList.remove('hide-long-description');
-        //         showMore.remove();
-        //     }, { once: true });
-        // };
+        const carouselWrap = new InfiniteCarousel(previewList, {
+            gap: CONFIG.appearance.modelPage.carouselGap,
+            itemWidth: CONFIG.appearance.modelPage.carouselItemWidth,
+            generator: generateMediaPreview,
+            onElementRemove: (card, item) => this.#onCardRemoved(card, item),
+            visibleCount: 2,
+        });
+        modelPreviewWrap.appendChild(carouselWrap);
+
+        const hideLongDescription = el => {
+            el.classList.add('hide-long-description');
+            const showMore = createElement('button', { class: 'show-more' });
+            showMore.appendChild(getIcon('arrow_down'));
+            el.appendChild(showMore);
+            showMore.addEventListener('click', () => {
+                el.classList.remove('hide-long-description');
+                showMore.remove();
+            }, { once: true });
+        };
 
         // Model version description block
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
@@ -893,12 +913,16 @@ class Controller {
             const trainedWordsContainer = insertElement('div', modelVersionDescription, { class: 'trigger-words' });
             modelVersion.trainedWords.forEach(word => {
                 // Remove commas at the end or beginning of the trigger, it seems that constructions like "some_tag, " are not what should be there
-                word = word.trim();
-                if (word.startsWith(',')) word = word.slice(1);
-                if (word.endsWith(',')) word = word.slice(0, -1);
-                word = word.trim();
+                // Add spaces after "," and "."
+                if (!SETTINGS.disablePromptFormatting) {
+                    word = word.trim();
+                    if (word.startsWith(',')) word = word.slice(1);
+                    if (word.endsWith(',')) word = word.slice(0, -1);
+                    word = word.replace(/(,|\.)(?!\s)/g, '$1 ');
+                    word = word.trim();
+                }
 
-                const item = insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, word);
+                const item = insertElement('code', trainedWordsContainer, { class: 'trigger-word' }, `${word} `);
                 const copyButton = getIcon('copy');
                 item.appendChild(copyButton);
                 copyButton.addEventListener('click', () => {
@@ -922,14 +946,14 @@ class Controller {
             const modelVersionContainer = safeParseHTML(modelVersion.description);
             modelVersionDescription.appendChild(modelVersionContainer);
             this.#analyzeModelDescription(modelVersionDescription);
-            // if (calcCharsInString(modelVersion.description, '\n', 40)) hideLongDescription(modelVersionDescription);
+            if (calcCharsInString(modelVersion.description, '\n', 80)) hideLongDescription(modelVersionDescription);
         }
 
         // Model descrition
         const modelDescription = insertElement('div', page, { class: 'model-description' });
         model.description = this.#analyzeModelDescriptionString(model.description);
         modelDescription.appendChild(safeParseHTML(model.description));
-        // if (calcCharsInString(model.description, '\n', 40)) hideLongDescription(modelDescription);
+        if (calcCharsInString(model.description, '\n', 80)) hideLongDescription(modelDescription);
 
         // Analyze descriptions and find patterns to improve display
         this.#analyzeModelDescription(modelDescription);
@@ -946,98 +970,97 @@ class Controller {
     static #genImageFullPage(media) {
         const fragment = new DocumentFragment();
 
+        const cachedPostInfo = this.#cache.posts.get(`${media.postId}`);
+        const postInfo = cachedPostInfo ?? new Set([media]);
+        const mediaById = new Map();
+
+        const carouselItems = [];
+        let mediaGenerator;
+        if (postInfo.size > 1) {
+            mediaGenerator = item => {
+                const mediaElement = this.#genMediaElement({ media: item, width: item.width, resize: false, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager', playsinline: false });
+                mediaElement.style.width = `${item.width}px`;
+                mediaElement.classList.add('media-full-preview');
+                return mediaElement;
+            }
+            postInfo.forEach(item => {
+                mediaById.set(item.id, item);
+                carouselItems.push({ id: item.id, data: item, width: item.width, height: item.height, index: carouselItems.length });
+            });
+        }
+
+        const insertMeta = (media, container) => {
+            // Creator
+            container.appendChild(this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` }));
+
+            // Stats
+            const statsList = [
+                { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
+                { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
+                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
+                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
+                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
+                // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
+            ];
+            container.appendChild(this.#genStats(statsList));
+
+            // Post link
+            if (!cachedPostInfo || cachedPostInfo.size > 1) {
+                const postLink = insertElement('a', container, { class: 'image-post badge', href: `#images?post=${media.postId}` });
+                if (cachedPostInfo) postLink.appendChild(document.createTextNode(cachedPostInfo.size));
+                postLink.appendChild(getIcon('image'));
+                postLink.appendChild(document.createTextNode(window.languagePack?.text?.view_post ?? 'View Post'));
+            }
+
+            // NSFW LEvel
+            if (media.nsfwLevel !== 'None') insertElement('div', container, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+
+            // Generation info
+            if (media.meta) container.appendChild(this.#genImageGenerationMeta(media.meta));
+            else insertElement('div', container, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
+
+            insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        };
+
         // Full image
-        const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager' });
+        const mediaElement = this.#genMediaElement({ media, width: media.width, resize: false, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager', playsinline: false });
         mediaElement.style.width = `${media.width}px`;
         mediaElement.classList.add('media-full-preview');
-        fragment.appendChild(mediaElement);
-
         // Try to insert a picture from the previous page, if available
-        const previewImage = document.querySelector(`.media-container[data-id="${media.id}"] .media-element:not(.loading)`)?.cloneNode(true);
-        if (previewImage) {
-            const fullMedia = mediaElement.querySelector('.media-element');
-            const isImage = fullMedia.tagName === 'IMG';
+        this.#genMediaPreviewFromPrevPage(mediaElement, media.id);
 
-            const onFullMediaReady = () => {
-                animateElement(previewImage, {
-                    keyframes: { opacity: [1, 0] },
-                    duration: 200,
-                    easing: 'ease'
-                }).then(() => previewImage.remove());
-            };
-
-            previewImage.classList.add('full-image-preview');
-            mediaElement.prepend(previewImage);
-
-            const waitForReady = async () => {
-                if (isImage) {
-                    if (fullMedia.complete && fullMedia.naturalWidth !== 0) {
-                        await fullMedia.decode?.().catch(() => {});
-                        onFullMediaReady();
-                    } else {
-                        fullMedia.addEventListener('load', async () => {
-                            await fullMedia.decode?.().catch(() => {});
-                            onFullMediaReady();
-                        }, { once: true });
-                    }
-                } else {
-                    if (fullMedia.readyState >= 2) {
-                        requestAnimationFrame(onFullMediaReady);
-                    } else {
-                        fullMedia.addEventListener('loadeddata', () => {
-                            requestAnimationFrame(onFullMediaReady);
-                        }, { once: true });
-                    }
+        if (carouselItems.length > 1) {
+            const item = carouselItems.find(item => item.id === media.id);
+            item.element = mediaElement;
+            const carouselElement = new InfiniteCarousel(carouselItems, {
+                gap: 0,
+                visibleCount: 1,
+                active: item.index,
+                itemWidth: 800,
+                generator: mediaGenerator,
+                onElementRemove: (card, item) => this.#onCardRemoved(card, item),
+                onscroll: id => {
+                    metaContainer.textContent = '';
+                    insertMeta(mediaById.get(id), metaContainer);
                 }
-            };
+            });
+            fragment.appendChild(carouselElement);
+        } else fragment.appendChild(mediaElement);
 
-            waitForReady();
-        }
 
         const metaContainer = createElement('div', { class: 'media-full-meta' });
-
-        // Creator
-        metaContainer.appendChild(this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` }));
-
-        // Stats
-        const statsList = [
-            { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
-            { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-            { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
-            { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
-            { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
-            // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
-        ];
-        metaContainer.appendChild(this.#genStats(statsList));
-
-        // Post link
-        const postInfo = media.postId ? this.#cache.posts.get(`${media.postId}`) : null;
-        if (media.postId && (!postInfo || postInfo.size > 1)) {
-            const postLink = insertElement('a', metaContainer, { class: 'image-post badge', href: `#images?post=${media.postId}` });
-            if (postInfo) postLink.appendChild(document.createTextNode(`x${postInfo.size}`));
-            postLink.appendChild(getIcon('image'));
-            postLink.appendChild(document.createTextNode(window.languagePack?.text?.view_post ?? 'View Post'));
-        }
-
-        // NSFW LEvel
-        if (media.nsfwLevel !== 'None') insertElement('div', metaContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
-
-        // Generation info
-        if (media.meta) metaContainer.appendChild(this.#genImageGenerationMeta(media.meta));
-        else insertElement('div', metaContainer, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
-
-        insertElement('a', metaContainer, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
-
+        insertMeta(media, metaContainer);
         fragment.appendChild(metaContainer);
 
         return fragment;
     }
 
-    // TODO: Add support for grouping images by posts
     // TODO: Add attempt to restore previous list when navigating through history
     static #genImages(options = {}) {
         const { modelId, modelVersionId, postId, username, state: navigationState = {...this.#state} } = options;
         let query;
+        const hideWithoutMeta = SETTINGS.hideImagesWithNoMeta && !postId && !username;
+        let groupingByPost = SETTINGS.groupImagesByPost && !postId;
         const firstPageNavigation = this.#pageNavigation;
         const fragment = new DocumentFragment();
         const listWrap = createElement('div', { id: 'images-list', class: 'cards-loading' });
@@ -1097,26 +1120,31 @@ class Controller {
             const pageNavigation = this.#pageNavigation;
             console.log('Loaded images:', images);
 
-            if (SETTINGS.hideImagesWithNoMeta) {
+            if (hideWithoutMeta) {
                 const countAll = images.length;
                 images = images.filter(image => image.meta);
                 if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without meta information about generation`);
             }
 
-            layout.addItems(images.map(data => {
-                const aspectRatio = data.width / data.height;
-                return { id: data.id, aspectRatio, data };
-            }));
-
             images.forEach(image => {
                 if (imagesMetaById.has(image.id)) return;
                 imagesMetaById.set(image.id, image);
 
-                if (image.postId) {
-                    if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
-                    postsById.get(image.postId).add(image);
-                }
+                if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
+                postsById.get(image.postId).add(image);
             });
+
+            const postsInList = new Set();
+            layout.addItems(images.map(image => {
+                if (groupingByPost) {
+                    if (postsInList.has(image.postId)) return null;
+                    postsInList.add(image.postId);
+                }
+
+                const aspectRatio = image.width / image.height;
+                if (groupingByPost) return { id: image.postId, aspectRatio, data: postsById.get(image.postId) };
+                else return { id: image.id, aspectRatio, data: image }
+            }).filter(Boolean));
 
             if (query.cursor) {
                 const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
@@ -1130,8 +1158,6 @@ class Controller {
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
             }
-
-            console.log('TODO: Add support for grouping images by posts', postsById);
         };
 
         const loadImages = () => {
@@ -1145,6 +1171,7 @@ class Controller {
                 username,
                 postId
             };
+            groupingByPost = SETTINGS.groupImagesByPost && !postId;
             this.#state.imagesFilter = JSON.stringify(query);
 
             listElement.querySelectorAll('video').forEach(el => el.pause());
@@ -1208,9 +1235,8 @@ class Controller {
         const rules = [
             //
             { regex: '<br /></p>', replacement: '</p>'  },
-            { regex: /(<p>@\w+{[\s\S]*?>}<\/p>)/gim, replacement: block => {
+            { regex: /<(?:p|code)>(@\w+{[\s\S]*?})<\/(?:p|code)>/gim, replacement: (_, block) => {
                 const flat = block
-                    .replace(/<\/?p>/gi, '')   // Remove <p> and </p>
                     .replace(/\s*\n\s*/g, ' ') // Remove \n
                     .trim();
 
@@ -1291,7 +1317,7 @@ class Controller {
     static #analyzePromptCode(codeElement) {
         if (!codeElement) return;
         // Some prompts are hard to read due to missing spaces after commas
-        const fixedText = codeElement.textContent.replace(/,(?!\s)/g, ', ').trim();
+        const fixedText = codeElement.textContent.replace(/(,|\.)(?!\s)/g, '$1 ').trim();
 
         // Highlight keywords and brackets of tag weight
         const keywords = new Set([ 'BREAK', '{PROMPT}' ]);
@@ -1305,13 +1331,18 @@ class Controller {
                 fragment.appendChild(lastTextNode);
             }
         };
-        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|https:\/\/civitai\.com\/[^\s]+|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
+        // civitai. com - because after the dot a space is added in fixedText
+        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|https:\/\/civitai\. ?com\/[^\s]+|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
 
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i];
 
             if (/^<lora:[^:>]+:[^>]+>$/.test(token)) insertElement('span', fragment, { class: 'lora' }, token);
-            else if (token.indexOf('https://civitai.com/') === 0 && isURL(token)) insertElement('a', fragment, { class: 'link', href: token, target: '_blank', rel: 'noopener' }, token);
+            else if (token.indexOf('https://civitai. com/') === 0) {
+                const url = token.replace(/(.|\.)\s+/g, '$1');
+                if (isURL(url)) insertElement('a', fragment, { class: 'link', href: url, target: '_blank', rel: 'noopener' }, url);
+                else insertElement('span', fragment, { class: 'link' }, url);
+            }
             else if (/^[\[\]()]+$/.test(token)) insertElement('span', fragment, { class: 'bracket' }, token);
             else if (/^:-?[0-9.]+$/.test(token) && tokens[i + 1]?.[0] === ')') insertElement('span', fragment, { class: 'weight' }, token);
             else if (keywords.has(token)) insertElement('span', fragment, { class: 'keyword' }, token);
@@ -1327,10 +1358,9 @@ class Controller {
         codeElement.appendChild(fragment);
     }
 
+    // TODO: remixOfId from extra fields
     static #genImageGenerationMeta(meta) {
         const container = createElement('div', { class: 'generation-info' });
-
-        // TODO: remixOfId from extra fields
 
         // params
         if (meta.baseModel) insertElement('code', container, { class: 'prompt meta-baseModel' }, meta.baseModel);
@@ -1435,13 +1465,14 @@ class Controller {
             const createResourceRowContent = info => {
                 const { title, version, href, weight = 1, type, baseModel } = info;
 
-                const el = createElement(href ? 'a' : 'div', { class: 'meta-resource', href });
+                const el = createElement(href ? 'a' : 'div', { class: 'meta-resource' });
+                if (href) el.href = href;
                 const titleElement = insertElement('span', el, { class: 'meta-resource-name' }, `${title} ` );
                 insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': baseModel }, type);
                 if(version) insertElement('strong', titleElement, undefined, version)
                 if (weight !== 1) {
                     const weightRounded = +weight.toFixed(4);
-                    const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, `:${weightRounded}`);
+                    const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, weightRounded);
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', weight);
                 }
                 return el;
@@ -1460,8 +1491,8 @@ class Controller {
                     if (!modelName) return;
 
                     item.trainedWords.forEach(word => {
-                        word = word.indexOf(',') === -1 ? word.trim() : word.replace(/,(?!\s)/g, ', ').trim(); // This is necessary because the prompt block is formatted in a similar way
-                        const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
+                        word = word.indexOf(',') === -1 && word.indexOf('.') === -1 ? word.trim() : word.replace(/(,|\.)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                        const splitWords = word.split(/(,|\.)/).map(w => w.trim()).filter(Boolean);
 
                         splitWords.forEach(w => {
                             trainedWords.add(w);
@@ -1483,7 +1514,7 @@ class Controller {
 
                 const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
 
-                const escapedWords = Array.from(trainedWords).map(w =>
+                const escapedWords = Array.from(trainedWords).sort((a, b) => b.length - a.length).map(w =>
                     w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
                 );
                 const wordRegex = new RegExp(`\\b(${escapedWords.join('|')})\\b`, 'gi');
@@ -1652,6 +1683,12 @@ class Controller {
     }
 
     static #genImageCard(image, options) {
+        let postSize = 1;
+        if (image instanceof Set) {
+            postSize = image.size;
+            [image] = image;
+        };
+
         const { isVisible, itemWidth, itemHeight } = options ?? {};
         const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? Math.round(itemWidth / (image.width/image.height))}px;` });
 
@@ -1675,9 +1712,13 @@ class Controller {
         // Badges (NSFW Level and Has Meta)
         const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
         if (image.nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+        if (postSize > 1) {
+            const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, postSize);
+            metaIconContainer.appendChild(getIcon('image'));
+        }
         if (image.meta) {
             const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': window.languagePack?.text?.hasMeta ?? 'Generation info' });
-            metaIconContainer.appendChild(getIcon('tag'));
+            metaIconContainer.appendChild(getIcon('information'));
         }
 
         // Stats
@@ -1711,57 +1752,7 @@ class Controller {
         return container;
     }
 
-    static #genCarousel(list, { carouselItemWidth = 400, carouselGap = 12 }) {
-        const carousel = createElement('div', { class: 'carousel', style: `--carousel-item-width: ${carouselItemWidth}px; --carousel-gap: ${carouselGap}px;` });
-        const carouselItems = insertElement('div', carousel, { class: 'carousel-items' });
-        const listElements = [];
-
-        if (list.length === 2) list.forEach(item => item.isWide = false);
-
-        const scrollMax = list.reduce((currentScroll, { element, isWide = false }) => {
-            const carouselItem = insertElement('div', carouselItems, { class: isWide ? 'carousel-item carousel-item-wide' : 'carousel-item' });
-            carouselItem.appendChild(element);
-            listElements.push({ element: carouselItem, scrollLeft: currentScroll, isWide });
-            return currentScroll + (isWide ? carouselItemWidth * 2 : carouselItemWidth) + carouselGap;
-        }, 0);
-
-        if (listElements.length > 2) {
-            let scrollIndex = 0;
-            const carouselPrev = insertElement('button', carousel, { class: 'carousel-button', 'data-direction': 'prev' });
-            const carouselNext = insertElement('button', carousel, { class: 'carousel-button', 'data-direction': 'next' });
-            carouselPrev.appendChild(getIcon('arrow_left'));
-            carouselNext.appendChild(getIcon('arrow_right'));
-
-            const scrollToElement = index => {
-                const item = listElements[index];
-                carouselItems.style.transform = (item.isWide && !item.scrollLeft) ? `translateX(${carouselGap / 2}px)` : `translateX(-${item.isWide ? Math.max(item.scrollLeft - carouselGap / 2, 0): item.scrollLeft}px)`;
-                if (listElements.length > 2) {
-                    if (index + 1 >= listElements.length) {
-                        listElements[0].element.style.transform = `translateX(${scrollMax}px)`;
-                        listElements[1].element.style.transform = `translateX(${scrollMax}px)`;
-                    } else if (index < 3) {
-                        listElements[0].element.style.transform = `translateX(0px)`;
-                        listElements[1].element.style.transform = `translateX(0px)`;
-                    }
-                }
-            };
-    
-            carouselPrev.addEventListener('click', () => {
-                scrollIndex = scrollIndex > 0 ? (scrollIndex - 1) % listElements.length : listElements.length - 1;
-                scrollToElement(scrollIndex);
-            }, { passive: true });
-            carouselNext.addEventListener('click', () => {
-                scrollIndex = (scrollIndex + 1) % listElements.length;
-                scrollToElement(scrollIndex);
-            }, { passive: true });
-
-            scrollToElement(0);
-        }
-
-        return carousel;
-    }
-
-    static #genMediaElement({ media, width, height = undefined, resize = true, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false }) {
+    static #genMediaElement({ media, width, height = undefined, resize = true, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true }) {
         const mediaContainer = createElement('div', { class: 'media-container', 'data-id': media.id ?? -1 });
         let mediaElement;
         const lazy = loading === 'lazy';
@@ -1791,11 +1782,11 @@ class Controller {
             const src = original ? url : url.replace('optimized=true', 'optimized=true,transcode=true');
             const poster = resize && !original ? `${src}&format=webp` : src;
             const videoSrc = src.replace(/anim=false,?/, '');
-            mediaElement = insertElement('video', mediaContainer, { class: 'media-element loading',  muted: '', loop: '', playsInline: '', crossorigin: 'anonymous', preload: 'none', 'data-nsfw-level': media.nsfwLevel });
+            mediaElement = insertElement('video', mediaContainer, { class: 'media-element loading',  muted: '', loop: '', playsinline: '', crossorigin: 'anonymous', preload: 'none', 'data-nsfw-level': media.nsfwLevel });
             mediaElement.volume = 0;
             mediaElement.muted = true;
             mediaElement.loop = true;
-            mediaElement.playsInline = true;
+            if (playsinline) mediaElement.playsinline = true;
             if (controls) mediaElement.controls = true;
             if (lazy) {
                 onTargetInViewport(mediaElement, () => {
@@ -1810,12 +1801,11 @@ class Controller {
                 enableAutoPlayOnVisible(mediaElement);
                 mediaContainer.classList.add('media-video', 'video-autoplay');
                 mediaElement.autoplay = true;
-                mediaElement.setAttribute('data-autoplay-src', videoSrc);
+                // mediaElement.setAttribute('data-autoplay-src', videoSrc);
             } else {
                 mediaContainer.classList.add('media-video', 'video-hover-play');
-                const videoPlayButton = getIcon('play');
-                videoPlayButton.classList.add('video-play-button');
-                mediaContainer.appendChild(videoPlayButton);
+                const videoPlayButton = insertElement('div',mediaContainer, { class: 'video-play-button' });
+                videoPlayButton.appendChild(getIcon('play'));
             }
         }
         if (((media.type === 'image' && (!mediaElement.complete || mediaElement.naturalWidth === 0)) || (media.type === 'video' && mediaElement.readyState < 2))) {
@@ -1823,45 +1813,134 @@ class Controller {
         } else {
             mediaElement.classList.remove('loading');
         }
-        mediaElement.style.aspectRatio = (media.width/media.height).toFixed(4);
+        mediaElement.style.aspectRatio = (ratio).toFixed(4);
         return mediaContainer;
+    }
+
+    static #genMediaPreviewFromPrevPage(mediaElement, mediaId) {
+        const previewImage = this.appElement.querySelector(`.media-container[data-id="${mediaId}"] .media-element:not(.loading)`)?.cloneNode(true);
+        if (!previewImage) return;
+
+        const fullMedia = mediaElement.querySelector('.media-element');
+        const isImage = fullMedia?.tagName === 'IMG';
+        if (!fullMedia) return;
+
+        const previewWrap = createElement('div', { class: 'media-preview-wrapper' });
+        previewImage.classList.add('media-preview-image');
+        previewWrap.appendChild(previewImage);
+        if (previewImage.tagName === 'VIDEO' && !previewImage.paused) previewImage.pause();
+        insertElement('div', previewWrap, { class: 'media-loading-indicator' });
+
+        let isReady = false;
+        const onFullMediaReady = () => {
+            if (isReady) return;
+            isReady = true;
+            animateElement(previewWrap, {
+                keyframes: { opacity: [1, 0] },
+                duration: 200,
+                easing: 'ease'
+            }).then(() => previewWrap.remove());
+        };
+        const waitForReady = async () => {
+            if (isImage) {
+                if (fullMedia.complete && fullMedia.naturalWidth !== 0) {
+                    await fullMedia.decode?.().catch(() => {});
+                    onFullMediaReady();
+                } else {
+                    fullMedia.addEventListener('load', async () => {
+                        await fullMedia.decode?.().catch(() => {});
+                        onFullMediaReady();
+                    }, { once: true });
+                }
+            } else {
+                if (fullMedia.readyState >= 2) {
+                    requestAnimationFrame(onFullMediaReady);
+                } else {
+                    // since the video may have preload=none, need to track at least the loading of the poster
+                    const posterUrl = fullMedia.poster;
+                    if (posterUrl) {
+                        const posterImg = new Image();
+                        posterImg.onload = () => requestAnimationFrame(onFullMediaReady);
+                        posterImg.src = posterUrl;
+                    }
+
+                    fullMedia.addEventListener('loadeddata', () => {
+                        requestAnimationFrame(onFullMediaReady);
+                    }, { once: true });
+                }
+            }
+        };
+
+        mediaElement.prepend(previewWrap);
+        waitForReady();
     }
 
     static #genImagesListFilters(onAnyChange) {
         const filterWrap = createElement('div', { class: 'list-filters' });
 
+        // Group posts
+        const groupImagesByPost = this.#genBoolean({
+            onchange: ({ newValue }) => {
+                SETTINGS.groupImagesByPost = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.groupImagesByPost,
+            label: window.languagePack?.text?.group_posts ?? 'Group posts'
+        });
+        groupImagesByPost.element.classList.add('list-filter');
+        filterWrap.appendChild(groupImagesByPost.element);
+
         // Sort list
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest", "Random" ];
-        const sortList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.sort_images = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.sort_images, options: sortOptions, labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ])) });
+        const sortList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.sort_images = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.sort_images,
+            options: sortOptions,
+            label: window.languagePack?.text?.sort ?? 'Sort',
+            labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ]))
+        });
         sortList.element.classList.add('list-filter');
         filterWrap.appendChild(sortList.element);
 
         // Period list
         const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
-        const periodList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.period_images = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.period_images, options: periodOptions, labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ])) });
+        const periodList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.period_images = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.period_images,
+            options: periodOptions,
+            label: window.languagePack?.text?.period ?? 'Pediod',
+            labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ]))
+        });
         periodList.element.classList.add('list-filter');
         filterWrap.appendChild(periodList.element);
 
         // NSFW list
         const browsingLevels = {
-            'None': 0,
+            'None': 1,
             'Soft': 2,
             'Mature': 4,
             'X': 16,
             'true': 32,
         };
         const nsfwOptions = [ 'None', 'Soft', 'Mature', 'X', 'true' ];
-        const nsfwList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.nsfwLevel = newValue;
-            SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
-            onAnyChange?.();
-        }, value: SETTINGS.nsfwLevel, options: nsfwOptions, labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ])) });
+        const nsfwList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.nsfwLevel = newValue;
+                SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
+                SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
+                onAnyChange?.();
+            },
+            value: SETTINGS.nsfwLevel,
+            options: nsfwOptions,
+            label: window.languagePack?.text?.nsfw ?? 'NSFW',
+            labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ]))
+        });
         nsfwList.element.classList.add('list-filter');
         filterWrap.appendChild(nsfwList.element);
 
@@ -1926,10 +2005,16 @@ class Controller {
             "Other"
         ];
         const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? value ]));
-        const modelsList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
-            onAnyChange?.();
-        }, value: SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All', options: modelsOptions, labels: modelLabels });
+        const modelsList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
+                onAnyChange?.();
+            },
+            value: SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All',
+            options: modelsOptions,
+            label: window.languagePack?.text?.model ?? 'Model',
+            labels: modelLabels
+        });
         modelsList.element.classList.add('list-filter');
         filterWrap.appendChild(modelsList.element);
 
@@ -1937,48 +2022,87 @@ class Controller {
         const typeOptions = [ "All", "Checkpoint", "TextualInversion", "Hypernetwork", "AestheticGradient", "LORA", "LoCon", "DoRA", "Controlnet", "Upscaler", "MotionModule", "VAE", "Poses", "Wildcards", "Workflows", "Detection", "Other" ];
         const typeLabelsDefault = { "All": "All", "Checkpoint": "Checkpoint", "TextualInversion": "Textual Inversion", "Hypernetwork": "Hypernetwork", "AestheticGradient": "Aesthetic Gradient", "LORA": "LORA", "LoCon": "LoCon", "DoRA": "DoRA", "Controlnet": "СontrolNet", "Upscaler": "Upscaler", "MotionModule": "Motion", "VAE": "VAE", "Poses": "Poses", "Wildcards": "Wildcards", "Workflows": "Workflows", "Detection": "Detection", "Other": "Other" };
         const typeLabels = Object.fromEntries(typeOptions.map(value => [ value, window.languagePack?.text?.typeOptions?.[value] ?? typeLabelsDefault[value] ?? value ]));
-        const typesList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.types = newValue === 'All' ? [] : [ newValue ];
-            onAnyChange?.();
-        }, value: SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All', options: typeOptions, labels: typeLabels });
+        const typesList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.types = newValue === 'All' ? [] : [ newValue ];
+                onAnyChange?.();
+            },
+            value: SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All',
+            options: typeOptions,
+            label: window.languagePack?.text?.type ?? 'Type',
+            labels: typeLabels
+        });
         typesList.element.classList.add('list-filter');
         filterWrap.appendChild(typesList.element);
 
         // Trained or merged
         const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
         const trainedOrMergedLabels = Object.fromEntries(trainedOrMergedOptions.map(value => [ value, window.languagePack?.text?.checkpointTypeOptions?.[value] ?? value ]));
-        const trainedOrMergedList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.checkpointType = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.checkpointType, options: trainedOrMergedOptions, labels: trainedOrMergedLabels });
+        const trainedOrMergedList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.checkpointType = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.checkpointType,
+            options: trainedOrMergedOptions,
+            labels: trainedOrMergedLabels
+        });
         trainedOrMergedList.element.classList.add('list-filter');
         filterWrap.appendChild(trainedOrMergedList.element);
 
         // Sort list
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
-        const sortList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.sort = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.sort, options: sortOptions, labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ])) });
+        const sortList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.sort = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.sort,
+            options: sortOptions,
+            label: window.languagePack?.text?.sort ?? 'Sort',
+            labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ]))
+        });
         sortList.element.classList.add('list-filter');
         filterWrap.appendChild(sortList.element);
 
         // Period list
         const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
-        const periodList = this.#genList({ onchange: ({ newValue }) => {
-            SETTINGS.period = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.period, options: periodOptions, labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ])) });
+        const periodList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.period = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.period,
+            options: periodOptions,
+            label: window.languagePack?.text?.period ?? 'Pediod',
+            labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ]))
+        });
         periodList.element.classList.add('list-filter');
         filterWrap.appendChild(periodList.element);
 
-        // NSFW toggle
-        const nsfwToggle = this.#genBoolean({ onchange: ({ newValue }) => {
-            SETTINGS.nsfw = newValue;
-            onAnyChange?.();
-        }, value: SETTINGS.nsfw, label: 'NSFW' });
-        nsfwToggle.element.classList.add('list-filter');
-        filterWrap.appendChild(nsfwToggle.element);
+        // NSFW list
+        const browsingLevels = {
+            'None': 1,
+            'Soft': 2,
+            'Mature': 4,
+            'X': 16,
+            'true': 32,
+        };
+        const nsfwOptions = [ 'None', 'Soft', 'Mature', 'X', 'true' ];
+        const nsfwList = this.#genList({
+            onchange: ({ newValue }) => {
+                SETTINGS.nsfwLevel = newValue;
+                SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
+                SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
+                onAnyChange?.();
+            },
+            value: SETTINGS.nsfwLevel,
+            options: nsfwOptions,
+            label: window.languagePack?.text?.nsfw ?? 'NSFW',
+            labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ]))
+        });
+        nsfwList.element.classList.add('list-filter');
+        filterWrap.appendChild(nsfwList.element);
 
         return filterWrap;
     }
@@ -2038,7 +2162,7 @@ class Controller {
         return { element, setValue };
     }
 
-    static #genList({ onchange, value, options, labels = {} }) {
+    static #genList({ onchange, value, options, labels = {}, label = '' }) {
         const element = createElement('button', { class: 'config config-list' });
         let currentValue = value;
         const list = {};
@@ -2046,7 +2170,7 @@ class Controller {
         options.forEach(key => list[key] = labels[key] ?? key);
         let listVisible = false, focusIndex = 0, forceReturnFocus = false;
 
-        const selectedOptionElement = insertElement('div', element, { class: 'list-selected' });
+        const selectedOptionElement = insertElement('div', element, { class: 'list-selected' }, label ? `${label}: ` : '');
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
         const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
@@ -2117,7 +2241,6 @@ class Controller {
             listElements[newValue]?.classList.add('option-selected');
             currentValue = newValue;
             selectedOptionTitle.textContent = list[newValue] ?? newValue;
-
         };
 
         element.addEventListener('focus', onfocus);
@@ -2384,7 +2507,7 @@ if (!document.hidden) {
 
 // =================================
 
-document.addEventListener('click', e => {
+document.body.addEventListener('click', e => {
     if (e.ctrlKey || e.altKey) return;
 
     const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
@@ -2416,7 +2539,7 @@ document.addEventListener("visibilitychange", () => {
     }
 }, { passive: true });
 
-document.addEventListener('mouseover', e => {
+document.body.addEventListener('mouseover', e => {
     if (e.sourceCapabilities?.firesTouchEvents) return;
 
     // tooltips
@@ -2431,7 +2554,7 @@ document.addEventListener('mouseover', e => {
     if (videoPLayback) return startVideoPlayEvent(videoPLayback);
 }, { passive: true, passive: true });
 
-document.addEventListener('focus', e => {
+document.body.addEventListener('focus', e => {
     // tooltips
     const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed])');
     if (lilpipe) {
@@ -2469,8 +2592,8 @@ function markMediaAsLoadedWhenReady(el) {
         });
     }
 }
-document.addEventListener('load', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
-document.addEventListener('canplay', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
+document.body.addEventListener('load', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
+document.body.addEventListener('canplay', e => markMediaAsLoadedWhenReady(e.target), { capture: true, passive: true });
 
 
 window.addEventListener('popstate', e => {
@@ -2483,6 +2606,8 @@ window.addEventListener('popstate', e => {
 let isPageScrolled = false;
 function onScroll() {
     const scrollTop = document.documentElement.scrollTop;
+    Controller.onScroll(scrollTop);
+
     if (scrollTop > 200) {
         if (!isPageScrolled) {
             isPageScrolled = true;
@@ -2492,8 +2617,6 @@ function onScroll() {
         isPageScrolled = false;
         document.body.classList.remove('page-scrolled');
     }
-
-    Controller.onScroll(scrollTop);
 }
 document.addEventListener('scroll', onScroll, { passive: true });
 

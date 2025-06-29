@@ -5,7 +5,9 @@ View a list of CivitAI models without lags!
 ---
 
 Unofficial CivitAI frontend created by **Dangart**
+
 Powered by [CivitAI public API](https://developer.civitai.com/docs/api/public-rest)
+
 Original site [civitai.com](https://civitai.com/)
 
 ---
@@ -24,6 +26,8 @@ Open the page at the link [CivitAI Lite Viewer](https://dangarte.github.io/civit
 
 The performance tab in the developer tools says that CivitAI does a lot of unnecessary things while you're just scrolling, why?
 
+While scrolling, you don't need to do anything heavy, just put new cards in the field of view...
+
 <p align="center">
     <img src="images/performance/civitai.png" alt="devtools: performance tab" />
     <br/>
@@ -33,8 +37,6 @@ The performance tab in the developer tools says that CivitAI does a lot of unnec
         civitai, ~10 seconds, 06/25/2025
     </em>
 </p>
-
-While scrolling, you don't need to do anything heavy, just put new cards in the field of view...
 
 <p align="center">
     <img src="images/performance/civitailite.png" alt="devtools: performance tab" />

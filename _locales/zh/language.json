@@ -10,7 +10,10 @@
         "download": "下载",
         "images": "图片",
         "view_post": "查看帖子",
-        "period": "时间范围",
+        "period": "周期",
+        "type": "类型",
+        "model": "模型",
+        "group_posts": "分组帖子",
         "resurces_used": "使用的资源",
         "openOnCivitAI": "在 CivitAI 上打开",
         "sort": "排序",
@@ -29,6 +32,12 @@
             "Most Reactions": "最多反应",
             "Most Comments": "最多评论",
             "Random": "随机"
+        },
+        "nsfwOptions": {
+            "None": "无",
+            "Soft": "轻",
+            "Mature": "成熟",
+            "true": "是"
         },
         "periodOptions": {
             "AllTime": "全部时间",

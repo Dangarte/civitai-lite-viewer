@@ -10,7 +10,10 @@
         "download": "Скачать",
         "images": "Изображения",
         "view_post": "Просмотреть запись",
-        "period": "Временной промеждуток",
+        "period": "Период",
+        "type": "Тип",
+        "model": "Модель",
+        "group_posts": "Группировать посты",
         "resurces_used": "Использованные ресурсы",
         "openOnCivitAI": "Открыть на CivitAI",
         "sort": "Сортировка",
@@ -29,6 +32,12 @@
             "Most Reactions": "Больше реакций",
             "Most Comments": "Больше комментариев",
             "Random": "Случайно"
+        },
+        "nsfwOptions": {
+            "None": "Нет",
+            "Soft": "Легко",
+            "Mature": "Взрослый",
+            "true": "Да"
         },
         "periodOptions": {
             "AllTime": "За все время",

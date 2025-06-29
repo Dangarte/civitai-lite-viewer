@@ -305,20 +305,20 @@ function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
     }
 }
 
-// TODO: Animate scroll to element
-// TODO: Editing elements (change data and recreate)
+// TODO: Animate scroll to element (when navigating with the keyboard)
+// TODO: Animation of changing the number of columns
 class MasonryLayout {
     #container;
     #generator;
     #options;
     #isPassive;
+    #allowUseElementFromAddItems = false; // A switch that allows elements to be reused when the number of columns changes
 
     #columns = [];
     #items = [];
     #itemsById = new Map();
     #inViewport = new Set();
     #focusedItem = null;
-    #bounds;
 
     #onScroll;
     #onResize;
@@ -354,10 +354,6 @@ class MasonryLayout {
 
     resize() {
         const options = this.#options;
-        this.#bounds = {
-            windowHeight: window.innerHeight,
-            containerOffsetTop: this.#container.offsetTop
-        };
         this.#columns = [];
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
         for(let i = 0; i < columnsCount; i++) {
@@ -367,30 +363,37 @@ class MasonryLayout {
             });
         }
 
-        this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
-
         // Recalculate the position of all elements
         const items = this.#items;
         if (items.length) {
-            this.#items.forEach(item => {
-                if (item.inDOM) {
-                    item.inDOM = false;    
-                    item.element.remove();
-                    this.#onElementRemove?.(item.element, item.data);
-                    delete item.element;
-                }
-            });
             this.#items = [];
             this.#inViewport = new Set();
             this.#itemsById = new Map();
+            this.#allowUseElementFromAddItems = true;
             this.addItems(items);
+            this.#allowUseElementFromAddItems = false;
+
+            items.forEach(item => {
+                const gridItem = this.#itemsById.get(item.id);
+                if (item.inDOM && !this.#inViewport.has(gridItem)) {
+                    gridItem.element.remove();
+                    this.#onElementRemove?.(gridItem.element, gridItem.data);
+                    delete gridItem.element;
+                }
+            });
         }
+
+        this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
     }
 
     addItems(items) {
         const options = this.#options;
+        const itemsToUpdate = new Map();
         items.forEach(item => {
-            if (this.#itemsById.has(item.id)) return;
+            if (this.#itemsById.has(item.id)) {
+                if (!itemsToUpdate.has(item.id)) itemsToUpdate.set(item.id, item.data);
+                return;
+            }
 
             const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
             const cardHeight = options.itemHeight ?? Math.round(options.itemWidth / item.aspectRatio);
@@ -406,21 +409,38 @@ class MasonryLayout {
                 inDOM: false
             };
 
+            if (this.#allowUseElementFromAddItems && item.element) gridItem.element = item.element;
+
             targetColumn.height += cardHeight + options.gap;
 
             this.#items.push(gridItem);
             this.#itemsById.set(item.id, gridItem);
         });
 
-        const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
-        this.#container.style.height = `${largestColumn.height - options.gap}px`;
+        // Recreate elements with new data
+        if (itemsToUpdate.size) {
+            itemsToUpdate.forEach((data, id) => {
+                const gridItem = this.#itemsById.get(id);
+                this.#inViewport.delete(gridItem);
+                if (!gridItem.inDOM) gridItem.data = data;
+                else {
+                    this.#onElementRemove?.(gridItem.element, gridItem.data);
+                    gridItem.element.remove();
+                    delete gridItem.element;
+                    gridItem.data = data;
+                    gridItem.inDOM = false;
+                }
+            });
+        }
 
         if (!this.#options.disableVirtualScroll) this.#handleScroll();
         else {
             this.#items.forEach(item => {
                 if (item.inDOM) return;
-                item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false });
-                item.element.tabIndex = -1;
+                if (!item.element) {
+                    item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false });
+                    item.element.tabIndex = -1;
+                }
                 item.element.style.left = `${item.boundLeft}px`;
                 item.element.style.top = `${item.boundTop}px`;
 
@@ -429,6 +449,9 @@ class MasonryLayout {
                 this.#inViewport.add(item);
             });
         }
+
+        const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
+        this.#container.style.height = `${largestColumn.height - options.gap}px`;
     }
 
     clear() {
@@ -575,11 +598,11 @@ class MasonryLayout {
     }
 
     #handleScroll(e) {
-        const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#bounds.containerOffsetTop;
+        const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
         const options = this.#options;
         const screenTop = innerScrollTop;
-        const screenBottom = innerScrollTop + this.#bounds.windowHeight;
-        const overscan = this.#bounds.windowHeight * options.overscan;
+        const screenBottom = innerScrollTop + window.innerHeight;
+        const overscan = window.innerHeight * options.overscan;
         const overscanTop = screenTop - overscan;
         const overscanBottom = screenBottom + overscan;
 
@@ -605,13 +628,14 @@ class MasonryLayout {
 
             if (!item.inDOM) {
                 item.inDOM = true;
-                item.element = this.#generator(item.data, {
-                    itemWidth: options.itemWidth,
-                    itemHeight: options.itemHeight,
-                    isVisible: true || item.boundBottom > screenTop && item.boundTop < screenBottom // isVisible - disable lazy loading
-                });
-
-                item.element.tabIndex = -1;
+                if (!item.element) {
+                    item.element = this.#generator(item.data, {
+                        itemWidth: options.itemWidth,
+                        itemHeight: options.itemHeight,
+                        isVisible: true || item.boundBottom > screenTop && item.boundTop < screenBottom // isVisible - disable lazy loading
+                    });
+                    item.element.tabIndex = -1;
+                }
                 item.element.style.left = `${item.boundLeft}px`;
                 item.element.style.top = `${item.boundTop}px`;
 
@@ -650,11 +674,181 @@ class MasonryLayout {
         const options = this.#options;
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
         if (columnsCount !== this.#columns.length) this.resize();
-        else {
-            this.#bounds = {
-                windowHeight: window.innerHeight,
-                containerOffsetTop: this.#container.offsetTop
+    }
+}
+
+class InfiniteCarousel {
+    #currentIndex = 0;
+    #generator;
+    #isAnimating = false;
+    #items = [];
+    #visibleItems = new Set();
+    #options = {};
+    #carouselWrap;
+    #itemsListWrap;
+    #onScroll;
+    #onElementRemove;
+    #carouselCurrentIndexElement;
+
+    constructor(list, options) {
+        this.#options.itemWidth = options.itemWidth || 450;
+        this.#options.visibleCount = options.visibleCount || 1;
+        this.#options.gap = options.gap ?? 12;
+        this.#currentIndex = options.active ?? 0;
+        this.#onScroll = options.onscroll;
+        this.#onElementRemove = options.onElementRemove;
+        this.#generator = options.generator;
+
+        list.forEach(({ id = this.#items.length, data, element, width, height, isWide = false }) => {
+            const aspectRatio = width / height;
+            const item = {
+                id,
+                data,
+                aspectRatio,
+                isWide,
+                inDOM: false
             };
+
+            if (element) {
+                const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
+                item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px;` });
+                item.element.appendChild(element);
+            }
+
+            this.#items.push(item);
+        });
+
+        const carouselWidth = this.#options.visibleCount * (this.#options.itemWidth + this.#options.gap) - this.#options.gap;
+        this.#carouselWrap = createElement('div', { class: 'carousel', style: `width: ${carouselWidth}px;` });
+        this.#itemsListWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-items', style: `--gap: ${this.#options.gap}px;` });
+
+        if (this.#items.reduce((sum, item) => sum + (item.isWide ? 2 : 1), 0) > this.#options.visibleCount) {
+            const carouselPrev = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'prev' });
+            const carouselNext = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'next' });
+            carouselPrev.appendChild(getIcon('arrow_left'));
+            carouselNext.appendChild(getIcon('arrow_right'));
+            carouselPrev.addEventListener('click', () => this.scrollTo(-1), { passive: true });
+            carouselNext.addEventListener('click', () => this.scrollTo(1), { passive: true });
+            const indexElementWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-button carousel-current-index' });
+            const currentIndexText = this.#options.visibleCount > 1 ? `${this.#currentIndex + 1}-${(this.#currentIndex + this.#options.visibleCount - 1) % this.#items.length + 1}` : this.#currentIndex + 1;
+            this.#carouselCurrentIndexElement = insertElement('span', indexElementWrap, undefined, currentIndexText);
+            indexElementWrap.appendChild(document.createTextNode(' / '));
+            insertElement('span', indexElementWrap, undefined, this.#items.length);
         }
+
+        this.updateVisibleElements(this.#currentIndex, this.#options.visibleCount);
+
+        return this.#carouselWrap;
+    }
+
+    updateVisibleElements(startIndex, itemsCount) {
+        const itemsToDisplay = [];
+        const totalItems = this.#items.length;
+        let displayedCells = 0;
+        let i = 0;
+
+        // Collect elements by number of cells
+        while (displayedCells < itemsCount && i < totalItems * 2) {
+            const index = (startIndex + i) % totalItems;
+            const item = this.#items[index];
+
+            if (!itemsToDisplay.includes(item)) {
+                itemsToDisplay.push(item);
+                displayedCells += item.isWide ? 2 : 1;
+            }
+
+            i++;
+        }
+
+        // Remove those that should no longer be there
+        for (const item of this.#visibleItems) {
+            if (!itemsToDisplay.includes(item)) {
+                this.#removeItemFromDOM(item);
+                this.#visibleItems.delete(item);
+            }
+        }
+
+        // Add the missing ones in the correct order
+        const visibleArray = Array.from(this.#visibleItems);
+        const firstVisible = visibleArray[0];
+        const containerIsEmpty = visibleArray.length === 0;
+
+        for (let i = 0; i < itemsToDisplay.length; i++) {
+            const item = itemsToDisplay[i];
+
+            if (!this.#visibleItems.has(item)) {
+                // If the container is empty or there are no elements, just add
+                if (containerIsEmpty || !firstVisible) {
+                    this.#addItemToDOM(item, false); // append
+                } else {
+                    // Insert in the correct order: if the element comes earlier than the first visible one — prepend
+                    const firstIndex = this.#items.indexOf(firstVisible);
+                    const itemIndex = this.#items.indexOf(item);
+                    const diff = (itemIndex - firstIndex + totalItems) % totalItems;
+                    const usePrepend = diff > totalItems / 2; // closer "back" than "forward"
+                    this.#addItemToDOM(item, usePrepend);
+                }
+
+                this.#visibleItems.add(item);
+            }
+        }
+    }
+
+    #addItemToDOM(item, usePrepend = false) {
+        if (!item.element) {
+            const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
+            item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px;` });
+            item.element.appendChild(this.#generator(item.data));
+        }
+        if (usePrepend) this.#itemsListWrap.prepend(item.element);
+        else this.#itemsListWrap.appendChild(item.element);
+        item.inDOM = true;
+    }
+
+    #removeItemFromDOM(item) {
+        item.inDOM = false;
+        item.element.remove();
+        this.#onElementRemove?.(item.element, item.data);
+        // delete item.element;
+    }
+
+    scrollTo(direction, animation = true) {
+        if (this.#isAnimating) return;
+
+        const totalItems = this.#items.length;
+        const newIndex = (totalItems + this.#currentIndex + direction) % totalItems;
+        if (this.#carouselCurrentIndexElement) {
+            const currentIndexText = this.#options.visibleCount > 1 ? `${newIndex + 1}-${(newIndex + this.#options.visibleCount - 1) % totalItems + 1}` : newIndex + 1;
+            this.#carouselCurrentIndexElement.textContent = currentIndexText;
+        }
+
+        if (animation) {
+            this.#isAnimating = true;
+            const startIndex = direction > 0 ? this.#currentIndex : newIndex;
+            this.updateVisibleElements(startIndex, this.#options.visibleCount + Math.abs(direction));
+
+            let shiftedCells = 0;
+            for (let i = 0; i < Math.abs(direction); i++) {
+                const index = (startIndex + i) % totalItems;
+                shiftedCells += this.#items[index].isWide ? 2 : 1;
+            }
+            const shiftX = shiftedCells * (this.#options.itemWidth + this.#options.gap);
+            animateElement(this.#itemsListWrap, {
+                keyframes: {
+                    transform: direction > 0 ? [ 'translateX(0px)', `translateX(${- shiftX}px)` ] : [ `translateX(${- shiftX}px)`, 'translateX(0px)' ]
+                },
+                duration: 300,
+                easing: 'cubic-bezier(0.33, 1, 0.68, 1)'
+            }).then(() => {
+                this.updateVisibleElements(newIndex, this.#options.visibleCount);
+                this.#isAnimating = false;
+            });
+        } else {
+            this.updateVisibleElements(newIndex, this.#options.visibleCount);
+        }
+
+        this.#currentIndex = newIndex;
+        const newItem = this.#items[this.#currentIndex];
+        this.#onScroll?.(newItem.id);
     }
 }

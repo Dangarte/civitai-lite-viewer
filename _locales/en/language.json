@@ -10,7 +10,10 @@
         "download": "Download",
         "images": "Images",
         "view_post": "View Post",
-        "period": "Time Period",
+        "period": "Period",
+        "type": "Type",
+        "model": "Model",
+        "group_posts": "Group posts",
         "resurces_used": "Resources Used",
         "openOnCivitAI": "Open on CivitAI",
         "sort": "Sort",
@@ -29,6 +32,12 @@
             "Most Reactions": "Most Reactions",
             "Most Comments": "Most Comments",
             "Random": "Random"
+        },
+        "nsfwOptions": {
+            "None": "None",
+            "Soft": "Soft",
+            "Mature": "Mature",
+            "true": "Yes"
         },
         "periodOptions": {
             "AllTime": "All Time",

@@ -11,6 +11,9 @@
         "images": "Зображення",
         "view_post": "Переглянути допис",
         "period": "Період",
+        "type": "Тип",
+        "model": "Модель",
+        "group_posts": "Групувати пости",
         "resurces_used": "Використані ресурси",
         "openOnCivitAI": "Відкрити на CivitAI",
         "sort": "Сортування",
@@ -29,6 +32,12 @@
             "Most Reactions": "Найбільше реакцій", 
             "Most Comments": "Найбільше коментарів", 
             "Random": "Випадково"
+        },
+        "nsfwOptions": {
+            "None": "Ні",
+            "Soft": "Легко",
+            "Mature": "Дорослий",
+            "true": "Так"
         },
         "periodOptions": {
             "AllTime": "За весь час",
