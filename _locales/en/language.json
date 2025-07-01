@@ -14,6 +14,8 @@
         "type": "Type",
         "model": "Model",
         "group_posts": "Group posts",
+        "hideWithoutPositivePrompt": "Hide without positive prompt",
+        "hideWithoutNegativePrompt": "Hide without negative prompt",
         "resurces_used": "Resources Used",
         "openOnCivitAI": "Open on CivitAI",
         "sort": "Sort",

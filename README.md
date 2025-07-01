@@ -5,9 +5,9 @@ View a list of CivitAI models without lags!
 ---
 
 Unofficial CivitAI frontend created by **Dangart**
-
+<br>
 Powered by [CivitAI public API](https://developer.civitai.com/docs/api/public-rest)
-
+<br>
 Original site [civitai.com](https://civitai.com/)
 
 ---

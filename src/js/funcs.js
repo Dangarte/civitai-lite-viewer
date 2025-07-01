@@ -459,6 +459,7 @@ class MasonryLayout {
         this.#inViewport = new Set();
         this.#itemsById = new Map();
         this.#focusedItem = null;
+        this.#container.textContent = '';
         this.resize();
     }
 

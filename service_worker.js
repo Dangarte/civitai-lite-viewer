@@ -110,7 +110,7 @@ async function cacheFetch(request, cacheControl) {
 
         let blob = await fetchResponse.blob();
         const forceDisableAnimation = request.url.includes(',anim=false,');
-        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.type) && !([ 'image/gif', 'image/apng' ].includes(blob.type))) || (forceDisableAnimation && await isImageAnimated(blob)))) {
+        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.format) && (!([ 'image/gif', 'image/apng' ].includes(blob.type)) || params.format)) || (forceDisableAnimation && await isImageAnimated(blob)))) {
             const { width, height , format, quality, fit } = params;
             blob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceDisableAnimation ? 'webp' : undefined), fit })) || blob;
         }

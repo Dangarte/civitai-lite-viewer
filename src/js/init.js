@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 11,
+    version: 12,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -11,7 +11,7 @@ const CONFIG = {
         blurHash: 'local/blurhash'
     },
     langauges: [ 'en', 'ru', 'zh', 'uk' ],
-    appearance: {
+    appearance_normal: {
         imageCard: {
             width: 360,
             gap: 16
@@ -23,16 +23,37 @@ const CONFIG = {
         },
         modelPage: {
             carouselItemWidth: 450,
+            carouselItemsCount: 2,
             carouselGap: 16
         },
         blurHashSize: 32, // minimum size of blur preview
     },
+    appearance_small: {
+        imageCard: {
+            width: 360,
+            gap: 10
+        },
+        modelCard: {
+            width: 300,
+            height: 450,
+            gap: 10
+        },
+        modelPage: {
+            carouselItemWidth: 380,
+            carouselItemsCount: 1,
+            carouselGap: 10
+        },
+        blurHashSize: 32, // minimum size of blur preview
+    },
+    appearance: {},
     perRequestLimits: {
         models: 60,
         images: 180
     },
     timeOut: 20000, // 20 sec
 };
+
+CONFIG.appearance = CONFIG.appearance_normal;
 
 const SETTINGS = {
     api_key: null,
@@ -52,7 +73,8 @@ const SETTINGS = {
     nsfwLevel: 'X',
     browsingLevel: 16,
     groupImagesByPost: true,
-    hideImagesWithNoMeta: false,
+    hideImagesWithoutPositivePrompt: true,
+    hideImagesWithoutNegativePrompt: false,
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
 };
@@ -704,7 +726,6 @@ class Controller {
             return this.api.fetchModels(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 query.cursor = data.metadata?.nextCursor ?? null;
-                listElement.textContent = '';
                 insertModels(data.items);
                 document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
             }).catch(error => {
@@ -884,7 +905,7 @@ class Controller {
             itemWidth: CONFIG.appearance.modelPage.carouselItemWidth,
             generator: generateMediaPreview,
             onElementRemove: (card, item) => this.#onCardRemoved(card, item),
-            visibleCount: 2,
+            visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
         });
         modelPreviewWrap.appendChild(carouselWrap);
 
@@ -918,7 +939,7 @@ class Controller {
                     word = word.trim();
                     if (word.startsWith(',')) word = word.slice(1);
                     if (word.endsWith(',')) word = word.slice(0, -1);
-                    word = word.replace(/(,|\.)(?!\s)/g, '$1 ');
+                    word = word.replace(/(,)(?!\s)/g, '$1 ');
                     word = word.trim();
                 }
 
@@ -946,14 +967,14 @@ class Controller {
             const modelVersionContainer = safeParseHTML(modelVersion.description);
             modelVersionDescription.appendChild(modelVersionContainer);
             this.#analyzeModelDescription(modelVersionDescription);
-            if (calcCharsInString(modelVersion.description, '\n', 80)) hideLongDescription(modelVersionDescription);
+            if (calcCharsInString(modelVersion.description, '<p>', 40) >= 40) hideLongDescription(modelVersionDescription);
         }
 
         // Model descrition
         const modelDescription = insertElement('div', page, { class: 'model-description' });
         model.description = this.#analyzeModelDescriptionString(model.description);
         modelDescription.appendChild(safeParseHTML(model.description));
-        if (calcCharsInString(model.description, '\n', 80)) hideLongDescription(modelDescription);
+        if (calcCharsInString(model.description, '<p>', 40) >= 40) hideLongDescription(modelDescription);
 
         // Analyze descriptions and find patterns to improve display
         this.#analyzeModelDescription(modelDescription);
@@ -1059,7 +1080,6 @@ class Controller {
     static #genImages(options = {}) {
         const { modelId, modelVersionId, postId, username, state: navigationState = {...this.#state} } = options;
         let query;
-        const hideWithoutMeta = SETTINGS.hideImagesWithNoMeta && !postId && !username;
         let groupingByPost = SETTINGS.groupImagesByPost && !postId;
         const firstPageNavigation = this.#pageNavigation;
         const fragment = new DocumentFragment();
@@ -1120,10 +1140,16 @@ class Controller {
             const pageNavigation = this.#pageNavigation;
             console.log('Loaded images:', images);
 
-            if (hideWithoutMeta) {
+            if (SETTINGS.hideImagesWithoutPositivePrompt) {
                 const countAll = images.length;
-                images = images.filter(image => image.meta);
-                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without meta information about generation`);
+                images = images.filter(image => image.meta?.prompt);
+                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without positive prompt`);
+            }
+
+            if (SETTINGS.hideImagesWithoutNegativePrompt) {
+                const countAll = images.length;
+                images = images.filter(image => image.meta?.negativePrompt);
+                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
             }
 
             images.forEach(image => {
@@ -1186,7 +1212,6 @@ class Controller {
                 if (pageNavigation !== this.#pageNavigation) return;
                 query.cursor = data.metadata?.nextCursor ?? null;
                 layout.clear();
-                listElement.textContent = '';
                 insertImages(data.items);
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
@@ -1316,44 +1341,125 @@ class Controller {
 
     static #analyzePromptCode(codeElement) {
         if (!codeElement) return;
-        // Some prompts are hard to read due to missing spaces after commas
-        const fixedText = codeElement.textContent.replace(/(,|\.)(?!\s)/g, '$1 ').trim();
 
-        // Highlight keywords and brackets of tag weight
-        const keywords = new Set([ 'BREAK', '{PROMPT}' ]);
         const fragment = new DocumentFragment();
+        const keywords = new Set(['BREAK', '{PROMPT}']);
+        const tokenSpecs = [
+            { type: 'lora',     regex: /<lora:[^:>]+:[^>]+>/y },
+            { type: 'link',     regex: /https:\/\/civitai\.com\/[^\s]+/y },
+            { type: 'escaped',  regex: /\\[()[\]]/y },
+            { type: 'weight',   regex: /:-?[0-9.]+/y },
+            { type: 'bracket',  regex: /[()[\]]/y },
+            { type: 'punct',    regex: /[,.:;]/y },
+            { type: 'space',    regex: /\s+/y },
+            { type: 'word',     regex: /[\w\-]+/y },
+            { type: 'other',    regex: /[^\s\w]/y },
+        ];
+
+        // Some prompts are hard to read due to missing spaces after commas
+        const text = codeElement.textContent.replace(/(,)(?!\s)/g, '$1 ').trim();
+        const tokens = [];
+        let pos = 0;
+
+        // Tokenize
+        while (pos < text.length) {
+            let matched = false;
+            for (const { type, regex } of tokenSpecs) {
+                regex.lastIndex = pos;
+                const match = regex.exec(text);
+                if (match) {
+                    tokens.push({ type, value: match[0] });
+                    pos = regex.lastIndex;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                // fallback: consume one char
+                tokens.push({ type: 'unknown', value: text[pos++] });
+            }
+        }
+
+        let bracketContainers = [];
+        let weightContainer = fragment;
         let lastTextNode = null;
         const pushText = text => {
-            if (lastTextNode) {
-                lastTextNode.textContent += text;
-            } else {
+            if (lastTextNode) lastTextNode.textContent += text;
+            else {
                 lastTextNode = document.createTextNode(text);
-                fragment.appendChild(lastTextNode);
+                weightContainer.appendChild(lastTextNode);
             }
         };
-        // civitai. com - because after the dot a space is added in fixedText
-        const tokens = fixedText.match(/<lora:[^:>]+:[^>]+>|https:\/\/civitai\. ?com\/[^\s]+|\\[()[\]]|[\[\]()]+|:-?[0-9.]+|[\w\-]+|,|\s+|[^\s\w]/g) || [];
+        const updateCurrentWeight = (weightChange, bracketItem) => {
+            bracketItem.sum = +(bracketItem.sum * weightChange).toFixed(6);
+            bracketItem.strength *= weightChange;
+            bracketItem.container.setAttribute('style', `--weight: ${bracketItem.sum}; --weight-strength: ${Math.round(Math.min(1, Math.sqrt(Math.abs(bracketItem.sum - 1))) * 100)}%;`);
+            bracketItem.container.setAttribute('data-weight-direction', bracketItem.sum >= 1 ? 'up' : 'down');
+            if (Math.abs(bracketItem.sum - 1) >= 1) bracketItem.container.setAttribute('data-weight-level', 'high');
+            else bracketItem.container.removeAttribute('data-weight-level');
+            bracketItem.container.setAttribute('data-weight', bracketItem.sum);
+            bracketItem.containersInside.forEach(containerInfo => updateCurrentWeight(weightChange, containerInfo));
+        };
+        const openWeight = (bracket, tokenIndex) => {
+            const currentBracket = bracketContainers.at(-1);
+            const strength = bracket === '(' ? 1.1 : bracket === '[' ? 0.91 : 1;
+            const closeBracket = bracket === '(' ? ')' : bracket === '[' ? ']' : null;
+            const sum = +((currentBracket?.sum ?? 1) * strength).toFixed(6);
+            const container = insertElement('span', weightContainer, {
+                class: 'weight-container',
+                style: `--weight: ${sum}; --weight-strength: ${Math.round(Math.min(1, Math.sqrt(Math.abs(sum - 1))) * 100)}%;`,
+                'data-weight': sum,
+                'data-weight-direction': sum >= 1 ? 'up' : 'down'
+            });
+            if (Math.abs(sum - 1) >= 1) container.setAttribute('data-weight-level', 'high');
+            const bracketItem = { container, sum, strength, closeBracket, containersInside: [] };
+            currentBracket?.containersInside.push(bracketItem);
+            bracketContainers.push(bracketItem);
+            weightContainer = container;
+        };
+        const closeWeight = (bracket, tokenIndex) => {
+            const currentBracket = bracketContainers.at(-1);
+            if (currentBracket?.closeBracket !== bracket) return;
+            if (tokens[tokenIndex - 1]?.type === 'weight') {
+                const explicitWeight = Number(tokens[tokenIndex - 1].value.substring(1));
+                const weightChange = explicitWeight / currentBracket.strength;
+                updateCurrentWeight(weightChange, currentBracket);
+            };
+            bracketContainers.pop();
+            weightContainer = bracketContainers.at(-1)?.container ?? fragment;
+        };
+        const clearWeight = () => {
+            bracketContainers = [];
+            weightContainer = fragment;
+        };
 
+        // Highlight
         for (let i = 0; i < tokens.length; i++) {
-            const token = tokens[i];
+            const { type, value } = tokens[i];
 
-            if (/^<lora:[^:>]+:[^>]+>$/.test(token)) insertElement('span', fragment, { class: 'lora' }, token);
-            else if (token.indexOf('https://civitai. com/') === 0) {
-                const url = token.replace(/(.|\.)\s+/g, '$1');
-                if (isURL(url)) insertElement('a', fragment, { class: 'link', href: url, target: '_blank', rel: 'noopener' }, url);
-                else insertElement('span', fragment, { class: 'link' }, url);
-            }
-            else if (/^[\[\]()]+$/.test(token)) insertElement('span', fragment, { class: 'bracket' }, token);
-            else if (/^:-?[0-9.]+$/.test(token) && tokens[i + 1]?.[0] === ')') insertElement('span', fragment, { class: 'weight' }, token);
-            else if (keywords.has(token)) insertElement('span', fragment, { class: 'keyword' }, token);
-            else {
-                pushText(token);
+            if (type === 'lora') {
+                insertElement('span', weightContainer, { class: 'lora' }, value);
+            } else if (type === 'link') {
+                if (isURL(value)) insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
+                else insertElement('span', weightContainer, { class: 'link' }, value);
+            } else if (type === 'bracket') {
+                if (value === '(' || value === '[') openWeight(value, i);
+                insertElement('span', weightContainer, { class: 'bracket' }, value);
+                if (value === ')' || value === ']') closeWeight(value, i);
+            } else if (type === 'weight' && tokens[i + 1]?.value === ')') {
+                insertElement('span', weightContainer, { class: 'weight' }, value);
+            } else if (type === 'word' && keywords.has(value)) {
+                if (value === 'BREAK') clearWeight();
+                insertElement('span', weightContainer, { class: 'keyword' }, value);
+            } else {
+                pushText(value);
                 continue;
             }
 
             lastTextNode = null;
         }
 
+        // Apply
         codeElement.textContent = '';
         codeElement.appendChild(fragment);
     }
@@ -1491,7 +1597,7 @@ class Controller {
                     if (!modelName) return;
 
                     item.trainedWords.forEach(word => {
-                        word = word.indexOf(',') === -1 && word.indexOf('.') === -1 ? word.trim() : word.replace(/(,|\.)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                        word = word.indexOf(',') === -1 && word.indexOf('.') === -1 ? word.trim() : word.replace(/(,)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
                         const splitWords = word.split(/(,|\.)/).map(w => w.trim()).filter(Boolean);
 
                         splitWords.forEach(w => {
@@ -1645,6 +1751,7 @@ class Controller {
         if (previewMedia) {
             const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', loading: isVisible ? undefined : 'lazy' });
             mediaElement.classList.add('card-background');
+            if (previewMedia?.type === 'video' && !SETTINGS.autoplay) mediaElement.classList.remove('video-hover-play');
             card.appendChild(mediaElement);
         } else {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
@@ -1878,6 +1985,28 @@ class Controller {
     static #genImagesListFilters(onAnyChange) {
         const filterWrap = createElement('div', { class: 'list-filters' });
 
+        // Metadata filters
+        const metadataButton = insertElement('button', filterWrap, { class: 'list-filter list-filter-dropdown closed' });
+        metadataButton.appendChild(getIcon('filter'));
+        const metadataContiner = insertElement('div', metadataButton, { class: 'list-filter-dropdown-container' });
+        let metadataContinerClosed = true;
+        metadataButton.addEventListener('click', e => {
+            if (e.target.closest('.list-filter-dropdown-container')) return;
+            metadataContinerClosed = !metadataContinerClosed;
+            metadataButton.classList.toggle('closed', metadataContinerClosed);
+            if (!metadataContinerClosed) {
+                const offsetRight = metadataButton.offsetParent.offsetWidth - (metadataButton.offsetLeft + metadataButton.offsetWidth);
+                const width = metadataContiner.offsetWidth;
+                const targetOffsetRight = offsetRight + metadataButton.offsetWidth / 2 - width / 2;
+                const windowWidth = window.innerWidth;
+                const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
+                const offsetX = aviableOffsetRight - targetOffsetRight;
+                metadataContiner.style.top = `${metadataButton.offsetTop + metadataButton.offsetHeight + 8}px`;
+                metadataContiner.style.right = `${aviableOffsetRight}px`;
+                metadataContiner.style.setProperty('--offsetX', `${offsetX}px`);
+            }
+        });
+
         // Group posts
         const groupImagesByPost = this.#genBoolean({
             onchange: ({ newValue }) => {
@@ -1888,7 +2017,32 @@ class Controller {
             label: window.languagePack?.text?.group_posts ?? 'Group posts'
         });
         groupImagesByPost.element.classList.add('list-filter');
-        filterWrap.appendChild(groupImagesByPost.element);
+        metadataContiner.appendChild(groupImagesByPost.element);
+
+        // Hide without positive prompt
+        const requiredPositivePrompt = this.#genBoolean({
+            onchange: ({ newValue }) => {
+                SETTINGS.hideImagesWithoutPositivePrompt = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.hideImagesWithoutPositivePrompt,
+            label: window.languagePack?.text?.hideWithoutPositivePrompt ?? 'Hide without positive prompt'
+        });
+        requiredPositivePrompt.element.classList.add('list-filter');
+        metadataContiner.appendChild(requiredPositivePrompt.element);
+
+        // Hide without negative prompt
+        const requiredNegativePrompt = this.#genBoolean({
+            onchange: ({ newValue }) => {
+                SETTINGS.hideImagesWithoutNegativePrompt = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.hideImagesWithoutNegativePrompt,
+            label: window.languagePack?.text?.hideWithoutNegativePrompt ?? 'Hide without negative prompt'
+        });
+        requiredNegativePrompt.element.classList.add('list-filter');
+        metadataContiner.appendChild(requiredNegativePrompt.element);
+
 
         // Sort list
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest", "Random" ];
@@ -2311,6 +2465,9 @@ class Controller {
     }
 
     static onResize() {
+        const windowWidth = window.innerWidth;
+        if (windowWidth < 650) CONFIG.appearance = CONFIG.appearance_small;
+        else CONFIG.appearance = CONFIG.appearance_normal;
         this.#onResize?.();
     }
 
@@ -2497,6 +2654,7 @@ function tryClearCache() {
 
 loadLanguagePack(SETTINGS.language);
 
+Controller.onResize();
 Controller.gotoPage(location.hash || '#home');
 history.replaceState({ id: Date.now() }, '', location.hash);
 
