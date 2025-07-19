@@ -202,6 +202,14 @@ mark {
     box-decoration-break: clone;
 }
 
+p {
+    margin-block: .75em;
+}
+
+pre {
+    margin-block: .5em;
+}
+
 code {
     font-family: monospace;
     padding-block: .25em;
@@ -258,7 +266,7 @@ p, ol, ul, li, td {
 }
 
 ol, ul {
-    line-height: 1.72em;
+    line-height: 1.5em;
     padding-inline-start: 2em;
 }
 
@@ -269,7 +277,7 @@ ul:only-child {
 }
 
 li::marker {
-    color: var(--c-text-dark);
+    color: var(--c-text-darker);
 }
 
 th {
@@ -615,7 +623,7 @@ footer {
     align-items: center;
     justify-content: space-around;
     gap: 2em;
-    transition: transform .2s ease-out, opacity .1s ease-out;
+    transition: transform .2s ease-out, opacity .1s ease-out, visibility 0s;
     background-color: var(--c-bg-dark);
     border-radius: var(--radius);
     opacity: 1;
@@ -624,7 +632,7 @@ footer {
 
 .page-scrolled footer {
     transform: translateY(120%);
-    transition: transform .2s ease-in, opacity .1s .1s ease-in;
+    transition: transform .2s ease-in, opacity .1s .1s ease-in, visibility 0s .2s;
     opacity: 0;
     visibility: hidden;
 }
@@ -950,7 +958,7 @@ footer a {
     z-index: 272;
 }
 
-.carousel-button::after {
+.carousel-button[data-direction]::after {
     content: '';
     position: absolute;
     inset: -.5em;
@@ -1000,8 +1008,7 @@ footer a {
 }
 
 .model-description {
-    padding: 1em;
-    max-width: calc(100% - 2em);
+    max-width: 100%;
     width: var(--app-width-small);
     margin: 0 auto;
 }
@@ -1026,12 +1033,12 @@ footer a {
 .hide-long-description .show-more {
     position: absolute;
     inset-block-end: 0;
-    left: calc(50% - 2em);
+    left: 0;
     z-index: 1;
     box-sizing: border-box;
-    width: 4em;
+    justify-content: center;
+    width: 100%;
     height: 2em;
-    padding-inline: 1.5em;
     background: none;
     border: none;
     transition: color .1s ease-out;
@@ -1040,6 +1047,15 @@ footer a {
 .hide-long-description .show-more:focus-visible,
 .hide-long-description .show-more:hover {
     color: var(--c-main-text);
+}
+
+/*
+ Some descriptions of models are simply impossible to read,
+ there can be so much shit there that every word is a completely different color...
+*/
+.model-version-description span,
+.model-description.nuke-all-colors span {
+    color: currentColor !important;
 }
 
 .model-description a {
@@ -1078,6 +1094,7 @@ footer a {
     margin-inline: auto;
     margin-block: .5em;
     display: block;
+    pointer-events: all;
 }
 
 .model-description li > p {
@@ -1107,6 +1124,8 @@ footer a {
 .model-version-description {
     border-radius: var(--radius);
     background-color: var(--c-bg);
+    padding: 1em;
+    max-width: calc(100% - 2em);
 }
 
 .model-version-description .badges {
@@ -1346,6 +1365,7 @@ img.loading:not([src]) {
     font-size: 24px;
     border-radius: var(--radius);
     margin: 0;
+    pointer-events: none;
 }
 
 .user-info .no-media {
@@ -1798,6 +1818,20 @@ code.prompt-positive::before {
     flex-wrap: nowrap;
 }
 
+.model-versions .badge {
+    display: inline;
+}
+
+.model-version-description .model-version span strong,
+.model-versions .badge:not(.active):not(:hover):not(:focus-visible) strong {
+    color: var(--c-text-light);
+}
+
+.model-version-description .model-version span em,
+.model-versions .badge:not(.active):not(:hover):not(:focus-visible) em {
+    color: var(--c-text-dark);
+}
+
 .model-updated-time {
     text-wrap: nowrap;
 }
@@ -1805,6 +1839,11 @@ code.prompt-positive::before {
 .model-tags {
     border-inline-start: 1px solid var(--c-border);
     padding-inline-start: .25em;
+}
+
+.model-tags div.badge {
+    color: var(--c-text-dark);
+    background-color: var(--c-bg-dark);
 }
 
 .badge {

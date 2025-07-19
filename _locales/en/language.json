@@ -9,6 +9,8 @@
         "articles": "Articles",
         "download": "Download",
         "images": "Images",
+        "image": "Image",
+        "image_by": "Image by {username}",
         "view_post": "View Post",
         "period": "Period",
         "type": "Type",

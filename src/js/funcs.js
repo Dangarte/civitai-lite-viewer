@@ -451,7 +451,7 @@ class MasonryLayout {
         }
 
         const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
-        this.#container.style.height = `${largestColumn.height - options.gap}px`;
+        this.#container.style.height = largestColumn.height > options.gap ? `${largestColumn.height - options.gap}px` : '0px';
     }
 
     clear() {
@@ -593,8 +593,9 @@ class MasonryLayout {
 
         const next = this.#findNearestInDirection(current, direction);
         if (next) {
-            this.#setFocus(next, true);
-            next.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+            this.#setFocus(next);
+            // this.#setFocus(next, true);
+            // next.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
         }
     }
 
@@ -719,11 +720,12 @@ class InfiniteCarousel {
             this.#items.push(item);
         });
 
-        const carouselWidth = this.#options.visibleCount * (this.#options.itemWidth + this.#options.gap) - this.#options.gap;
+        const carouselCells = this.#items.reduce((sum, item) => sum + (item.isWide ? 2 : 1), 0);
+        const carouselWidth = Math.min(this.#options.visibleCount, carouselCells) * (this.#options.itemWidth + this.#options.gap) - this.#options.gap;
         this.#carouselWrap = createElement('div', { class: 'carousel', style: `width: ${carouselWidth}px;` });
         this.#itemsListWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-items', style: `--gap: ${this.#options.gap}px;` });
 
-        if (this.#items.reduce((sum, item) => sum + (item.isWide ? 2 : 1), 0) > this.#options.visibleCount) {
+        if (carouselCells > this.#options.visibleCount) {
             const carouselPrev = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'prev' });
             const carouselNext = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'next' });
             carouselPrev.appendChild(getIcon('arrow_left'));
@@ -731,8 +733,8 @@ class InfiniteCarousel {
             carouselPrev.addEventListener('click', () => this.scrollTo(-1), { passive: true });
             carouselNext.addEventListener('click', () => this.scrollTo(1), { passive: true });
             const indexElementWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-button carousel-current-index' });
-            const currentIndexText = this.#options.visibleCount > 1 ? `${this.#currentIndex + 1}-${(this.#currentIndex + this.#options.visibleCount - 1) % this.#items.length + 1}` : this.#currentIndex + 1;
-            this.#carouselCurrentIndexElement = insertElement('span', indexElementWrap, undefined, currentIndexText);
+            this.#carouselCurrentIndexElement = insertElement('span', indexElementWrap);
+            this.#carouselCurrentIndexElement.textContent = this.#getVisibleIndexes(this.#currentIndex).map(i => i + 1).join(',');
             indexElementWrap.appendChild(document.createTextNode(' / '));
             insertElement('span', indexElementWrap, undefined, this.#items.length);
         }
@@ -813,23 +815,35 @@ class InfiniteCarousel {
         // delete item.element;
     }
 
+    #getVisibleIndexes(startIndex) {
+        const visibleIndexes = [];
+        const totalItems = this.#items.length;
+        for (let i = 0; i < this.#options.visibleCount; i++) {
+            const index = (startIndex + i) % totalItems;
+            if (this.#items[index].isWide) i++;
+            visibleIndexes.push(index);
+        }
+        return visibleIndexes;
+    }
+
     scrollTo(direction, animation = true) {
         if (this.#isAnimating) return;
 
         const totalItems = this.#items.length;
         const newIndex = (totalItems + this.#currentIndex + direction) % totalItems;
-        if (this.#carouselCurrentIndexElement) {
-            const currentIndexText = this.#options.visibleCount > 1 ? `${newIndex + 1}-${(newIndex + this.#options.visibleCount - 1) % totalItems + 1}` : newIndex + 1;
-            this.#carouselCurrentIndexElement.textContent = currentIndexText;
-        }
+        const visibleIndexes = this.#getVisibleIndexes(this.#currentIndex);
+        const newVisibleIndexes = this.#getVisibleIndexes(newIndex);
+        if (this.#carouselCurrentIndexElement) this.#carouselCurrentIndexElement.textContent = newVisibleIndexes.map(i => i + 1).join(',');
 
         if (animation) {
             this.#isAnimating = true;
+            const shiftedItems = Math.abs(direction);
             const startIndex = direction > 0 ? this.#currentIndex : newIndex;
-            this.updateVisibleElements(startIndex, this.#options.visibleCount + Math.abs(direction));
+            const visibleDiffCount = Math.max(newVisibleIndexes.length - visibleIndexes.length, 0); // Avoid animation into the void when moving from a wide to 2 narrow elements
+            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedItems + visibleDiffCount);
 
             let shiftedCells = 0;
-            for (let i = 0; i < Math.abs(direction); i++) {
+            for (let i = 0; i < shiftedItems; i++) {
                 const index = (startIndex + i) % totalItems;
                 shiftedCells += this.#items[index].isWide ? 2 : 1;
             }
