@@ -16,6 +16,7 @@
         "type": "类型",
         "model": "模型",
         "group_posts": "分组帖子",
+        "stats_from_version": "此版本统计",
         "hideWithoutPositivePrompt": "无正向提示时隐藏",
         "hideWithoutNegativePrompt": "无负向提示时隐藏",
         "resurces_used": "使用的资源",

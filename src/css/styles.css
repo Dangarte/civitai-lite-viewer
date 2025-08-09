@@ -622,6 +622,8 @@ footer {
     display: flex;
     align-items: center;
     justify-content: space-around;
+    content-visibility: auto;
+    contain: content;
     gap: 2em;
     transition: transform .2s ease-out, opacity .1s ease-out, visibility 0s;
     background-color: var(--c-bg-dark);
@@ -1191,7 +1193,8 @@ footer a {
     color: var(--c-text) !important;
     border-radius: var(--radius);
     overflow: hidden;
-    contain: layout paint;
+    contain: content;
+    content-visibility: auto;
     transition: 0s !important;
     /* Force new layer */
     /* transform: translateZ(0); */

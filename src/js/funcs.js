@@ -744,7 +744,7 @@ class InfiniteCarousel {
         return this.#carouselWrap;
     }
 
-    updateVisibleElements(startIndex, itemsCount) {
+    updateVisibleElements(startIndex, itemsCount, direction = null) {
         const itemsToDisplay = [];
         const totalItems = this.#items.length;
         let displayedCells = 0;
@@ -788,7 +788,11 @@ class InfiniteCarousel {
                     const firstIndex = this.#items.indexOf(firstVisible);
                     const itemIndex = this.#items.indexOf(item);
                     const diff = (itemIndex - firstIndex + totalItems) % totalItems;
-                    const usePrepend = diff > totalItems / 2; // closer "back" than "forward"
+                    const usePrepend =
+                        diff === totalItems / 2
+                            ? direction < 0 // back → prepend, forward/none → append
+                            : diff > totalItems / 2;
+                    // const usePrepend = diff > totalItems / 2; // closer "back" than "forward"
                     this.#addItemToDOM(item, usePrepend);
                 }
 
@@ -840,7 +844,7 @@ class InfiniteCarousel {
             const shiftedItems = Math.abs(direction);
             const startIndex = direction > 0 ? this.#currentIndex : newIndex;
             const visibleDiffCount = Math.max(newVisibleIndexes.length - visibleIndexes.length, 0); // Avoid animation into the void when moving from a wide to 2 narrow elements
-            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedItems + visibleDiffCount);
+            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedItems + visibleDiffCount, direction);
 
             let shiftedCells = 0;
             for (let i = 0; i < shiftedItems; i++) {

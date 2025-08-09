@@ -16,6 +16,7 @@
         "type": "Type",
         "model": "Model",
         "group_posts": "Group posts",
+        "stats_from_version": "Statistics for this version",
         "hideWithoutPositivePrompt": "Hide without positive prompt",
         "hideWithoutNegativePrompt": "Hide without negative prompt",
         "resurces_used": "Resources Used",

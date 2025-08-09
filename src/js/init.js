@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 13,
+    version: 14,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -73,6 +73,7 @@ const SETTINGS = {
     nsfwLevel: 'X',
     browsingLevel: 16,
     groupImagesByPost: true,
+    showCurrentModelVersionStats: true,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
@@ -220,6 +221,7 @@ class CivitaiAPI {
 // TODO: ! IMPORTANT ! Fix performance on model page with autoplay
 // UPD: These are some problems with Chromium, everything is fine in Firefox...
 // TODO: Normalize the management of the title and history, I don't like that inside #genImageFullPage the history and title are touched...
+// TODO: Prerender pages when pointerdown, and show on click
 class Controller {
     static api = new CivitaiAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
@@ -324,7 +326,7 @@ class Controller {
         this.#activeMasonryLayout = null;
         this.#onScroll = null;
         this.#onResize = null;
-        const pageNavigation = this.#pageNavigation = Date.now();
+        this.#pageNavigation = Date.now();
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
 
         this.appElement.querySelectorAll('video').forEach(el => el.pause());
@@ -673,7 +675,9 @@ class Controller {
             const pageNavigation = this.#pageNavigation;
             console.log('Loaded models:', models);
 
+            const modelsCountAll = models.length;
             models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
+            if (models.length !== modelsCountAll) console.log(`Due to the selected tags for hiding, ${modelsCountAll - models.length} model(s) were hidden`);
 
             layout.addItems(models.map(data => ({ id: data.id, data })));
 
@@ -1364,7 +1368,7 @@ class Controller {
         if (!codeElement) return;
 
         const fragment = new DocumentFragment();
-        const keywords = new Set(['BREAK', '{PROMPT}']);
+        const keywords = new Set([ 'BREAK' ]);
         const tokenSpecs = [
             { type: 'lora',     regex: /<lora:[^:>]+:[^>]+>/y },
             { type: 'link',     regex: /https:\/\/civitai\.com\/[^\s]+/y },
@@ -1869,9 +1873,10 @@ class Controller {
         insertElement('div', cardContentBottom, { class: 'model-name' }, model.name);
 
         // Stats
+        const statsSource = SETTINGS.showCurrentModelVersionStats ? modelVersion.stats : model.stats;
         const statsContainer = this.#genStats([
-            { icon: 'download', value: model.stats.downloadCount, formatter: formatNumber, unit: 'download' },
-            { icon: 'like', value: model.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
+            { icon: 'download', value: statsSource.downloadCount, formatter: formatNumber, unit: 'download' },
+            { icon: 'like', value: statsSource.thumbsUpCount, formatter: formatNumber, unit: 'like' },
             { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
             // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
         ]);
@@ -2077,26 +2082,7 @@ class Controller {
         const filterWrap = createElement('div', { class: 'list-filters' });
 
         // Metadata filters
-        const metadataButton = insertElement('button', filterWrap, { class: 'list-filter list-filter-dropdown closed' });
-        metadataButton.appendChild(getIcon('filter'));
-        const metadataContiner = insertElement('div', metadataButton, { class: 'list-filter-dropdown-container' });
-        let metadataContinerClosed = true;
-        metadataButton.addEventListener('click', e => {
-            if (e.target.closest('.list-filter-dropdown-container')) return;
-            metadataContinerClosed = !metadataContinerClosed;
-            metadataButton.classList.toggle('closed', metadataContinerClosed);
-            if (!metadataContinerClosed) {
-                const offsetRight = metadataButton.offsetParent.offsetWidth - (metadataButton.offsetLeft + metadataButton.offsetWidth);
-                const width = metadataContiner.offsetWidth;
-                const targetOffsetRight = offsetRight + metadataButton.offsetWidth / 2 - width / 2;
-                const windowWidth = window.innerWidth;
-                const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
-                const offsetX = aviableOffsetRight - targetOffsetRight;
-                metadataContiner.style.top = `${metadataButton.offsetTop + metadataButton.offsetHeight + 8}px`;
-                metadataContiner.style.right = `${aviableOffsetRight}px`;
-                metadataContiner.style.setProperty('--offsetX', `${offsetX}px`);
-            }
-        });
+        const { container: metadataContiner } = this.#genDropdownFilter(filterWrap);
 
         // Group posts
         const groupImagesByPost = this.#genBoolean({
@@ -2194,6 +2180,22 @@ class Controller {
 
     static #genModelsListFIlters(onAnyChange) {
         const filterWrap = createElement('div', { class: 'list-filters' });
+
+        // Appearance filters
+        const { container: appearanceContiner } = this.#genDropdownFilter(filterWrap);
+
+        // Use statistics from the current version of the model
+        const showCurrentModelVersionStats = this.#genBoolean({
+            onchange: ({ newValue }) => {
+                SETTINGS.showCurrentModelVersionStats = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.showCurrentModelVersionStats,
+            label: window.languagePack?.text?.stats_from_version ?? 'Statistics for this version'
+        });
+        showCurrentModelVersionStats.element.classList.add('list-filter');
+        appearanceContiner.appendChild(showCurrentModelVersionStats.element);
+
         // Models list
         const modelsOptions = [
             "All",
@@ -2387,6 +2389,31 @@ class Controller {
         insertElement('h1', errorPage, { class: 'error-text' }, `${window.languagePack?.errors?.error ?? 'Error'}: ${error}`);
 
         return errorPage;
+    }
+
+    static #genDropdownFilter(parent) {
+        const button = insertElement('button', parent, { class: 'list-filter list-filter-dropdown closed' });
+        button.appendChild(getIcon('filter'));
+        const container = insertElement('div', button, { class: 'list-filter-dropdown-container' });
+        let isClosed = true;
+        button.addEventListener('click', e => {
+            if (e.target.closest('.list-filter-dropdown-container')) return;
+            isClosed = !isClosed;
+            button.classList.toggle('closed', isClosed);
+            if (!isClosed) {
+                const offsetRight = button.offsetParent.offsetWidth - (button.offsetLeft + button.offsetWidth);
+                const width = container.offsetWidth;
+                const targetOffsetRight = offsetRight + button.offsetWidth / 2 - width / 2;
+                const windowWidth = window.innerWidth;
+                const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
+                const offsetX = aviableOffsetRight - targetOffsetRight;
+                container.style.top = `${button.offsetTop + button.offsetHeight + 8}px`;
+                container.style.right = `${aviableOffsetRight}px`;
+                container.style.setProperty('--offsetX', `${offsetX}px`);
+            }
+        });
+
+        return { button, container };
     }
 
     static #genBoolean({ onchange, value, label }) {

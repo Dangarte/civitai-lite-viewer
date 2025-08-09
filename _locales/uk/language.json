@@ -16,6 +16,7 @@
         "type": "Тип",
         "model": "Модель",
         "group_posts": "Групувати пости",
+        "stats_from_version": "Статистика цієї версії",
         "hideWithoutPositivePrompt": "Приховати без позитивного запиту",
         "hideWithoutNegativePrompt": "Приховати без негативного запиту",
         "resurces_used": "Використані ресурси",
