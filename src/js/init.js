@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 14,
+    version: 15,
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
@@ -220,6 +220,13 @@ class CivitaiAPI {
 
 // TODO: ! IMPORTANT ! Fix performance on model page with autoplay
 // UPD: These are some problems with Chromium, everything is fine in Firefox...
+// UPD 2: Probably the problem is in the limitation of decoding only 3-4 videos at a time,
+//   and the rest are poured into the main js stream...
+//   You can try WebCodecs API, but it is experimental:
+//   https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API
+//   https://developer.chrome.com/docs/web-platform/best-practices/webcodecs
+// TODO: Add complete removal of carousel elements when scrolling the page with the model
+//   (otherwise 0 - 2 videos from there can be spent by very limited decoders)
 // TODO: Normalize the management of the title and history, I don't like that inside #genImageFullPage the history and title are touched...
 // TODO: Prerender pages when pointerdown, and show on click
 class Controller {
@@ -233,6 +240,10 @@ class Controller {
     static #onScroll = null;
     static #onResize = null;
     static #state = {};
+
+    static #groups = new Map(); // key -> { list, timer }
+    static #preClickResults = {};
+    static #cachedUserImages = new Map(); // try to reuse user profile images
 
     static #cache = {
         images: new Map(),          // dummy cache for transferring information about images from the list to fullscreen mode
@@ -274,13 +285,17 @@ class Controller {
         'SD 3.5 Large': 'SD 3.5 L',
         'SD 3.5 Large Turbo': 'SD 3.5 L T',
         'Pony': 'Pony',
+        'Qwen': 'Qwen',
         'Flux.1 S': 'F1 S',
         'Flux.1 D': 'F1',
+        'Flux.1 Krea': 'Flux.1 Krea',
         'Flux.1 Kontext': 'F1 Kontext',
         'Aura Flow': 'Aura',
         'SDXL Lightning': 'XL Lightning',
         'SDXL Hyper': 'XL Hyper',
         'SVD': 'SVD',
+        'SVD XT': 'SVD XT',
+        'Veo 3': 'Veo 3',
         'PixArt α': 'PA α',
         'PixArt Σ': 'PA Σ',
         'Hunyuan 1': 'Hunyuan',
@@ -297,6 +312,9 @@ class Controller {
         'Wan Video 14B t2v': 'Wan 14B t2v',
         'Wan Video 14B i2v 480p': 'Wan 14B i2v 480p',
         'Wan Video 14B i2v 720p': 'Wan 14B i2v 720p',
+        'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V-5B',
+        'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V-A14B',
+        'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V-A14B',
         'HiDream': 'HiD',
         'Other': 'Other'
     };
@@ -403,6 +421,45 @@ class Controller {
 
         if (promise) promise.finally(finishPageLoading);
         else finishPageLoading();
+
+        // Clear promises or whatever might have been in the preflight
+        this.#preClickResults = {};
+    }
+
+    // This implementation seems wrong... and problematic in terms of support, but let it be for now
+    static preparePage(page) {
+        // Start downloading or retrieving from cache in advance,
+        // because after pressing it is highly likely that a click will occur... 
+        const [ pageId, paramString ] = page?.split('?') ?? [];
+        this.#preClickResults = {};
+
+        // TODO
+        if (pageId === '#models') {
+            const params = Object.fromEntries(new URLSearchParams(paramString));
+            if (params.hash) {
+                this.#preClickResults[params.hash] = this.api.fetchModelVersionInfo(params.hash, true);
+            } else if (params.model) {
+                if (!this.#cache.models.get(`${params.model}`)) {
+                    this.#preClickResults[params.model] = this.api.fetchModelInfo(params.model);
+                }
+            } else {
+                const query = {
+                    limit: CONFIG.perRequestLimits.models,
+                    tag: params.tag ?? '',
+                    query: params.query,
+                    username: params.username || params.user,
+                    types: SETTINGS.types,
+                    sort: SETTINGS.sort,
+                    period: SETTINGS.period,
+                    checkpointType: SETTINGS.checkpointType,
+                    primaryFileOnly: true,
+                    baseModels: SETTINGS.baseModels,
+                    nsfw: SETTINGS.nsfw,
+                };
+
+                this.#preClickResults[JSON.stringify(query)] = this.api.fetchModels(query);
+            }
+        }
     }
 
     static gotoHome() {
@@ -572,7 +629,8 @@ class Controller {
 
     static gotoModelByHash(hash) {
         const pageNavigation = this.#pageNavigation;
-        return this.api.fetchModelVersionInfo(hash, true).then(model => {
+        const apiPromise = this.#preClickResults[hash] ?? this.api.fetchModelVersionInfo(hash, true);
+        return apiPromise.then(model => {
             if (pageNavigation !== this.#pageNavigation) return;
             const { modelId, name: modelVersionName } = model ?? {};
             if (modelId) return this.gotoModel(modelId, modelVersionName);
@@ -631,7 +689,8 @@ class Controller {
             return;
         }
 
-        return this.api.fetchModelInfo(id)
+        const apiPromise = this.#preClickResults[id] ?? this.api.fetchModelInfo(id);
+        return apiPromise
         .then(data => {
             if (data.id) this.#cache.models.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
@@ -661,10 +720,10 @@ class Controller {
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
             generator: (data, options) => this.#genModelCard(data, options),
-            overscan: 1.5,
+            overscan: 1,
             passive: true,
             disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
-            onElementRemove: (card, item) => this.#onCardRemoved(card, item)
+            onElementRemove: this.#onCardRemoved.bind(this)
         });
 
         const { onScroll, onResize } = layout.getCallbacks();
@@ -728,11 +787,12 @@ class Controller {
             listElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
 
             const pageNavigation = this.#pageNavigation;
-            layout.clear();
 
-            return this.api.fetchModels(query).then(data => {
+            const apiPromise = this.#preClickResults[JSON.stringify(query)] ?? this.api.fetchModels(query);
+            return apiPromise.then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 query.cursor = data.metadata?.nextCursor ?? null;
+                layout.clear();
                 insertModels(data.items);
                 document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
             }).catch(error => {
@@ -787,7 +847,7 @@ class Controller {
                 const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
                 if (!modelId) throw new Error('There is no model id in the link');
                 localUrl = `#models?model=${modelId}`;
-                if (searchParams.modelVersionId) localUrl += `&version${searchParams.modelVersionId}`;
+                if (searchParams.modelVersionId) localUrl += `&version=${searchParams.modelVersionId}`;
             } else if (url.pathname.indexOf('/images/') === 0) {
                 const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
                 if (!imageId) throw new Error('There is no image id in the link');
@@ -897,16 +957,22 @@ class Controller {
             const isWideMinRatio = 1.38;
             const generateMediaPreview = media => {
                 const ratio = +(media.width/media.height).toFixed(4);
-                const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
-                if (!media.id && id) media.id = id;
-                const item = id && media.hasMeta? createElement('a', { href: id ? `#images?image=${encodeURIComponent(id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, 'data-id': id ?? -1, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
+                const item = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', style: `aspect-ratio: ${ratio};`, 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div', { style: `aspect-ratio: ${ratio};` });
                 const itemWidth = ratio >= isWideMinRatio ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
                 const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, resize: false, loading: undefined, taget: 'model-preview', allowAnimated: true });
                 item.appendChild(mediaElement);
                 return item;
             };
+            const onCarouselScroll = currentId => {
+                // In this place, often, the images do not have normal ids...
+                // so you need to store the link...
+                const item = currentId !== undefined ? previewList.find(i => i.id === currentId) : null;
+                this.#state.carouselCurrentUrl = item?.data?.url;
+            };
             const previewList = previewImages.map((media, index) => {
                 const element = index <= 2 ? generateMediaPreview(media) : null;
+                const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
+                if (!media.id && id) media.id = id;
                 return { id: media.id, data: media, element, width: media.width, height: media.height, isWide: media.width/media.height >= isWideMinRatio };
             });
 
@@ -914,11 +980,14 @@ class Controller {
             if (previewList[0]) this.#genMediaPreviewFromPrevPage(previewList[0].element, previewList[0].id);
             if (previewList[1]) this.#genMediaPreviewFromPrevPage(previewList[1].element, previewList[1].id);
 
+            const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
             const carouselWrap = new InfiniteCarousel(previewList, {
                 gap: CONFIG.appearance.modelPage.carouselGap,
                 itemWidth: CONFIG.appearance.modelPage.carouselItemWidth,
                 generator: generateMediaPreview,
-                onElementRemove: (card, item) => this.#onCardRemoved(card, item),
+                active: carouselCurrentId !== -1 ? carouselCurrentId : 0,
+                onElementRemove: this.#onCardRemoved.bind(this),
+                onScroll: onCarouselScroll,
                 visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
             });
             modelPreviewWrap.appendChild(carouselWrap);
@@ -993,7 +1062,19 @@ class Controller {
         modelDescription.appendChild(safeParseHTML(model.description));
         if (calcCharsInString(model.description, '<p>', 40) >= 40) hideLongDescription(modelDescription);
 
-        // Remove all colors if there are too many of them
+        // Reduce all colors
+        // const supportsColorMix = () => {
+        //     const el = document.createElement('div');
+        //     el.style.color = 'color-mix(in oklab, #fff, #000)';
+        //     return el.style.color !== '';
+        // }
+        // if (supportsColorMix()) {
+        //     modelDescription.querySelectorAll('span[style^="color:"]').forEach(span => {
+        //         const originalColor = span.style.color;
+        //         span.style.color = `color-mix(in oklab, ${originalColor} 80%, currentColor 20%)`;
+        //     });
+        // }
+        // or remove all...
         // const spanColors = new Set(Array.from(modelDescription.querySelectorAll('span[style^="color:"]')).map(span => span.style.color)); // Set() to remove colors with full match
         // if (spanColors.size > 5) modelDescription.classList.add('nuke-all-colors');
 
@@ -1082,8 +1163,8 @@ class Controller {
                 active: item.index,
                 itemWidth: 800,
                 generator: mediaGenerator,
-                onElementRemove: (card, item) => this.#onCardRemoved(card, item),
-                onscroll: id => {
+                onElementRemove: this.#onCardRemoved.bind(this),
+                onScroll: id => {
                     metaContainer.textContent = '';
                     const media = mediaById.get(id);
                     insertMeta(media, metaContainer);
@@ -1115,10 +1196,10 @@ class Controller {
             gap: CONFIG.appearance.imageCard.gap,
             itemWidth: CONFIG.appearance.imageCard.width,
             generator: (data, options) => this.#genImageCard(data, options),
-            overscan: 1.5,
+            overscan: 1,
             passive: true,
             disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
-            onElementRemove: (card, item) => this.#onCardRemoved(card, item)
+            onElementRemove: this.#onCardRemoved.bind(this)
         });
 
         const { onScroll, onResize } = layout.getCallbacks();
@@ -1312,16 +1393,27 @@ class Controller {
         // Remove garbage (empty elements and all unnecessary things)
         description.querySelectorAll('p:empty, h3:empty').forEach(el => el.remove());
 
+        const promptTitles = {
+            positive: {
+                exact: [ 'positive prompt', 'positive:' ],
+                startsWith: [ '+prompt', '+ prompt', 'positive prompt' ]
+            },
+            negative: {
+                exact: [ 'negative prompt', 'negative:' ],
+                startsWith: [ '-prompt', '- prompt', 'negative prompt' ]
+            }
+        }
+
         description.querySelectorAll('p:has(+pre)').forEach(p => {
             const text = p.textContent.trim().toLowerCase();
-            if (text === 'positive prompt' || text.indexOf('+prompt') === 0 || text.indexOf('+ prompt') === 0 || text.indexOf('positive prompt') === 0) {
+            if (promptTitles.positive.exact.includes(text) || promptTitles.positive.startsWith.some(t => text.indexOf(t) === 0)) {
                 getFollowingTagGroup(p, 'pre').forEach(pre => {
                     const code = pre.querySelector('code');
                     if (!code) return;
 
                     code.classList.add('prompt', 'prompt-positive');
                 });
-            } else if (text === 'negative prompt' || text.indexOf('-prompt') === 0 || text.indexOf('- prompt') === 0 || text.indexOf('negative prompt') === 0) {
+            } else if (promptTitles.negative.exact.includes(text) || promptTitles.negative.startsWith.some(t => text.indexOf(t) === 0)) {
                 getFollowingTagGroup(p, 'pre').forEach(pre => {
                     const code = pre.querySelector('code');
                     if (!code) return;
@@ -1844,10 +1936,20 @@ class Controller {
         // Image
         if (previewMedia?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', loading: isVisible ? undefined : 'lazy' });
-            mediaElement.classList.add('card-background');
-            if (previewMedia?.type === 'video' && !SETTINGS.autoplay) mediaElement.classList.remove('video-hover-play');
-            card.appendChild(mediaElement);
+            const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
+                sleep,
+                () => {
+                    return card.offsetParent === null;
+                }, skip => {
+                    if (skip) return;
+                    const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card' /*, loading: isVisible ? undefined : 'lazy' */ });
+                    mediaElement.classList.add('card-background');
+                    if (previewMedia?.type === 'video' && !SETTINGS.autoplay) mediaElement.classList.remove('video-hover-play');
+                    card.appendChild(mediaElement);
+                }
+            );
+            if (!isVisible) renderImage({ frames: 1 });
+            else renderImage({ delay: 0 });
         } else {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
             const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' }, window.languagePack?.errors?.no_media ?? 'No Media');
@@ -1896,10 +1998,20 @@ class Controller {
         const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? Math.round(itemWidth / (image.width/image.height))}px;` });
 
         // Image
-        if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
-        const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card', loading: isVisible ? undefined : 'lazy' });
-        mediaElement.classList.add('card-background');
-        card.appendChild(mediaElement);
+        const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
+            sleep,
+            () => {
+                return card.offsetParent === null;
+            }, skip => {
+                if (skip) return;
+                if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
+                const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card' /*, loading: isVisible ? undefined : 'lazy' */ });
+                mediaElement.classList.add('card-background');
+                card.appendChild(mediaElement);
+            }
+        );
+        if (!isVisible) renderImage({ frames: 1 });
+        else renderImage({ delay: 0 });
 
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
         const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
@@ -1945,7 +2057,9 @@ class Controller {
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
                 const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image`;
-                insertElement('img', container, { crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+                if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, []);
+                const img = this.#cachedUserImages.get(src).pop() || createElement('img', { crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+                container.appendChild(img);
             }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
         }
@@ -1977,9 +2091,8 @@ class Controller {
             } else if (loading === 'eager') {
                 mediaElement.loading = "eager";
             }
-            if (decoding === 'sync') {
-                mediaElement.decoding = 'sync';
-            }
+            if (decoding === 'sync') mediaElement.decoding = 'sync';
+            else if (decoding === 'async') mediaElement.decoding = 'async';
             mediaContainer.classList.add('media-image');
         } else {
             const src = original ? url : url.replace('optimized=true', 'optimized=true,transcode=true');
@@ -2222,13 +2335,16 @@ class Controller {
             "SD 3.5 Large",
             "SD 3.5 Large Turbo",
             "Pony",
+            "Qwen",
             "Flux.1 S",
             "Flux.1 D",
+            "Flux.1 Krea",
             "Flux.1 Kontext",
             "AuraFlow",
             "Stable Cascade",
             "SVD",
             "SVD XT",
+            "Veo 3",
             "Playground v2",
             "PixArt a",
             "PixArt E",
@@ -2246,6 +2362,9 @@ class Controller {
             "Wan Video 14B t2v",
             "Wan Video 14B i2v 480p",
             "Wan Video 14B i2v 720p",
+            "Wan Video 2.2 TI2V-5B",
+            "Wan Video 2.2 I2V-A14B",
+            "Wan Video 2.2 T2V-A14B",
             "HiDream",
             "OpenAI",
             "Imagen4",
@@ -2579,6 +2698,89 @@ class Controller {
 
         const inVIewportObserved = card.querySelector('.inviewport-observed');
         if (inVIewportObserved) onTargetInViewportClearTarget(inVIewportObserved);
+
+        // Reuse user profile images
+        const userBLockImage = card.querySelector('.user-info img[src]');
+        if (userBLockImage) {
+            userBLockImage.remove();
+            this.#cachedUserImages.get(userBLockImage.getAttribute('src')).push(userBLockImage);
+        }
+    }
+
+    static #queueAddPipeline(optionsOrFn, ...fns) {
+        let options = {};
+        if (typeof optionsOrFn === "function") {
+            fns.unshift(optionsOrFn);
+        } else if (optionsOrFn && typeof optionsOrFn === "object") {
+            options = optionsOrFn;
+        }
+
+        if (!fns.length) return;
+
+        const pipeline = { fns };
+
+        // gen key
+        const key = options.frames
+            ? `f${options.frames}`
+            : `d${options.delay ?? 0}`;
+
+        let group = this.#groups.get(key);
+        if (!group) {
+            group = { list: [], timer: null, options };
+            this.#groups.set(key, group);
+            this.#scheduleGroup(group, key);
+        }
+
+        group.list.push(pipeline);
+    }
+
+    static #scheduleGroup(group, key) {
+        const { options } = group;
+
+        if (options.frames) {
+            let framesLeft = options.frames;
+            const frameLoop = () => {
+                if (--framesLeft <= 0) {
+                    this.#runGroup(group, key);
+                } else {
+                    group.timer = requestAnimationFrame(frameLoop);
+                }
+            };
+            group.timer = requestAnimationFrame(frameLoop);
+        } else {
+            const delay = options.delay ?? 0;
+            group.timer = setTimeout(() => {
+                this.#runGroup(group, key);
+            }, delay);
+        }
+    }
+
+    static #runGroup(group, key) {
+        const pipelines = group.list;
+        this.#groups.delete(key);
+
+        let results = new Array(pipelines.length).fill(undefined);
+        let step = 0;
+
+        while (true) {
+            let hasWork = false;
+
+            for (let i = 0; i < pipelines.length; i++) {
+                const fn = pipelines[i].fns[step];
+                if (fn) {
+                    hasWork = true;
+                    try {
+                        results[i] = fn(results[i]);
+                    } catch (e) {
+                        console.error("Pipeline error:", e);
+                        results[i] = undefined;
+                    }
+                }
+            }
+
+            if (!hasWork) break;
+            step++;
+        }
     }
 
     static onScroll(scrollTop) {
@@ -2784,6 +2986,14 @@ function onBodyClick(e) {
             history.pushState(newState, '', href);
         }
         Controller.gotoPage(href, newState);
+    }
+}
+
+function onBodyMousedown(e) {
+    if (e.ctrlKey || e.altKey) return;
+    if (e.button === 0) {
+        const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
+        if (href) Controller.preparePage(href);
     }
 }
 
@@ -3012,6 +3222,7 @@ function init() {
     }
 
     document.body.addEventListener('click', onBodyClick);
+    document.body.addEventListener('mousedown', onBodyMousedown, { passive: true });
     document.body.addEventListener('focus', onBodyFocus, { capture: true, passive: true });
     document.body.addEventListener('mouseover', onBodyMouseOver, { passive: true, passive: true });
     document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });

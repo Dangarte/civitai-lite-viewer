@@ -23,7 +23,7 @@ const SW_CONFIG = {
         'large-file': 15 * 60,              // Дarge files (14+ mb)                     15 mins
         'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                           5 days
         'lite-viewer-core': 3 * 60,         // Main file from the repo (index.html)      3 mins
-        'blur-hash': 60 * 60                // blurHash                                  1 hour
+        'blur-hash': 30 * 60                // blurHash                                 30 mins
     },
     api_key: null,
     task_time_limit: 60000, // 1 minute

@@ -951,6 +951,7 @@ footer a {
     background-color: var(--c-bg);
     border-radius: var(--radius);
     position: absolute;
+    display: block;
     padding: 0;
     padding-block: 1em;
     font-size: 2em;
@@ -964,6 +965,7 @@ footer a {
     content: '';
     position: absolute;
     inset: -.5em;
+    inset-block: -4em;
     z-index: -1;
 }
 
@@ -1194,8 +1196,8 @@ footer a {
     border-radius: var(--radius);
     overflow: hidden;
     contain: content;
-    content-visibility: auto;
     transition: 0s !important;
+    background-color: var(--c-bg);
     /* Force new layer */
     /* transform: translateZ(0); */
 }
@@ -1219,7 +1221,6 @@ footer a {
     grid-area: 1 / 1;
     width: inherit;
     height: inherit;
-    background-color: var(--c-bg);
     border-radius: var(--radius);
     pointer-events: none;
     user-select: none;
@@ -1234,7 +1235,6 @@ footer a {
     font-size: 3em;
     justify-content: center;
     align-items: center;
-    background-color: var(--c-bg);
     border-radius: var(--radius);
 }
 

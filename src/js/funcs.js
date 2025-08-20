@@ -306,7 +306,6 @@ function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
 }
 
 // TODO: Animate scroll to element (when navigating with the keyboard)
-// TODO: Animation of changing the number of columns
 class MasonryLayout {
     #container;
     #generator;
@@ -352,7 +351,7 @@ class MasonryLayout {
         this.#init();
     }
 
-    resize() {
+    resize(animate = false) {
         const options = this.#options;
         this.#columns = [];
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
@@ -360,6 +359,20 @@ class MasonryLayout {
             this.#columns.push({
                 height: 0,
                 index: this.#columns.length
+            });
+        }
+
+        // skip all if layout is empty
+        if (!this.#items.length) {
+            this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
+            return;
+        }
+
+        // Calc current positions
+        const currentPositions = new Map();
+        if (animate) {
+            this.#inViewport.forEach(item => {
+                currentPositions.set(item.id, item.element.getBoundingClientRect());
             });
         }
 
@@ -384,6 +397,32 @@ class MasonryLayout {
         }
 
         this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
+
+        // Calc new positions and animate
+        if (animate) {
+            const animations = [];
+            const windowHeight = window.innerHeight;
+            this.#inViewport.forEach(item => {
+                const keyframes = {};
+                const end = item.element.getBoundingClientRect();
+                if (currentPositions.has(item.id)) {
+                    const start = currentPositions.get(item.id);
+                    if (
+                        (start.left === end.left && start.top === end.top)
+                        || (start.top + start.height < 0 && end.top + end.height < 0)
+                        || (start.top > windowHeight && end.top > windowHeight)
+                    ) return;
+
+                    keyframes.transform = [ `translate(${start.left - end.left}px, ${start.top - end.top}px)`, 'translate(0, 0)' ];
+                } else {
+                    if (end.top + end.height < 0 || end.top > windowHeight) return;
+                    keyframes.transform = [ 'scale(0)', 'scale(1)' ];
+                }
+                animations.push({ element: item.element, keyframes });
+            });
+
+            animations.forEach(({ element, keyframes }) => animateElement(element, { keyframes, duration: 300, easing: 'cubic-bezier(0.33, 1, 0.68, 1)' }));
+        }
     }
 
     addItems(items) {
@@ -634,7 +673,7 @@ class MasonryLayout {
                     item.element = this.#generator(item.data, {
                         itemWidth: options.itemWidth,
                         itemHeight: options.itemHeight,
-                        isVisible: true || item.boundBottom > screenTop && item.boundTop < screenBottom // isVisible - disable lazy loading
+                        isVisible: item.boundBottom > screenTop - 300 && item.boundTop < screenBottom + 300 // isVisible - disable lazy loading
                     });
                     item.element.tabIndex = -1;
                 }
@@ -675,7 +714,7 @@ class MasonryLayout {
     #handleResize() {
         const options = this.#options;
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
-        if (columnsCount !== this.#columns.length) this.resize();
+        if (columnsCount !== this.#columns.length) this.resize(true);
     }
 }
 
@@ -697,7 +736,7 @@ class InfiniteCarousel {
         this.#options.visibleCount = options.visibleCount || 1;
         this.#options.gap = options.gap ?? 12;
         this.#currentIndex = options.active ?? 0;
-        this.#onScroll = options.onscroll;
+        this.#onScroll = options.onScroll;
         this.#onElementRemove = options.onElementRemove;
         this.#generator = options.generator;
 
@@ -772,33 +811,15 @@ class InfiniteCarousel {
         }
 
         // Add the missing ones in the correct order
-        const visibleArray = Array.from(this.#visibleItems);
-        const firstVisible = visibleArray[0];
-        const containerIsEmpty = visibleArray.length === 0;
+        const usePrepend = direction && direction < 0;
+        if (usePrepend) itemsToDisplay.reverse();
 
-        for (let i = 0; i < itemsToDisplay.length; i++) {
-            const item = itemsToDisplay[i];
-
+        itemsToDisplay.forEach(item => {
             if (!this.#visibleItems.has(item)) {
-                // If the container is empty or there are no elements, just add
-                if (containerIsEmpty || !firstVisible) {
-                    this.#addItemToDOM(item, false); // append
-                } else {
-                    // Insert in the correct order: if the element comes earlier than the first visible one — prepend
-                    const firstIndex = this.#items.indexOf(firstVisible);
-                    const itemIndex = this.#items.indexOf(item);
-                    const diff = (itemIndex - firstIndex + totalItems) % totalItems;
-                    const usePrepend =
-                        diff === totalItems / 2
-                            ? direction < 0 // back → prepend, forward/none → append
-                            : diff > totalItems / 2;
-                    // const usePrepend = diff > totalItems / 2; // closer "back" than "forward"
-                    this.#addItemToDOM(item, usePrepend);
-                }
-
+                this.#addItemToDOM(item, usePrepend);
                 this.#visibleItems.add(item);
             }
-        }
+        });
     }
 
     #addItemToDOM(item, usePrepend = false) {
@@ -816,7 +837,7 @@ class InfiniteCarousel {
         item.inDOM = false;
         item.element.remove();
         this.#onElementRemove?.(item.element, item.data);
-        // delete item.element;
+        delete item.element;
     }
 
     #getVisibleIndexes(startIndex) {
@@ -841,17 +862,20 @@ class InfiniteCarousel {
 
         if (animation) {
             this.#isAnimating = true;
-            const shiftedItems = Math.abs(direction);
             const startIndex = direction > 0 ? this.#currentIndex : newIndex;
-            const visibleDiffCount = Math.max(newVisibleIndexes.length - visibleIndexes.length, 0); // Avoid animation into the void when moving from a wide to 2 narrow elements
-            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedItems + visibleDiffCount, direction);
 
-            let shiftedCells = 0;
-            for (let i = 0; i < shiftedItems; i++) {
-                const index = (startIndex + i) % totalItems;
-                shiftedCells += this.#items[index].isWide ? 2 : 1;
+            let addedCells = 0;
+            let removedCells = 0;
+            for (const i of visibleIndexes) {
+                if (!newVisibleIndexes.includes(i)) removedCells += (this.#items[i].isWide ? 2 : 1);
             }
+            for (const i of newVisibleIndexes) {
+                if (!visibleIndexes.includes(i)) addedCells += (this.#items[i].isWide ? 2 : 1);
+            }
+            const shiftedCells = !addedCells || !removedCells ? Math.max(addedCells, removedCells) : Math.min(addedCells, removedCells);
             const shiftX = shiftedCells * (this.#options.itemWidth + this.#options.gap);
+
+            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedCells, direction);
             animateElement(this.#itemsListWrap, {
                 keyframes: {
                     transform: direction > 0 ? [ 'translateX(0px)', `translateX(${- shiftX}px)` ] : [ `translateX(${- shiftX}px)`, 'translateX(0px)' ]
