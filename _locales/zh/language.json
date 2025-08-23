@@ -105,10 +105,18 @@
                 "祝你找到合适的模型！",
                 "（你可以在页面底部切换语言）"
             ],
+            "search": {
+                "placeholder": "使用 CivitAI API 搜索...",
+                "noResults": "未找到结果",
+                "linkNotSupported": "不支持此链接",
+                "wipPlaceholder": "[WIP] 开发中，目前仅支持链接转换和哈希搜索"
+            },
             "settingsDescription": "设置",
             "blackListTagsDescription": "要隐藏的标签列表（以逗号分隔）",
+            "blackListTagsNote": "这仅适用于模型列表，因为图像 API 不会返回标签列表。",
             "autoplay": "自动播放",
             "autoplayDescription": "如果关闭自动播放，卡片页面将不会显示 GIF，所有页面的视频默认暂停，仅在悬停时播放。",
+            "autoplayNote": "⚠ 对性能有很大影响。",
             "resize": "SW 尺寸调整",
             "resizeDescription": "启用 SW 调整后，卡片页面上的图片将根据实际大小（考虑 DPR）进行调整后再显示。否则将使用服务器返回的尺寸并自动缩放。",
             "resizeNote": "例如：服务器返回了 320x411 的图片，而请求的是 300x450。开启 SW 缩放后页面仍然接收 300x450，浏览器就不需要实时缩放。",

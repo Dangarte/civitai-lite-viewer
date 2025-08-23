@@ -20,7 +20,7 @@ const SW_CONFIG = {
         'full-image': 15 * 60,              // Images on full size image page:          15 mins
         'image-card': 30 * 60,              // Images images list:                      30 mins
         'unknown': 60 * 60,                 // Unknown target:                           1 hour
-        'large-file': 15 * 60,              // Дarge files (14+ mb)                     15 mins
+        'large-file': 15 * 60,              // Large files (14+ mb)                     15 mins
         'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                           5 days
         'lite-viewer-core': 3 * 60,         // Main file from the repo (index.html)      3 mins
         'blur-hash': 30 * 60                // blurHash                                 30 mins

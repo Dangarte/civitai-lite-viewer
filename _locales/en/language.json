@@ -105,10 +105,18 @@
                 "Good luck finding models!",
                 "(You can switch the language in the page footer)"
             ],
+            "search": {
+                "placeholder": "Search using CivitAI API...",
+                "noResults": "No results found",
+                "linkNotSupported": "This link is not supported",
+                "wipPlaceholder": "[WIP] In development, currently only link conversion and hash search"
+            },
             "settingsDescription": "Settings",
             "blackListTagsDescription": "List of tags to hide (separated by commas)",
+            "blackListTagsNote": "This works only on the model list, since the image API does not return a list of tags.",
             "autoplay": "Autoplay",
             "autoplayDescription": "If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.",
+            "autoplayNote": "⚠ Strong impact on performance.",
             "resize": "SW Resizing",
             "resizeDescription": "If SW resizing is enabled, images on the card page will be resized to their actual size (with DPR in mind) before being displayed. Otherwise, the server-provided size will be shown with automatic scaling.",
             "resizeNote": "For example: the server returned an image sized 320x411 for a 300x450 request — with SW resizing enabled, the page will still get 300x450, and the browser won't need to resize it on the fly.",

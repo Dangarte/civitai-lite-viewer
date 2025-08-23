@@ -333,7 +333,11 @@ class MasonryLayout {
             itemWidth: options.itemWidth ?? 300,
             itemHeight: options.itemHeight ?? null,
             gap: options.gap ?? 8,
-            overscan: options.overscan ?? 1,
+            minOverscan: options.minOverscan ?? 1,
+            maxOverscan: options.maxOverscan ?? 3,
+            speedFactor: options.speedFactor ?? 300,
+            stopThreshold: options.stopThreshold ?? 0.1,
+            cooldownTime: options.cooldownTime ?? 200,
             disableVirtualScroll: options.disableVirtualScroll ?? false,
         };
         this.#onElementRemove = options.onElementRemove;
@@ -638,14 +642,93 @@ class MasonryLayout {
         }
     }
 
+    #lastScrollTop = 0;
+    #lastScrollTime = performance.now();
+    #scrollDirection = 1; // 1 down, -1 up
+    #scrollSpeed = 0;
+    #overscanCooldown = 0; // timer before overscan collapse
+    #currentOverscan = 0; // smooth overscan that we will use
     #handleScroll(e) {
-        const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+        const now = performance.now();
+        const currentScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+
+        // --- speed calculation
+        const delta = currentScrollTop - this.#lastScrollTop;
+        const dt = now - this.#lastScrollTime;
+        let speed = 0;
+        if (dt > 0) speed = Math.abs(delta) / dt; // px/ms
+
+        // --- direction determination
+        let direction = this.#scrollDirection;
+        if (delta > 0) direction = 1;
+        else if (delta < 0) direction = -1;
+
+        // --- save the state
+        this.#scrollSpeed = speed;
+        this.#scrollDirection = direction;
+        this.#lastScrollTop = currentScrollTop;
+        this.#lastScrollTime = now;
+
         const options = this.#options;
-        const screenTop = innerScrollTop;
-        const screenBottom = innerScrollTop + window.innerHeight;
-        const overscan = window.innerHeight * options.overscan;
-        const overscanTop = screenTop - overscan;
-        const overscanBottom = screenBottom + overscan;
+        const vh = window.innerHeight;
+
+        // --- basic overscan parameters
+        const minOverscan = vh * (options.minOverscan ?? 1); // minimum: 1 screens
+        const maxOverscan = vh * (options.maxOverscan ?? 3); // maximum: 3 screens
+        const speedFactor = options.speedFactor ?? 300; // px/s -> overscan
+
+        // --- recalculate the desired overscan forward
+        let targetOverscan = minOverscan + Math.min(
+            speed * dt * (speedFactor / 1000), // scaling speed
+            maxOverscan - minOverscan
+        );
+
+        // direction: forward = more, backward = less
+        let overscanForward = targetOverscan;
+        let overscanBackward = minOverscan;
+
+        if (direction < 0) {
+            // moving up
+            overscanForward = minOverscan;
+            overscanBackward = targetOverscan;
+        }
+
+        // --- hysteresis: if the speed is low, start the collapse timer
+        const stopThreshold = options.stopThreshold ?? 0.1; // px/ms
+        const cooldownTime = options.cooldownTime ?? 200; // ms
+
+        if (speed < stopThreshold) {
+            if (this.#overscanCooldown === 0) {
+                this.#overscanCooldown = now + cooldownTime;
+            }
+        } else {
+            this.#overscanCooldown = 0;
+        }
+
+        // if the collapse time has passed, we reset to a minimum
+        if (this.#overscanCooldown && now > this.#overscanCooldown) {
+            overscanForward = minOverscan;
+            overscanBackward = minOverscan;
+        }
+
+        // --- smooth interpolation (so it doesn't jitter)
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const smooth = options.smoothFactor ?? 0.2; // the smaller, the smoother
+        this.#currentOverscan = lerp(this.#currentOverscan || minOverscan, Math.max(overscanForward, overscanBackward), smooth);
+
+        // --- final screen boundaries
+        const screenTop = currentScrollTop;
+        const screenBottom = currentScrollTop + vh;
+        const overscanTop = screenTop - (direction < 0 ? this.#currentOverscan : minOverscan);
+        const overscanBottom = screenBottom + (direction > 0 ? this.#currentOverscan : minOverscan);
+
+        // const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+        // const options = this.#options;
+        // const screenTop = innerScrollTop;
+        // const screenBottom = innerScrollTop + window.innerHeight;
+        // const overscan = window.innerHeight * options.overscan;
+        // const overscanTop = screenTop - overscan;
+        // const overscanBottom = screenBottom + overscan;
 
         let hasChanges = false;
 
