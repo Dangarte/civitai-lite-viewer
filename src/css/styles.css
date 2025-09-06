@@ -45,6 +45,7 @@ html {
     --c-main20: #0095ff33;
 
     --c-main-bg: var(--c-main20);
+    --c-main-bg-dark: var(--c-main20);
     --c-main-text: var(--c-main);
 
     --c-modelEarlyAccess: #a97c09;
@@ -90,6 +91,7 @@ html {
 @supports (color: color-mix(in oklab, #fff, #000)) {
     html {
         --c-main-bg: color-mix(in oklab, var(--c-main, #0095ff), var(--c-bg) 55%);
+        --c-main-bg-dark: color-mix(in oklab, var(--c-main, #0095ff), var(--c-bg-dark) 70%);
         --c-main-text: color-mix(in oklab, var(--c-main, #0095ff), var(--c-text) 30%);
     }
 
@@ -480,6 +482,23 @@ body.prevent-all::before {
 .icon [c-text][c-fill] {
     --icon-color-fill: var(--icon-color-primary, currentColor);
     --icon-color-stroke: none;
+}
+
+.notification-placeholder {
+    position: fixed;
+    left: 50%;
+    top: 50px;
+    transform: translateX(-50%);
+    margin: 0 auto;
+    border-radius: var(--radius);
+    padding: 1em;
+    background-color: var(--c-bg-light);
+    animation: notificationIn .2s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
+}
+
+@keyframes notificationIn {
+    0% { transform: translate(-50%, -20px) scale(.8); }
+    100% { transform: translate(-50%, 0) scale(1) }
 }
 
 .cards-loading,
@@ -1018,6 +1037,7 @@ footer a {
     max-width: 100%;
     width: var(--app-width-small);
     margin: 0 auto;
+    overflow-wrap: break-word;
 }
 
 .model-description.hide-long-description {
@@ -1166,7 +1186,7 @@ footer a {
 .model-description code.trigger-word {
     padding: .5em;
     font-weight: 500;
-    background-color: var(--c-main-bg);
+    background-color: var(--c-main-bg-dark);
     white-space: pre-line;
 }
 
@@ -1175,9 +1195,20 @@ footer a {
     width: 1.5em;
     height: 1.5em;
     cursor: pointer;
+    float: right;
     margin-block: -.25em !important;
-    --icon-color-primary: var(--c-text-dark);
-    --icon-color-secondary: var(--c-text-darker);
+    color: var(--c-text-dark);
+    --icon-color-primary: currentColor;
+    --icon-color-secondary: currentColor;
+}
+
+.model-description code.trigger-word .icon:hover {
+    transform: scale(1.1);
+    color: var(--c-text);
+}
+
+.model-description code.trigger-word .icon:active {
+    transform: scale(1.2);
 }
 
 .cards-list-container {
@@ -1409,11 +1440,15 @@ img.loading:not([src]) {
 
 .image-card .badges {
     gap: .15em;
-    justify-content: center;
+    justify-content: flex-start;
 }
 
 .image-card .badge {
     padding: .25em;
+}
+
+.image-card .badge[data-value="0"] {
+    display: none;
 }
 
 .image-card .card-content {
@@ -1547,6 +1582,10 @@ img.loading:not([src]) {
     gap: .5em;
 }
 
+.media-full-meta .badge[data-value="0"] {
+    display: none;
+}
+
 .meta-baseModel {
     padding: 1em;
     width: -moz-fit-content;
@@ -1632,6 +1671,58 @@ a[href].meta-resource:hover .meta-resource-name {
     color: var(--c-main-text);
 }
 
+.meta-remixOfId {
+    padding: .5em;
+    height: 128px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: .5em !important;
+    background-color: var(--c-bg);
+    border-radius: var(--radius);
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    isolation: isolate;
+    overflow: hidden;
+    text-decoration: none !important;
+}
+
+.meta-remixOfId.meta-loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -90%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(120deg, transparent, #ffffff33, transparent);
+    transform: skewX(-25deg);
+    animation: meta-shine .15s 2s infinite;
+}
+
+@keyframes meta-shine {
+    0% { left: -60%; }
+    100% { left: 120%; }
+}
+
+.meta-remixOfId button {
+    margin-inline: auto;
+}
+
+.meta-remixOfId-info {
+    display: flex;
+    flex-direction: column;
+    gap: .5em;
+}
+
+.meta-remixOfId .media-container {
+    height: 128px;
+}
+
+.meta-remixOfId .badge {
+    cursor: pointer;
+}
+
 .meta-other {
     display: flex;
     flex-wrap: wrap;
@@ -1672,9 +1763,11 @@ a[href].meta-resource:hover .meta-resource-name {
 
 code.prompt {
     padding: 1em;
-    white-space: pre-line;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
     display: block;
     max-width: 100%;
+    box-sizing: border-box;
     width: -moz-fit-content;
     width: fit-content;
     position: relative;
@@ -1871,6 +1964,7 @@ code.prompt-positive::before {
     user-select: none;
     font-weight: 400;
     line-height: 1;
+    color: var(--c-text);
     background-color: var(--c-bg-light);
     border-radius: var(--radius);
     padding: .5em;
@@ -1887,8 +1981,8 @@ a.badge[href] {
     pointer-events: none;
 }
 
-a.badge:focus-visible,
-a.badge:hover {
+a.badge[href]:focus-visible,
+a.badge[href]:hover {
     background-color: var(--c-bg-dark);
 }
 

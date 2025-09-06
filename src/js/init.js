@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 16,
+    version: 17,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -77,6 +77,7 @@ const SETTINGS = {
     showCurrentModelVersionStats: true,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
+    disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
 };
@@ -1032,6 +1033,7 @@ class Controller {
                 a.setAttribute('lilpipe-text', file.virusScanMessage ?? file.virusScanResult);
                 a.appendChild(getIcon('warning'));
             }
+            if (file.name) a.setAttribute('data-filename', file.name);
         });
 
         // Model sub name
@@ -1160,7 +1162,7 @@ class Controller {
                 item.appendChild(copyButton);
                 copyButton.addEventListener('click', () => {
                     toClipBoard(word);
-                    console.log('Copied to clipboard, TODO: notifications'); // TODO: notifications
+                    notify(window.languagePack?.text?.copied ?? 'Copied');
                     console.log(`Trigger word: ${word}`);
                 });
             });
@@ -1170,7 +1172,9 @@ class Controller {
         if (model.creator) {
             const userInfo = {...model.creator};
             if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
-            modelVersionDescription.appendChild(this.#genUserBlock(userInfo));
+            const userBLock = this.#genUserBlock(userInfo);
+            if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
+            modelVersionDescription.appendChild(userBLock);
         }
 
         // Version description
@@ -1725,9 +1729,78 @@ class Controller {
         codeElement.appendChild(fragment);
     }
 
-    // TODO: remixOfId from extra fields
     static #genImageGenerationMeta(meta) {
         const container = createElement('div', { class: 'generation-info' });
+
+        // Remix of
+        if (meta?.extra?.remixOfId) {
+            // bs:
+            //   to get an image you need to know its nsfw level,
+            //   but to find out this level you need to get an image...
+            //   result: you need to spam requests with all possible options...
+            //   what nonsense...
+            const remixContainer = insertElement('a', container, { class: 'meta-remixOfId badge' });
+
+            const inertRemixImage = media => {
+                console.log('Remix of', media);
+
+                if (!media) {
+                    // remixContainer.remove();
+                    remixContainer.textContent = 'failed to load';
+                    return;
+                }
+
+                remixContainer.classList.remove('meta-loading');
+                remixContainer.setAttribute('href', `#images?image=${media.id}&nsfw=${media.nsfwLevel}`);
+                const mediaElement = this.#genMediaElement({ media: media, height: 128, resize: SETTINGS.resize, target: 'model-card' });
+                remixContainer.appendChild(mediaElement);
+
+                const infoContainer = insertElement('div', remixContainer, { class: 'meta-remixOfId-info' });
+
+                insertElement('i', infoContainer, undefined, 'Remix of');
+
+                // Creator
+                infoContainer.appendChild(this.#genUserBlock({ username: media.username }));
+
+                // Stats
+                const statsList = [
+                    { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
+                    { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
+                    { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
+                    { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
+                    { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
+                ];
+                infoContainer.appendChild(this.#genStats(statsList));
+            };
+            const loadRemixImage = () => {
+                const cachedMedia = this.#cache.images.get(`${meta?.extra?.remixOfId}`);
+                if (cachedMedia) {
+                    inertRemixImage(cachedMedia);
+                    return;
+                }
+
+                // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
+                const nsfwLevels = [ 'None', 'X' ];
+                remixContainer.classList.add('meta-loading');
+                Promise.allSettled(nsfwLevels.map(lvl => this.api.fetchImageMeta(meta?.extra?.remixOfId, lvl)))
+                .then(result => result.filter(item => item.value)?.[0]?.value)
+                .then(media => {
+                    this.#cache.images.set(`${media.id}`, media);
+                    inertRemixImage(media);
+                });
+            };
+
+            if (!SETTINGS.disableRemixAutoload) loadRemixImage();
+            else {
+                const button = insertElement('button', remixContainer);
+                button.appendChild(getIcon('file_search'));
+                insertElement('span', button, undefined, 'Load Remix info');
+                button.addEventListener('click', () => {
+                    button.remove();
+                    loadRemixImage();
+                }, { once: true });
+            }
+        }
 
         // params
         if (meta.baseModel) insertElement('code', container, { class: 'prompt meta-baseModel' }, meta.baseModel);
@@ -1783,7 +1856,7 @@ class Controller {
             item.appendChild(getIcon('copy'));
             item.addEventListener('click', () => {
                 toClipBoard(comfyJSON);
-                console.log('Copied to clipboard, TODO: notifications'); // TODO: notifications
+                notify(window.languagePack?.text?.copied ?? 'Copied');
                 console.log('ComfyUI: ', JSON.parse(comfyJSON));
             }, { passive: true });
         }
@@ -1858,8 +1931,8 @@ class Controller {
                     if (!modelName) return;
 
                     item.trainedWords.forEach(word => {
-                        word = word.indexOf(',') === -1 && word.indexOf('.') === -1 ? word.trim() : word.replace(/(,)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
-                        const splitWords = word.split(/(,|\.)/).map(w => w.trim()).filter(Boolean);
+                        word = word.indexOf(',') === -1 ? word.trim() : word.replace(/(,)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
+                        const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
 
                         splitWords.forEach(w => {
                             trainedWords.add(w);
@@ -1881,28 +1954,33 @@ class Controller {
 
                 const codeBlocks = container.querySelectorAll('code.prompt-positive, code.prompt-negative');
 
-                const escapedWords = Array.from(trainedWords).sort((a, b) => b.length - a.length).map(w =>
-                    w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                );
-                const wordRegex = new RegExp(`\\b(${escapedWords.join('|')})\\b`, 'gi');
+                const sortedWords = Array.from(trainedWords).sort((a, b) => b.length - a.length);
+
+                const addTextNodesFromElement = (el, out) => {
+                    Array.from(el.childNodes).forEach(node => {
+                        if (node.nodeType === Node.TEXT_NODE) {
+                            out.push({ node, parent: el });
+                            return;
+                        }
+                        if (node.classList.contains('weight-container')) addTextNodesFromElement(node, out);
+                    });
+                };
 
                 codeBlocks.forEach(code => {
-                    const children = Array.from(code.childNodes);
+                    const children = [];
+                    addTextNodesFromElement(code, children);
 
-                    children.forEach(node => {
-                        if (node.nodeType !== Node.TEXT_NODE) return;
-
+                    children.forEach(({ node, parent }) => {
                         const text = node.textContent;
                         if (!text) return;
 
+                        let i = 0;
                         const matches = [];
-                        let match;
-                        while ((match = wordRegex.exec(text)) !== null) {
-                            matches.push({
-                                key: match[0],
-                                index: match.index
-                            });
-                        }
+                        text.split(/[,\(\)\[\]\:]/).forEach(tag => {
+                            const key = tag.trim();
+                            if (sortedWords.includes(key)) matches.push({ key, index: i + tag.search(/\S|$/) });
+                            i += tag.length + 1;
+                        });
 
                         if (matches.length === 0) return;
 
@@ -1927,7 +2005,7 @@ class Controller {
                             fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
                         }
 
-                        code.replaceChild(fragment, node);
+                        parent.replaceChild(fragment, node);
                     });
                 });
             };
@@ -2061,7 +2139,10 @@ class Controller {
         const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;` });
 
         // Image
-        if (previewMedia?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
+        if (!SETTINGS.autoplay) {
+            if (previewMedia?.type === 'video') card.classList.add('video-hover-play');
+            card.classList.add('image-hover-play');
+        }
         if (previewMedia) {
             const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
                 sleep,
@@ -2070,7 +2151,10 @@ class Controller {
                     if (skip) return;
                     const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
                     mediaElement.classList.add('card-background');
-                    if (previewMedia?.type === 'video' && !SETTINGS.autoplay) mediaElement.classList.remove('video-hover-play');
+                    if (!SETTINGS.autoplay) {
+                        if (previewMedia?.type === 'video') mediaElement.classList.remove('video-hover-play');
+                        if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
+                    }
                     card.appendChild(mediaElement);
                 }
             );
@@ -2124,14 +2208,21 @@ class Controller {
         const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? Math.round(itemWidth / (image.width/image.height))}px;` });
 
         // Image
+        if (!SETTINGS.autoplay) {
+            if (image?.type === 'video') card.classList.add('video-hover-play');
+            card.classList.add('image-hover-play');
+        }
         const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
             sleep,
             () => !this.appElement.contains(card),
             skip => {
                 if (skip) return;
-                if (image?.type === 'video' && !SETTINGS.autoplay) card.classList.add('video-hover-play');
                 const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
                 mediaElement.classList.add('card-background');
+                if (!SETTINGS.autoplay) {
+                    if (image?.type === 'video') mediaElement.classList.remove('video-hover-play');
+                    if (image?.type === 'image') mediaElement.classList.remove('image-hover-play');
+                }
                 card.appendChild(mediaElement);
             }
         );
@@ -2181,9 +2272,9 @@ class Controller {
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
-                const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop&format=webp&target=user-image`;
+                const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
                 if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, []);
-                const img = this.#cachedUserImages.get(src).pop() || createElement('img', { crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+                const img = this.#cachedUserImages.get(src).pop() || createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
                 container.appendChild(img);
             }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
@@ -2212,6 +2303,11 @@ class Controller {
 
         if (media.type === 'image') {
             src = original ? url : (autoplay || allowAnimated ? url.replace(/anim=false,?/, '') : (resize ? `${url}&format=webp` : url));
+
+            if (!autoplay && !original) {
+                mediaContainer.classList.add('image-hover-play');
+                mediaElement.classList.add('image-possibly-animated');
+            }
 
             mediaContainer.classList.add('media-image');
         } else if (media.type === 'video') {
@@ -2848,7 +2944,7 @@ class Controller {
         if (img && !img.naturalWidth) img.src = '';
 
         // Reuse user profile images
-        const userBLockImage = card.querySelector('.user-info img[src]');
+        const userBLockImage = card.querySelector('.user-info img[src]:not([data-original-active])');
         if (userBLockImage) {
             userBLockImage.remove();
             this.#cachedUserImages.get(userBLockImage.getAttribute('src')).push(userBLockImage);
@@ -3043,6 +3139,16 @@ function getIcon(name, original = false) {
     return iconsCache.get(iconName)?.cloneNode(true) ?? addIconToCache(name, original);
 }
 
+// PLACEHOLDER
+// TODO: notifications
+function notify(text) {
+    console.log('TODO: notifications');
+    const div = insertElement('div', document.body, { class: 'notification-placeholder' }, text);
+    setTimeout(() => {
+        div.remove();
+    }, 3000);
+}
+
 function loadLanguagePack(language, forceReload = false) {
     if (!CONFIG.langauges.includes(language)) language = 'en';
     const key = `civitai-lite-viewer--languagePack:${language}`;
@@ -3150,6 +3256,7 @@ function onBodyMousedown(e) {
     }
 }
 
+// TODO: check for animation in images
 function onBodyMouseOver(e) {
     if (e.sourceCapabilities?.firesTouchEvents) return;
 
@@ -3162,7 +3269,12 @@ function onBodyMouseOver(e) {
 
     // videos
     const videoPLayback = e.target.closest('.video-hover-play');
-    if (videoPLayback) return startVideoPlayEvent(videoPLayback);
+    if (videoPLayback) startVideoPlayEvent(videoPLayback);
+
+    // images
+    // TODO: Right now it just tries to load the animated version anyway, even when it's useless... add some checks
+    // const imageAnimationPLay = e.target.closest('.image-hover-play');
+    // if (imageAnimationPLay) showOriginalImage(imageAnimationPLay);
 }
 
 function onBodyFocus(e) {
@@ -3175,7 +3287,11 @@ function onBodyFocus(e) {
 
     // videos
     const videoPLayback = e.target.closest('.video-hover-play');
-    if (videoPLayback) return startVideoPlayEvent(videoPLayback, { fromFocus: true });
+    if (videoPLayback) startVideoPlayEvent(videoPLayback, { fromFocus: true });
+
+    // images
+    // const imageAnimationPLay = e.target.closest('.image-hover-play');
+    // if (imageAnimationPLay) showOriginalImage(imageAnimationPLay);
 }
 
 function onVisibilityChange() {
@@ -3325,6 +3441,80 @@ function pauseVideo(mediaContainer) {
     ctx.drawImage(video, offsetX, offsetY, cropWidth, cropHeight, 0, 0, targetWidth, targetHeight);
     mediaContainer.setAttribute('data-timestump', video.currentTime);
     mediaContainer.replaceChild(canvas, video);
+}
+
+function showOriginalImage(target) {
+    const images = target.querySelectorAll('img.image-possibly-animated:not([data-original-active])');
+    if (!images.length) return;
+
+    const hideOriginalImage = () => {
+        target.removeEventListener('blur', hideOriginalImage);
+        target.removeEventListener('mouseleave', hideOriginalImage);
+
+        images.forEach(img => {
+            if (!img.isConnected) return;
+
+            if (img.hasAttribute('data-replaced-src')) {
+                replaceImageElement(img, img.getAttribute('data-replaced-src'), {
+                    saveReplacedSrc: false,
+                    checkAttrAdded: '',
+                    checkAttrRemoved: 'data-original-active data-original-loading'
+                });
+
+                img.removeAttribute('data-replaced-src');
+                img.removeAttribute('data-original-active');
+            }
+        });
+    };
+
+    images.forEach(img => {
+        if (!img.isConnected) return;
+
+        const src = img.getAttribute('src');
+        const originalSrc = src.includes('?') ? `${src}&original=true` : `${src}?original=true`;
+
+        replaceImageElement(img, originalSrc, {
+            saveReplacedSrc: true,
+            checkAttrAdded: 'data-original-active',
+            checkAttrRemoved: 'data-original-loading'
+        });
+    });
+
+    target.addEventListener('blur', hideOriginalImage, { passive: true });
+    target.addEventListener('mouseleave', hideOriginalImage, { passive: true });
+}
+
+function replaceImageElement(img, newUrl, options) {
+    const { saveReplacedSrc, checkAttrAdded, checkAttrRemoved } = options;
+
+    if (!img.isConnected) return;
+
+    img.setAttribute('data-original-loading', newUrl);
+
+    const loader = new Image();
+    loader.onload = () => {
+        if (!img.isConnected) return;
+        if (img.getAttribute('data-original-loading') !== newUrl) return;
+
+        if (saveReplacedSrc && !img.hasAttribute('data-replaced-src')) {
+            img.setAttribute('data-replaced-src', img.src);
+        }
+
+        img.src = newUrl;
+
+        if (checkAttrAdded) img.setAttribute(checkAttrAdded, 'true');
+        if (checkAttrRemoved) {
+            checkAttrRemoved.split(/\s+/).forEach(attr => img.removeAttribute(attr));
+        }
+    };
+
+    loader.onerror = () => {
+        if (img.getAttribute('data-original-loading') === newUrl) {
+            img.removeAttribute('data-original-loading');
+        }
+    };
+
+    loader.src = newUrl;
 }
 
 function startVideoPlayEvent(target, options = { fromFocus: false }) {

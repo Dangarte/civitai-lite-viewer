@@ -104,16 +104,19 @@ async function cacheFetch(request, cacheControl) {
 
     if (!cacheControl && url.pathname.indexOf('/model-versions/') !== -1) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
 
+    // if (params.original) {
+    //     const u = new URL(url, self.location.origin);
+    //     u.searchParams.delete("original");
+    //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
+    //     return cacheGet(editedRequest);
+    // }
+
     try {
         const fetchResponse = await fetch(request);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
-        const forceDisableAnimation = request.url.includes(',anim=false,');
-        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.format) && (!([ 'image/gif', 'image/apng' ].includes(blob.type)) || params.format)) || (forceDisableAnimation && await isImageAnimated(blob)))) {
-            const { width, height , format, quality, fit } = params;
-            blob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceDisableAnimation ? 'webp' : undefined), fit })) || blob;
-        }
+        const customHeaders = [];
 
         if (!cacheControl) {
             if (blob.type === 'application/json') {
@@ -125,7 +128,24 @@ async function cacheFetch(request, cacheControl) {
             }
         }
 
+        const forceDisableAnimation = request.url.includes(',anim=false,');
+        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.format)) || forceDisableAnimation)) {
+            // Store original
+            // if (await isImageAnimated(blob)) {
+            //     const originalResponse = responseFromBlob(blob, cacheControl);
+            //     const editedUrl = request.url.includes('?') ? `${request.url}&original=true` : `${request.url}?original=true`;
+            //     const editedRequest = cloneRequestWithModifiedUrl(request, editedUrl);
+            //     if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(editedRequest, originalResponse, cacheName);
+            //     customHeaders.push([ 'X-Animated', true ]);
+            // }
+
+            const { width, height , format, quality, fit } = params;
+            const resizedBlob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceDisableAnimation ? 'webp' : undefined), fit }));
+            blob = resizedBlob || blob;
+        }
+
         const response = responseFromBlob(blob, cacheControl);
+        if (customHeaders.length) customHeaders.forEach(([k, v]) => response.headers.set(k, v));
         if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(request, response.clone(), cacheName);
         return response;
     } catch (_) {
@@ -155,7 +175,7 @@ async function localFetch(request) {
 async function resizeBlobImage(blob, options) { // Resize image blob
     const { width: targetWidth, height: targetHeight, format: targetFormat, quality: targetQuality = 0.97, fit = 'crop', position = 'center', smoothing = 'low' } = options; // fit: contain|scale-up|fill|crop; smoothing: none|low|medium|high;
     const types = { jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png', avif: 'image/avif' };
-    if (!targetFormat && (await isImageAnimated(blob))) return blob;
+    if (!targetFormat && (await isImageAnimated(blob))) return null;
     try {
         const bmp = await createImageBitmap(blob);
         const { width, height } = bmp;
