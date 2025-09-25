@@ -86,6 +86,19 @@ html {
         --c-modelNew: #38acff;
         --c-modelUpdated: #2ce0aa;
     }
+
+    code.prompt .keyword {
+        color: #bf6210;
+    }
+    code.prompt .lora {
+        color: #00bd98;
+    }
+    code.prompt .keyword[data-keyword="BREAK"] {
+        color: #890d9f;
+    }
+    code.prompt .trigger {
+        color: #3eaf00;
+    }
 }
 
 @supports (color: color-mix(in oklab, #fff, #000)) {
@@ -1438,6 +1451,16 @@ img.loading:not([src]) {
     text-shadow: -1px -1px 0 var(--c-shadow), 1px -1px 0 var(--c-shadow), -1px  1px 0 var(--c-shadow), 1px  1px 0 var(--c-shadow);
 }
 
+.user-info .user-group {
+    display: inline-block;
+    color: var(--c-main-text);
+    font-weight: 700;
+    margin-inline-start: .25em;
+    line-height: 1;
+    letter-spacing: 1px;
+    text-shadow: none;
+}
+
 .image-card .badges {
     gap: .15em;
     justify-content: flex-start;
@@ -1773,32 +1796,54 @@ code.prompt {
     position: relative;
 }
 
-code.prompt span {
+.prompt span {
     border-radius: .25em;
     box-decoration-break: clone;
 }
 
-code.prompt .keyword    { color: #e67e22; font-weight: bold; }
-code.prompt .weight     { color: var(--c-bracket, var(--c-text-darker)); }
-code.prompt .bracket    { color: var(--c-bracket, var(--c-text-darker)); }
-code.prompt .lora       { color: #16a085; font-style: italic; }
-code.prompt .link       { text-decoration: underline; }
+.prompt .keyword    { color: #e67e22; font-weight: 500; }
+.prompt .weight     { color: var(--c-bracket, var(--c-text-darker)); }
+.prompt .bracket    { color: var(--c-bracket, var(--c-text-darker)); }
+.prompt .lora       { color: #16a085; font-style: italic; }
+.prompt .link       { text-decoration: underline; }
 
-code.prompt .weight-container:hover {
-    background-image: linear-gradient(to top, var(--c-bracket, var(--c-text-darker)) 2px, transparent 2px);
+.prompt .keyword[data-keyword="BREAK"] {
+    color: #c586c0;
+    font-weight: 600;
+    position: relative;
+    display: inline-flex;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    align-items: center;
+    justify-content: center;
+    gap: .5em;
+    width: 100%;
+    margin-block: .5em;
 }
 
-code.prompt .link::after {
+.prompt .keyword[data-keyword="BREAK"]::after,
+.prompt .keyword[data-keyword="BREAK"]::before {
+    content: '';
+    border-radius: 1px;
+    flex-shrink: 1;
+    height: 2px;
+    width: 100%;
+    background-color: currentColor;
+    opacity: .6;
+}
+
+.prompt .link::after {
     display: none;
 }
 
-code.prompt .trigger    {
-    color: #6ab04c; font-style: italic;
+.prompt .trigger {
+    color: #6ab04c;
+    font-style: italic;
     transition: .1s ease-in;
     outline: .25em solid transparent;
 }
 
-code.prompt .trigger[lilpipe-showed] {
+.prompt .trigger[lilpipe-showed]:not([lilpipe-showed-delay]) {
     transition: .1s ease-out;
     outline: .25em solid var(--c-main-text);
 }
@@ -2399,13 +2444,27 @@ a.link-button.link-open-civitai::after {
     height: 4px;
     width: calc(100% - 2 * var(--radius));
     border-radius: 2px;
-    background-color: var(--c-text);
-    opacity: .5;
+    background-color: var(--c-text-darker);
+    opacity: .6;
     transition: .1s ease-out;
 }
 
+.main-search.search-loading .main-search-bar::after {
+    content: '';
+    position: absolute;
+    height: 150%;
+    border-radius: 3px;
+    background-image: linear-gradient(90deg, transparent 30%, var(--c-main-text), var(--c-main-text), transparent 70%);
+    background-size: 100%;
+    background-position-x: calc(-1 * min(600px, 100vw));
+    background-repeat: no-repeat;
+    inset-inline: 0;
+    inset-block-start: -25%;
+    animation: pageloading-bar-fadeIn .3s linear 1, pageloading-bar 2s .3s ease-in-out infinite;
+}
+
 #main-search-input:focus ~ .main-search-bar {
-    background-color: var(--c-main-text);
+    background-color: var(--c-text);
     opacity: .72;
 }
 

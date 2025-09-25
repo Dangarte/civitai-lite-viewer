@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 17,
+    version: 18,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -486,9 +486,16 @@ class Controller {
                 insertElement('span', el, undefined, item.title);
             });
 
+            hideLoading();
             searchResultsContainer.textContent = '';
             searchResultsContainer.appendChild(fragment);
             searchResultsContainer.style.setProperty('--count', results.length);
+        };
+        const showLoading = () => {
+            searchContainer.classList.add('search-loading');
+        };
+        const hideLoading = () => {
+            searchContainer.classList.remove('search-loading');
         };
         const doSearch = () => {
             searchTimer = null;
@@ -535,7 +542,10 @@ class Controller {
 
                 if (!promises.length && !results.length) results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
 
-                if (promises.length) Promise.all(promises).then(() => renderResults(results));
+                if (promises.length) {
+                    showLoading();
+                    Promise.all(promises).then(() => renderResults(results));
+                }
                 else renderResults(results);
 
                 return;
@@ -557,7 +567,10 @@ class Controller {
                 if (!promises.length && !results.length) results.push({ icon: 'wrench', title: searchLang.wipPlaceholder ?? '[WIP] In development, so far only link conversion and hash search' })
             }
 
-            if (promises.length) Promise.all(promises).then(() => renderResults(results));
+            if (promises.length) {
+                showLoading();
+                Promise.all(promises).then(() => renderResults(results));
+            }
             else renderResults(results);
         };
         searchInput.addEventListener('input', () => {
@@ -1098,9 +1111,9 @@ class Controller {
                 this.#state.carouselCurrentUrl = item?.data?.url;
             };
             const previewList = previewImages.map((media, index) => {
-                const element = index <= 2 ? generateMediaPreview(media) : null;
                 const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
                 if (!media.id && id) media.id = id;
+                const element = index <= 2 ? generateMediaPreview(media) : null;
                 return { id: media.id, data: media, element, width: media.width, height: media.height, isWide: media.width/media.height >= isWideMinRatio };
             });
 
@@ -1317,6 +1330,7 @@ class Controller {
         const { modelId, modelVersionId, postId, username, state: navigationState = {...this.#state} } = options;
         let query;
         let groupingByPost = SETTINGS.groupImagesByPost && !postId;
+        const queryModel = modelId ? this.#cache.models.get(`${modelId}`) : null;
         const firstPageNavigation = this.#pageNavigation;
         const fragment = new DocumentFragment();
         const listWrap = createElement('div', { id: 'images-list', class: 'cards-loading' });
@@ -1389,9 +1403,13 @@ class Controller {
                 if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
             }
 
+            const creatorName = queryModel?.creator?.username;
             images.forEach(image => {
                 if (imagesMetaById.has(image.id)) return;
                 imagesMetaById.set(image.id, image);
+
+                // Mark user as model uploader
+                if (image.username === creatorName) image.usergroup = 'OP';
 
                 if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
                 postsById.get(image.postId).add(image);
@@ -1595,10 +1613,10 @@ class Controller {
         const tokenSpecs = [
             { type: 'lora',     regex: /<lora:[^:>]+:[^>]+>/y },
             { type: 'link',     regex: /https:\/\/civitai\.com\/[^\s]+/y },
-            { type: 'escaped',  regex: /\\[()[\]]/y },
+            { type: 'escaped',  regex: /\\[()]/y },
             { type: 'weight',   regex: /:-?[0-9.]+/y },
-            { type: 'bracket',  regex: /[()[\]]/y },
-            { type: 'punct',    regex: /[,.:;]/y },
+            { type: 'bracket',  regex: /[()]/y },
+            { type: 'punct',    regex: /[,]/y },
             { type: 'space',    regex: /\s+/y },
             { type: 'word',     regex: /[\w\-]+/y },
             { type: 'other',    regex: /[^\s\w]/y },
@@ -1651,8 +1669,8 @@ class Controller {
         };
         const openWeight = (bracket, tokenIndex) => {
             const currentBracket = bracketContainers.at(-1);
-            const strength = bracket === '(' ? 1.1 : bracket === '[' ? 0.91 : 1;
-            const closeBracket = bracket === '(' ? ')' : bracket === '[' ? ']' : null;
+            const strength = bracket === '(' ? 1.1 : 1;
+            const closeBracket = bracket === '(' ? ')' : null;
             const sum = +((currentBracket?.sum ?? 1) * strength).toFixed(6);
             const container = insertElement('span', weightContainer, {
                 class: 'weight-container',
@@ -1696,10 +1714,10 @@ class Controller {
                 if (isURL(value)) insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
                 else insertElement('span', weightContainer, { class: 'link' }, value);
             } else if (type === 'bracket') {
-                if (value === '(' || value === '[') {
+                if (value === '(') {
                     openWeight(value, i);
                     insertElement('span', weightContainer, { class: 'bracket' }, value);
-                } else if (value === ')' || value === ']') {
+                } else if (value === ')') {
                     if (value === nextLegitCLoseBracket) {
                         insertElement('span', weightContainer, { class: 'bracket' }, value);
                         closeWeight(value, i);
@@ -1715,7 +1733,7 @@ class Controller {
                 insertElement('span', weightContainer, { class: 'weight' }, value);
             } else if (type === 'word' && keywords.has(value)) {
                 if (value === 'BREAK') clearWeight();
-                insertElement('span', weightContainer, { class: 'keyword' }, value);
+                insertElement('span', weightContainer, { class: 'keyword', 'data-keyword': value }, value);
             } else {
                 pushText(value);
                 continue;
@@ -1976,10 +1994,18 @@ class Controller {
 
                         let i = 0;
                         const matches = [];
-                        text.split(/[,\(\)\[\]\:]/).forEach(tag => {
-                            const key = tag.trim();
+                        text.split(/([,\(\)]|\bBREAK\b)/).forEach(tag => {
+                            let key = tag.trim();
+                            if (key.includes(':')) {
+                                const parts = key.split(':');
+                                const last = parts.at(-1);
+                                if (!isNaN(last) && last.trim() !== '') {
+                                    parts.pop();
+                                    key = parts.join(':');
+                                }
+                            }
                             if (sortedWords.includes(key)) matches.push({ key, index: i + tag.search(/\S|$/) });
-                            i += tag.length + 1;
+                            i += tag.length;
                         });
 
                         if (matches.length === 0) return;
@@ -2201,7 +2227,22 @@ class Controller {
         let postSize = 1;
         if (image instanceof Set) {
             postSize = image.size;
-            [image] = image;
+            // Image with the most reactions
+            image = [...image].reduce((max, img) => {
+                const totalReactions = img.stats.likeCount
+                                    + img.stats.dislikeCount
+                                    + img.stats.cryCount
+                                    + img.stats.heartCount
+                                    + img.stats.laughCount;
+
+                const maxReactions = max.stats.likeCount
+                                    + max.stats.dislikeCount
+                                    + max.stats.cryCount
+                                    + max.stats.heartCount
+                                    + max.stats.laughCount;
+
+                return totalReactions > maxReactions ? img : max;
+            });
         };
 
         const { isVisible, itemWidth, itemHeight } = options ?? {};
@@ -2233,7 +2274,7 @@ class Controller {
         const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
 
         // Creator and Created At
-        const creator = this.#genUserBlock({ username: image.username });
+        const creator = this.#genUserBlock({ username: image.username, group: image.usergroup ?? null });
         if (image.createdAt) {
             const createdAt = new Date(image.createdAt);
             insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
@@ -2279,8 +2320,14 @@ class Controller {
             }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
         }
-        if (userInfo.url) insertElement('a', container, { href: userInfo.url }, userInfo.username);
-        else insertElement('span', container, undefined, userInfo.username);
+
+        const usernameText = userInfo.url
+            ? insertElement('a', container, { href: userInfo.url }, userInfo.username)
+            : insertElement('span', container, undefined, userInfo.username);
+
+        if (userInfo.group) {
+            if (userInfo.group === 'OP') insertElement('div', usernameText, { class: 'badge user-group', 'data-group': 'OP' }, 'OP');
+        }
 
         return container;
     }
@@ -2296,7 +2343,7 @@ class Controller {
         const params = resize && !original ? `?width=${targetWidth}${targetHeight ? `&height=${targetHeight}` : ''}&fit=crop` : '';
         const paramString = target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params;
         const replaceWidthWith = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
-        const url = `${media.url.replace(/\/width=\d+\//, replaceWidthWith)}${paramString}`;
+        const url = `${media.url.includes('/original=true/') ? media.url.replace('/original=true/', replaceWidthWith) : replace(/\/width=\d+\//, replaceWidthWith)}${paramString}`;
 
         let mediaElement = insertElement('img', mediaContainer, { class: 'media-element loading',  alt: ' ', crossorigin: 'anonymous' });
         let src;
@@ -2575,6 +2622,8 @@ class Controller {
             "SD 3.5 Large",
             "SD 3.5 Large Turbo",
             "Pony",
+            "Pony V7",
+            "Chroma",
             "Qwen",
             "Flux.1 S",
             "Flux.1 D",
@@ -2606,8 +2655,10 @@ class Controller {
             "Wan Video 2.2 I2V-A14B",
             "Wan Video 2.2 T2V-A14B",
             "HiDream",
+            "Seedream",
             "OpenAI",
             "Imagen4",
+            "Nano Banana",
             "Other"
         ];
         const modelsOptionLabelsDefault = {
@@ -3580,6 +3631,7 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
 
         tooltip.setAttribute('data-animation', 'out');
         target.removeAttribute('lilpipe-showed');
+        if (delay) target.removeAttribute('lilpipe-showed-delay');
         setTimeout(() => tooltip.remove?.(), 100);
     };
 
@@ -3603,9 +3655,11 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
 
     if (delay && Date.now() - prevLilpipeEvenetTime > 272) {
         tooltip.remove();
+        target.setAttribute('lilpipe-showed-delay', '');
         prevLilpipeTimer = setTimeout(() => {
             prevLilpipeTimer = null;
 
+            target.removeAttribute('lilpipe-showed-delay');
             parent.appendChild(tooltip);
             startAnimation();
         }, delay);
