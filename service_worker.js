@@ -115,7 +115,7 @@ async function cacheFetch(request, cacheControl) {
     try {
         for (const key of SW_CONFIG.local_params) url.searchParams.delete(key); // Removing unnecessary parameters
         const requestWithoutLocalParams = cloneRequestWithModifiedUrl(request, url.toString());
-        const fetchResponse = await fetch(requestWithoutLocalParams);
+        const fetchResponse = await fetch(params.length ? requestWithoutLocalParams : request);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
