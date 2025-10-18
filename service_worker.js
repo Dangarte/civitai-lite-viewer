@@ -113,9 +113,12 @@ async function cacheFetch(request, cacheControl) {
     // }
 
     try {
+        const before = url.searchParams.size;
         for (const key of SW_CONFIG.local_params) url.searchParams.delete(key); // Removing unnecessary parameters
-        const requestWithoutLocalParams = cloneRequestWithModifiedUrl(request, url.toString());
-        const fetchResponse = await fetch(params.length ? requestWithoutLocalParams : request);
+        const after = url.searchParams.size;
+        const modified = before !== after;
+        const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
+        const fetchResponse = await fetch(modified ? requestWithoutLocalParams : request);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
@@ -417,7 +420,10 @@ async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask 
 }
 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
-    const { method, headers, mode, credentials, cache, redirect, referrer, integrity, keepalive } = originalRequest;
+    const { method, headers, credentials, cache, redirect, referrer, integrity, keepalive } = originalRequest;
+    let { mode } = originalRequest;
+    if (mode === 'navigate') mode = 'same-origin'; // fix: Cannot construct a Request with a RequestInit whose mode member is set as 'navigate'.
+
     const init = { method, headers, mode, credentials, cache, redirect, referrer, integrity, keepalive };
     if (method !== 'GET' && method !== 'HEAD') {
         init.body = originalRequest.body;
