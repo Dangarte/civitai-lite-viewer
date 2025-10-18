@@ -12,6 +12,7 @@ const SW_CONFIG = {
     images_url: 'https://image.civitai.com/',
     api_url: 'https://civitai.com/api/v1/',
     local_urls: {},
+    local_params: [ 'target', 'original', 'cache', 'width', 'height', 'fit', 'format', 'quality', 'smoothing', 'position' ], // Parameters to remove when fetching (they were added only for passing parameters from the page to the sw)
     ttl: {
         'model-preview': 12 * 60 * 60,      // Images in preview list on model page:    12 hours
         'model-version': 2 * 24 * 60 * 60,  // Info about model version:                 2 days
@@ -112,7 +113,9 @@ async function cacheFetch(request, cacheControl) {
     // }
 
     try {
-        const fetchResponse = await fetch(request);
+        for (const key of SW_CONFIG.local_params) url.searchParams.delete(key); // Removing unnecessary parameters
+        const requestWithoutLocalParams = cloneRequestWithModifiedUrl(request, url.toString());
+        const fetchResponse = await fetch(requestWithoutLocalParams);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
@@ -416,7 +419,10 @@ async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
     const { method, headers, mode, credentials, cache, redirect, referrer, integrity, keepalive } = originalRequest;
     const init = { method, headers, mode, credentials, cache, redirect, referrer, integrity, keepalive };
-    if (method !== 'GET' && method !== 'HEAD') init.body = originalRequest.body;
+    if (method !== 'GET' && method !== 'HEAD') {
+        init.body = originalRequest.body;
+        init.duplex = 'half';
+    }
     return new Request(newUrl, init);
 }
 

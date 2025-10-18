@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 18,
+    version: 19,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -201,7 +201,23 @@ class CivitaiAPI {
         if (id) url.searchParams.append('imageId', id);
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
 
-        const data = await this.#getJSON({ url, target: `image meta (id: ${id})` });
+        // bs:
+            //   to get an image you need to know its nsfw level,
+            //   but to find out this level you need to get an image...
+            //   result: you need to spam requests with all possible options...
+            //   what nonsense...
+        if (!nsfwLevel) {
+            console.log('nsfwLevel not specified, attempting to guess (multiple requests to server)');
+            // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
+            const nsfwLevels = [ 'None', 'X' ];
+
+            const image = await Promise.allSettled(nsfwLevels.map(lvl => this.fetchImageMeta(id, lvl)))
+                .then(result => result.filter(item => item.value)?.[0]?.value);
+
+            return image || null;
+        }
+
+        const data = await this.#getJSON({ url, target: `image meta (id: ${id}; nsfwLevel: ${nsfwLevel})` });
         return data?.items?.[0] ?? null;
     }
 
@@ -1416,7 +1432,7 @@ class Controller {
             });
 
             const postsInList = new Set();
-            layout.addItems(images.map(image => {
+            const items = images.map(image => {
                 if (groupingByPost) {
                     if (postsInList.has(image.postId)) return null;
                     postsInList.add(image.postId);
@@ -1425,7 +1441,22 @@ class Controller {
                 const aspectRatio = image.width / image.height;
                 if (groupingByPost) return { id: image.postId, aspectRatio, data: postsById.get(image.postId) };
                 else return { id: image.id, aspectRatio, data: image }
-            }).filter(Boolean));
+            }).filter(Boolean);
+
+            // Select image with the most reactions in each group
+            items.forEach(item => {
+                if (item.data instanceof Set && item.data.size > 1) {
+                    const arr = [...item.data];
+                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                    const maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
+
+                    const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
+                    item.data = newData;
+                    item.aspectRatio = maxImg.width / maxImg.height;
+                }
+            });
+
+            layout.addItems(items);
 
             if (query.cursor) {
                 const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
@@ -1752,11 +1783,6 @@ class Controller {
 
         // Remix of
         if (meta?.extra?.remixOfId) {
-            // bs:
-            //   to get an image you need to know its nsfw level,
-            //   but to find out this level you need to get an image...
-            //   result: you need to spam requests with all possible options...
-            //   what nonsense...
             const remixContainer = insertElement('a', container, { class: 'meta-remixOfId badge' });
 
             const inertRemixImage = media => {
@@ -1797,11 +1823,8 @@ class Controller {
                     return;
                 }
 
-                // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
-                const nsfwLevels = [ 'None', 'X' ];
                 remixContainer.classList.add('meta-loading');
-                Promise.allSettled(nsfwLevels.map(lvl => this.api.fetchImageMeta(meta?.extra?.remixOfId, lvl)))
-                .then(result => result.filter(item => item.value)?.[0]?.value)
+                this.api.fetchImageMeta(meta?.extra?.remixOfId)
                 .then(media => {
                     this.#cache.images.set(`${media.id}`, media);
                     inertRemixImage(media);
@@ -1994,7 +2017,7 @@ class Controller {
 
                         let i = 0;
                         const matches = [];
-                        text.split(/([,\(\)]|\bBREAK\b)/).forEach(tag => {
+                        text.split(/(?<!\\)([,\(\)]|\bBREAK\b)/).forEach(tag => {
                             let key = tag.trim();
                             if (key.includes(':')) {
                                 const parts = key.split(':');
@@ -2227,22 +2250,7 @@ class Controller {
         let postSize = 1;
         if (image instanceof Set) {
             postSize = image.size;
-            // Image with the most reactions
-            image = [...image].reduce((max, img) => {
-                const totalReactions = img.stats.likeCount
-                                    + img.stats.dislikeCount
-                                    + img.stats.cryCount
-                                    + img.stats.heartCount
-                                    + img.stats.laughCount;
-
-                const maxReactions = max.stats.likeCount
-                                    + max.stats.dislikeCount
-                                    + max.stats.cryCount
-                                    + max.stats.heartCount
-                                    + max.stats.laughCount;
-
-                return totalReactions > maxReactions ? img : max;
-            });
+            image = image.values().next().value;
         };
 
         const { isVisible, itemWidth, itemHeight } = options ?? {};
