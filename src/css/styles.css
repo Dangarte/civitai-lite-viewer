@@ -1609,6 +1609,15 @@ img.loading:not([src]) {
     display: none;
 }
 
+.media-full-meta .image-created-time {
+    color: var(--c-text-darker);
+}
+
+.media-full-meta > .user-info {
+    width: 100%;
+    justify-content: space-between;
+}
+
 .meta-baseModel {
     padding: 1em;
     width: -moz-fit-content;
@@ -1744,6 +1753,10 @@ a[href].meta-resource:hover .meta-resource-name {
 
 .meta-remixOfId .badge {
     cursor: pointer;
+}
+
+.meta-remixOfId-info .user-info {
+    display: inline-flex;
 }
 
 .meta-other {

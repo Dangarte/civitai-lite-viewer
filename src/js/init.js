@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 19,
+    version: 20,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -1274,8 +1274,13 @@ class Controller {
         const insertMeta = (media, container) => {
             document.title = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username);
 
-            // Creator
-            container.appendChild(this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` }));
+            // Creator and Created At
+            const creator = this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` });
+            if (media.createdAt) {
+                const createdAt = new Date(media.createdAt);
+                insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
+            }
+            container.appendChild(creator);
 
             // Stats
             const statsList = [
@@ -1801,10 +1806,11 @@ class Controller {
 
                 const infoContainer = insertElement('div', remixContainer, { class: 'meta-remixOfId-info' });
 
-                insertElement('i', infoContainer, undefined, 'Remix of');
+                const titleContainer = insertElement('span', infoContainer);
+                insertElement('i', titleContainer, undefined, 'Remix of ');
 
                 // Creator
-                infoContainer.appendChild(this.#genUserBlock({ username: media.username }));
+                titleContainer.appendChild(this.#genUserBlock({ username: media.username }));
 
                 // Stats
                 const statsList = [
@@ -1815,6 +1821,9 @@ class Controller {
                     { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
                 ];
                 infoContainer.appendChild(this.#genStats(statsList));
+
+                // NSFW LEvel
+                if (media.nsfwLevel !== 'None') insertElement('div', infoContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
             };
             const loadRemixImage = () => {
                 const cachedMedia = this.#cache.images.get(`${meta?.extra?.remixOfId}`);
@@ -2340,6 +2349,7 @@ class Controller {
         return container;
     }
 
+    // TODO: Should I create a "precision" mode that calculates the height needed for the target width?
     static #genMediaElement({ media, width, height = undefined, resize = true, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true }) {
         const mediaContainer = createElement('div', { class: 'media-container', 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel });
 
@@ -2347,7 +2357,11 @@ class Controller {
         const targetWidth = Math.round(width * this.#devicePixelRatio);
         const targetHeight = height ? Math.round(height * this.#devicePixelRatio) : null;
 
-        const size = ratio < 1 || !targetHeight ? `width=${targetWidth}` : `height=${targetHeight}`;
+        // The server can return any requested height and only limits the width to a set of values
+        // Anything above 2200 width is returned by the server at the requested width
+        const serverWidths = [ 96, 320, 450, 512, 800, 1200, 1600, 2200 ];
+        const getNearestServerSize = (size, list) => list[Math.min((list.findLastIndex(s => size > s) + 1), list.length - 1)];
+        const size = `width=${getNearestServerSize(ratio < 1 || !targetHeight ? targetWidth : targetHeight / ratio, serverWidths)}`;
         const params = resize && !original ? `?width=${targetWidth}${targetHeight ? `&height=${targetHeight}` : ''}&fit=crop` : '';
         const paramString = target ? (params ? `${params}&target=${target}` : `?target=${target}`) : params;
         const replaceWidthWith = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
@@ -3292,18 +3306,33 @@ function tryClearCache() {
     }
 }
 
+function gotoLocalLink(hash) {
+    const newState = { id: Date.now() };
+    if (hash !== location.hash) {
+        history.replaceState(Controller.state, '', location.hash);
+        history.pushState(newState, '', hash);
+    }
+    Controller.gotoPage(hash, newState);
+}
+
 function onBodyClick(e) {
-    if (e.ctrlKey || e.altKey) return;
+    if (e.altKey) {
+        const href = e.target.closest('a[href]')?.getAttribute('href');
+        if (href) {
+            const localUrl = Controller.convertCivUrlToLocal(href);
+            if (localUrl) {
+                e.preventDefault();
+                gotoLocalLink(localUrl);
+            }
+        }
+    }
+
+    if (e.ctrlKey) return;
 
     const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
     if (href) {
         e.preventDefault();
-        const newState = { id: Date.now() };
-        if (href !== location.hash) {
-            history.replaceState(Controller.state, '', location.hash);
-            history.pushState(newState, '', href);
-        }
-        Controller.gotoPage(href, newState);
+        gotoLocalLink(href);
     }
 }
 
@@ -3404,15 +3433,41 @@ function markMediaAsLoadedWhenReady(el) {
 
     if (!batchTimer) {
         batchTimer = requestAnimationFrame(() => {
+            const readyImages = [];
+            const instantMedia = [];
+
             for (const media of pendingMedia) {
-                if (media.tagName === 'IMG' ? media.complete : media.readyState >= 2) {
-                    media.classList.remove('loading');
-                    media.style.backgroundImage = '';
+                if (media.tagName === 'IMG' && media.complete) {
+                    readyImages.push(media);
+                } else if (media.readyState >= 2) {
+                    instantMedia.push(media);
                 }
             }
 
             pendingMedia.clear();
             batchTimer = null;
+
+            // videos
+            for (const media of instantMedia) {
+                media.classList.remove('loading');
+                media.style.backgroundImage = '';
+            }
+
+            // images (Waiting for decoding to eliminate possible flickering)
+            readyImages.forEach(img => {
+                if (img._decoded) {
+                    img.classList.remove('loading');
+                    img.style.backgroundImage = '';
+                    return;
+                }
+
+                img.decode()
+                .then(() => {
+                    img._decoded = true;
+                    markMediaAsLoadedWhenReady(img);
+                })
+                .catch(() => {});
+            });
         });
     }
 }

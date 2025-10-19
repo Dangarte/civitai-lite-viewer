@@ -36,8 +36,7 @@ SW_CONFIG.local_urls = {
 const currentTasks = {};
 
 self.addEventListener('activate', () => {
-    Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => cleanExpiredCache({ cacheName }));
-    caches.delete('civitai_light_cache_v2'); // Temporarily, remove old version
+    Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => CacheManager.cleanExpiredCache({ cacheName }));
     self.clients.claim();
 });
 self.addEventListener('fetch', onFetch);
@@ -67,7 +66,7 @@ function onMessage(e) { // Messages
     currentTasks[action] = Date.now();
 
     let actionPromise = null;
-    if (action === 'Clear Cache') actionPromise = Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
+    if (action === 'Clear Cache') actionPromise = Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => CacheManager.cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
     else actionPromise = Promise.reject(`Undefined action: '${action}'`);
     actionPromise.then(sendSuccess).catch(sendError).finally(() => delete currentTasks[action]);
 
@@ -76,19 +75,34 @@ function onMessage(e) { // Messages
 }
 
 function onFetch(e) { // Request interception
-    if (e.request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return e.respondWith(cacheGet(e.request));
-    if (e.request.url.indexOf('https') === -1 || e.request.destination === 'video') return; // Allow only from https and skip video
-    e.respondWith(cacheGet(e.request));
+    if (e.request.url.startsWith(SW_CONFIG.local_urls.base)) {
+        let response;
+
+        if (e.request.url.startsWith(SW_CONFIG.local_urls.blurHash)) response = CacheManager.get(e.request, SW_CONFIG.cache.blurhash);
+        else response = CacheManager.get(e.request);
+
+        return e.respondWith(response);
+    }
+    if (!e.request.url.includes('https') || e.request.destination === 'video') return; // Allow only from https and skip video
+
+    // search in specific cache
+    let response;
+    if (e.request.url.startsWith(SW_CONFIG.base_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.static);
+    else if (e.request.url.startsWith(SW_CONFIG.api_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.api);
+    else if (e.request.url.startsWith(SW_CONFIG.images_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.media);
+    else response = CacheManager.get(e.request);
+
+    e.respondWith(response);
 }
 
 async function cacheFetch(request, cacheControl) {
-    if (request.url.indexOf(SW_CONFIG.local_urls.base) === 0) return localFetch(request);
+    if (request.url.startsWith(SW_CONFIG.local_urls.base)) return localFetch(request);
 
     let cacheName = SW_CONFIG.cache.media;
     const url = new URL(request.url);
     const params = Object.fromEntries(url.searchParams.entries());
 
-    if (request.url.indexOf(SW_CONFIG.base_url) === 0) {
+    if (request.url.startsWith(SW_CONFIG.base_url)) {
         if (!cacheControl) {
             if (url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html') {
                 cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer-core']}`; // Cache for a 3 mins only 
@@ -97,19 +111,19 @@ async function cacheFetch(request, cacheControl) {
             }
         }
         cacheName = SW_CONFIG.cache.static;
-    } else if (request.url.indexOf(SW_CONFIG.api_url) === 0) {
+    } else if (request.url.startsWith(SW_CONFIG.api_url)) {
         cacheName = SW_CONFIG.cache.api;
-    } else if (request.url.indexOf(SW_CONFIG.images_url) === 0 || ['model-preview', 'model-card', 'user-image', 'full-image', 'image-card'].includes(params.target) ) {
+    } else if (request.url.startsWith(SW_CONFIG.images_url) || ['model-preview', 'model-card', 'user-image', 'full-image', 'image-card'].includes(params.target) ) {
         cacheName = SW_CONFIG.cache.media;
     }
 
-    if (!cacheControl && url.pathname.indexOf('/model-versions/') !== -1) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
+    if (!cacheControl && !url.pathname.includes('/model-versions/')) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
 
     // if (params.original) {
     //     const u = new URL(url, self.location.origin);
     //     u.searchParams.delete("original");
     //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
-    //     return cacheGet(editedRequest);
+    //     return CacheManager.get(editedRequest);
     // }
 
     try {
@@ -141,18 +155,19 @@ async function cacheFetch(request, cacheControl) {
             //     const originalResponse = responseFromBlob(blob, cacheControl);
             //     const editedUrl = request.url.includes('?') ? `${request.url}&original=true` : `${request.url}?original=true`;
             //     const editedRequest = cloneRequestWithModifiedUrl(request, editedUrl);
-            //     if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(editedRequest, originalResponse, cacheName);
+            //     if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(editedRequest, originalResponse, cacheName);
             //     customHeaders.push([ 'X-Animated', true ]);
             // }
 
             const { width, height , format, quality, fit } = params;
-            const resizedBlob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceDisableAnimation ? 'webp' : undefined), fit }));
+            const forceFormat = forceDisableAnimation && !format ? await isImageAnimated(blob) : false;
+            const resizedBlob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceFormat ? 'webp' : undefined), fit }));
             blob = resizedBlob || blob;
         }
 
         const response = responseFromBlob(blob, cacheControl);
         if (customHeaders.length) customHeaders.forEach(([k, v]) => response.headers.set(k, v));
-        if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') cachePut(request, response.clone(), cacheName);
+        if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(request, response.clone(), cacheName);
         return response;
     } catch (_) {
         console.error(_);
@@ -160,7 +175,7 @@ async function cacheFetch(request, cacheControl) {
             console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
             const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
             const response = await cacheFetch(newREquest, cacheControl);
-            cachePut(request, response.clone(), cacheName);
+            CacheManager.put(request, response.clone(), cacheName);
             return response;
         }
         return new Response('', { status: 500, statusText: 'Network Error' });
@@ -172,7 +187,7 @@ async function localFetch(request) {
         const { hash, width = 32, height = 32, punch = 1 } = Object.fromEntries(new URLSearchParams(request.url.substring(request.url.indexOf('?') + 1)));
         const blob = await blurhashToImageBlob(hash, Number(width), Number(height), Number(punch));
         const response = responseFromBlob(blob, `max-age=${SW_CONFIG.ttl['blur-hash']}`);
-        cachePut(request, response.clone(), SW_CONFIG.cache.blurhash);
+        CacheManager.put(request, response.clone(), SW_CONFIG.cache.blurhash);
         return response;
     }
     return new Response('', { status: 500, statusText: 'Unknown local URL' });
@@ -181,7 +196,13 @@ async function localFetch(request) {
 async function resizeBlobImage(blob, options) { // Resize image blob
     const { width: targetWidth, height: targetHeight, format: targetFormat, quality: targetQuality = 0.97, fit = 'crop', position = 'center', smoothing = 'low' } = options; // fit: contain|scale-up|fill|crop; smoothing: none|low|medium|high;
     const types = { jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png', avif: 'image/avif' };
-    if (!targetFormat && (await isImageAnimated(blob))) return null;
+    if (
+        blob.type === 'image/svg+xml'
+        || (
+            !targetFormat
+            && ((await isImageAnimated(blob)) || (!targetWidth && !targetHeight))
+        )
+    ) return null;
     try {
         const bmp = await createImageBitmap(blob);
         const { width, height } = bmp;
@@ -379,46 +400,6 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
     return blob;
 }
 
-async function cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) { // Check and remove all old data (max-age expired)
-    if (mode === 'all') {
-        await caches.delete(cacheName);
-        return `Cache ${cacheName} removed`;
-    }
-
-    const cache = await caches.open(cacheName);
-    const keys = await cache.keys();
-
-    const masks = Array.isArray(urlMask) ? urlMask : urlMask ? [urlMask] : [];
-    const regexps = masks.map(mask => {
-        if (/\\d|\[\w/.test(mask) || mask.startsWith('^')) {
-            return new RegExp(mask);
-        }
-
-        const escaped = mask.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-        const regexStr = '^' + escaped.replace(/\*/g, '.*') + '$';
-        return new RegExp(regexStr);
-    });
-
-    const isResponseOk = mode === 'max-age-expired'
-                        ? r => r && checkCacheMaxAge(r)     // Remove only with expired max-age (default)
-                        : r => r && checkCacheMaxAge(r);    // Remove only with expired max-age (unknown)
-
-    let countRemoved = 0;
-    const promises = keys.map(async (request) => {
-        const url = request.url;
-        const matchesMask = regexps.length !== 0 && regexps.some(rx => rx.test(url));
-        const response = await cache.match(request);
-        if (!matchesMask && isResponseOk(response)) return;
-
-        countRemoved++;
-        return cache.delete(request);
-    });
-
-    await Promise.all(promises);
-
-    return `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`;
-}
-
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
     const { method, headers, credentials, cache, redirect, referrer, integrity, keepalive } = originalRequest;
     let { mode } = originalRequest;
@@ -432,25 +413,94 @@ function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
     return new Request(newUrl, init);
 }
 
-function checkCacheMaxAge(cached) {
-    const date = cached.headers.get('Date');
-    const cacheControl = cached.headers.get('Cache-Control');
-    if (!date) console.warn('No Date Header in cached response!');
-    if (date && cacheControl && cacheControl !== 'no-cache') {
-        const age = (Date.now() - new Date(date).getTime()) / 1000;
-        const maxAge = parseInt(cacheControl.substring(cacheControl.indexOf('=') + 1));
-        if (age <= maxAge) return true;
+class CacheManager {
+    static #cacheMap = new Map(); // stores open Cache objects
+
+    // Get cache by name, open if not already open
+    static async #getCache(cacheName) {
+        if (!this.#cacheMap.has(cacheName)) {
+            const cache = await caches.open(cacheName);
+            this.#cacheMap.set(cacheName, cache);
+        }
+        return this.#cacheMap.get(cacheName);
     }
-    return false;
+
+    // Get response from cache
+    static async get(request, cacheName) {
+        let response;
+
+        if (cacheName) {
+            const cache = await this.#getCache(cacheName);
+            response = await cache.match(request);
+        } else {
+            response = await caches.match(request);
+        }
+
+        if (response && this.#checkCacheMaxAge(response)) return response;
+        return cacheFetch(request, cacheName);
+    }
+
+    // Cache the answer
+    static async put(request, response, cacheName) {
+        if (!cacheName) throw new Error('cacheName required for put');
+        const cache = await this.#getCache(cacheName);
+        await cache.put(request, response);
+        return response;
+    }
+
+    // Check ttl
+    static #checkCacheMaxAge(cached) {
+        const date = cached.headers.get('Date');
+        const cacheControl = cached.headers.get('Cache-Control');
+        if (!date) console.warn('No Date Header in cached response!');
+        if (date && cacheControl && cacheControl !== 'no-cache') {
+            const age = (Date.now() - new Date(date).getTime()) / 1000;
+            const maxAge = parseInt(cacheControl.substring(cacheControl.indexOf('=') + 1));
+            if (age <= maxAge) return true;
+        }
+        return false;
+    }
+
+    // Check and remove all old data (max-age expired)
+    static async cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) {
+        if (mode === 'all') {
+            await caches.delete(cacheName);
+            this.#cacheMap.delete(cacheName);
+            return `Cache ${cacheName} removed`;
+        }
+
+        const cache = await this.#getCache(cacheName);
+        const keys = await cache.keys();
+
+        const masks = Array.isArray(urlMask) ? urlMask : urlMask ? [urlMask] : [];
+        const regexps = masks.map(mask => {
+            if (/\\d|\[\w/.test(mask) || mask.startsWith('^')) {
+                return new RegExp(mask);
+            }
+
+            const escaped = mask.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+            const regexStr = '^' + escaped.replace(/\*/g, '.*') + '$';
+            return new RegExp(regexStr);
+        });
+
+        const isResponseOk = mode === 'max-age-expired'
+                            ? r => r && this.#checkCacheMaxAge(r)     // Remove only with expired max-age (default)
+                            : r => r && this.#checkCacheMaxAge(r);    // Remove only with expired max-age (unknown)
+
+        let countRemoved = 0;
+        const promises = keys.map(async (request) => {
+            const url = request.url;
+            const matchesMask = regexps.length !== 0 && regexps.some(rx => rx.test(url));
+            const response = await cache.match(request);
+            if (!matchesMask && isResponseOk(response)) return;
+
+            countRemoved++;
+            return cache.delete(request);
+        });
+
+        await Promise.all(promises);
+
+        return `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`;
+    }
 }
 
-async function cacheGet(request) { // Get response from cache
-    const cached = await caches.match(request);
-    if (cached && checkCacheMaxAge(cached)) return cached;
-    return cacheFetch(request);
-}
-
-async function cachePut(request, response, cacheName) { // Put response in cache
-    const cache = await caches.open(cacheName);
-    return await cache.put(request, response);
-}
