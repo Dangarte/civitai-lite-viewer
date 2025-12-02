@@ -507,6 +507,7 @@ class MasonryLayout {
     }
 
     destroy(options) {
+        const preventRemoveItemsFromDOM = options?.preventRemoveItemsFromDOM ?? false;
         if (!this.#isPassive) {
             document.removeEventListener('scroll', this.#onScroll);
             document.removeEventListener('resize', this.#onResize);
@@ -515,8 +516,8 @@ class MasonryLayout {
         this.#items.forEach(item => {
             if (item.inDOM) {
                 item.inDOM = false;    
-                if (!options?.preventRemoveItemsFromDOM) item.element.remove();
-                this.#onElementRemove?.(item.element, item.data);
+                if (!preventRemoveItemsFromDOM) item.element.remove();
+                this.#onElementRemove?.(item.element, item.data, preventRemoveItemsFromDOM);
                 delete item.element;
             }
         });
@@ -649,6 +650,7 @@ class MasonryLayout {
     #overscanCooldown = 0; // timer before overscan collapse
     #currentOverscan = 0; // smooth overscan that we will use
     #handleScroll(e) {
+        const firstDraw = !this.#inViewport.size; // Mark this as the first rendering (the generator can render everything at once, without delays)
         const now = performance.now();
         const currentScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
 
@@ -756,7 +758,8 @@ class MasonryLayout {
                     item.element = this.#generator(item.data, {
                         itemWidth: options.itemWidth,
                         itemHeight: options.itemHeight,
-                        isVisible: item.boundBottom > screenTop - 300 && item.boundTop < screenBottom + 300 // isVisible - disable lazy loading
+                        isVisible: item.boundBottom > screenTop - 300 && item.boundTop < screenBottom + 300, // isVisible - disable lazy loading
+                        firstDraw
                     });
                     item.element.tabIndex = -1;
                 }

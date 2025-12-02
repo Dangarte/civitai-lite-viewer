@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 20,
+    version: 21,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -304,6 +304,7 @@ class Controller {
         'Flux.1 D': 'F1',
         'Flux.1 Krea': 'Flux.1 Krea',
         'Flux.1 Kontext': 'F1 Kontext',
+        'Flux.2 D': 'F2',
         'Aura Flow': 'Aura',
         'SDXL Lightning': 'XL Lightning',
         'SDXL Hyper': 'XL Hyper',
@@ -329,7 +330,10 @@ class Controller {
         'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V-5B',
         'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V-A14B',
         'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V-A14B',
+        'Wan Video 2.5 T2V': 'Wan 2.5 T2V',
+        'Wan Video 2.5 I2V': 'Wan 2.5 I2V',
         'HiDream': 'HiD',
+        'ZImageTurbo': 'ZIT',
         'Other': 'Other'
     };
 
@@ -1305,7 +1309,11 @@ class Controller {
             if (media.nsfwLevel !== 'None') insertElement('div', container, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
 
             // Generation info
-            if (media.meta) container.appendChild(this.#genImageGenerationMeta(media.meta));
+            if (media.meta) {
+                // For some reason the API started returning meta.meta...
+                const meta = media.meta?.meta && Object.keys(media.meta).length < 4 ? media.meta?.meta : media.meta;
+                container.appendChild(this.#genImageGenerationMeta(meta));
+            }
             else insertElement('div', container, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
 
             insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
@@ -1414,13 +1422,13 @@ class Controller {
 
             if (SETTINGS.hideImagesWithoutPositivePrompt) {
                 const countAll = images.length;
-                images = images.filter(image => image.meta?.prompt);
+                images = images.filter(image => image.meta?.prompt || image.meta?.meta?.prompt); // For some reason the API started returning meta.meta...
                 if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without positive prompt`);
             }
 
             if (SETTINGS.hideImagesWithoutNegativePrompt) {
                 const countAll = images.length;
-                images = images.filter(image => image.meta?.negativePrompt);
+                images = images.filter(image => image.meta?.negativePrompt || image.meta?.meta?.negativePrompt); // For some reason the API started returning meta.meta...
                 if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
             }
 
@@ -2191,7 +2199,7 @@ class Controller {
     }
 
     static #genModelCard(model, options) {
-        const { isVisible, itemWidth, itemHeight } = options ?? {};
+        const { isVisible = false, firstDraw = false, itemWidth, itemHeight } = options ?? {};
         const modelVersion = model.modelVersions[0];
         const previewMedia = modelVersion.images.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
         const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;` });
@@ -2202,21 +2210,22 @@ class Controller {
             card.classList.add('image-hover-play');
         }
         if (previewMedia) {
+            const appendMedia = () => {
+                const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
+                mediaElement.classList.add('card-background');
+                if (!SETTINGS.autoplay) {
+                    if (previewMedia?.type === 'video') mediaElement.classList.remove('video-hover-play');
+                    if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
+                }
+                card.appendChild(mediaElement);
+            };
             const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
                 sleep,
                 () => !this.appElement.contains(card),
-                skip => {
-                    if (skip) return;
-                    const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, resize: SETTINGS.resize, target: 'model-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
-                    mediaElement.classList.add('card-background');
-                    if (!SETTINGS.autoplay) {
-                        if (previewMedia?.type === 'video') mediaElement.classList.remove('video-hover-play');
-                        if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
-                    }
-                    card.appendChild(mediaElement);
-                }
+                skip => skip ? null : appendMedia()
             );
-            if (!isVisible) renderImage({ delay: 4 });
+            if (firstDraw) appendMedia();
+            else if (!isVisible) renderImage({ delay: 4 });
             else renderImage({ delay: 0 });
         } else {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
@@ -2262,7 +2271,7 @@ class Controller {
             image = image.values().next().value;
         };
 
-        const { isVisible, itemWidth, itemHeight } = options ?? {};
+        const { isVisible = false, firstDraw = false, itemWidth, itemHeight } = options ?? {};
         const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? Math.round(itemWidth / (image.width/image.height))}px;` });
 
         // Image
@@ -2270,21 +2279,22 @@ class Controller {
             if (image?.type === 'video') card.classList.add('video-hover-play');
             card.classList.add('image-hover-play');
         }
+        const appendMedia = () => {
+            const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
+            mediaElement.classList.add('card-background');
+            if (!SETTINGS.autoplay) {
+                if (image?.type === 'video') mediaElement.classList.remove('video-hover-play');
+                if (image?.type === 'image') mediaElement.classList.remove('image-hover-play');
+            }
+            card.appendChild(mediaElement);
+        };
         const renderImage = (sleep = { delay: 0 }) => this.#queueAddPipeline(
             sleep,
             () => !this.appElement.contains(card),
-            skip => {
-                if (skip) return;
-                const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, resize: SETTINGS.resize, target: 'image-card', decoding: isVisible ? 'auto' : 'async' /*, loading: isVisible ? undefined : 'lazy' */ });
-                mediaElement.classList.add('card-background');
-                if (!SETTINGS.autoplay) {
-                    if (image?.type === 'video') mediaElement.classList.remove('video-hover-play');
-                    if (image?.type === 'image') mediaElement.classList.remove('image-hover-play');
-                }
-                card.appendChild(mediaElement);
-            }
+            skip => skip ? null : appendMedia()
         );
-        if (!isVisible) renderImage({ delay: 4 });
+        if (firstDraw) appendMedia();
+        else if (!isVisible) renderImage({ delay: 4 });
         else renderImage({ delay: 0 });
 
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -2331,8 +2341,20 @@ class Controller {
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
                 const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${creatorImageSize}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
-                if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, []);
-                const img = this.#cachedUserImages.get(src).pop() || createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+
+                if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, new Set());
+
+                const pool = this.#cachedUserImages.get(src);
+
+                let img = null;
+                if (pool.size > 0) {
+                    const it = pool.values();
+                    img = it.next().value;
+                    pool.delete(img);
+                }
+
+                if (img === null) img = createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src });
+
                 container.appendChild(img);
             }
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
@@ -2651,6 +2673,7 @@ class Controller {
             "Flux.1 D",
             "Flux.1 Krea",
             "Flux.1 Kontext",
+            "Flux.2 D",
             "AuraFlow",
             "Stable Cascade",
             "SVD",
@@ -2676,18 +2699,18 @@ class Controller {
             "Wan Video 2.2 TI2V-5B",
             "Wan Video 2.2 I2V-A14B",
             "Wan Video 2.2 T2V-A14B",
+            "Wan Video 2.5 T2V",
+            "Wan Video 2.5 I2V",
             "HiDream",
             "Seedream",
             "OpenAI",
+            "Sora 2",
             "Imagen4",
             "Nano Banana",
+            "ZImageTurbo",
             "Other"
         ];
-        const modelsOptionLabelsDefault = {
-            "Flux.1 S": "Flux.1 Schnell",
-            "Flux.1 D": "Flux.1 Dev",
-        };
-        const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? modelsOptionLabelsDefault[value] ?? value ]));
+        const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? value ]));
         const modelsList = this.#genList({
             onchange: ({ newValue }) => {
                 SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
@@ -3005,7 +3028,7 @@ class Controller {
         return levels.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
     }
 
-    static #onCardRemoved(card, item) {
+    static #onCardRemoved(card, item, preventRemoveItemsFromDOM) {
         const video = card.querySelector('.autoplay-observed');
         if (video) disableAutoPlayOnVisible(video);
 
@@ -3017,10 +3040,10 @@ class Controller {
         if (img && !img.naturalWidth) img.src = '';
 
         // Reuse user profile images
-        const userBLockImage = card.querySelector('.user-info img[src]:not([data-original-active])');
-        if (userBLockImage) {
-            userBLockImage.remove();
-            this.#cachedUserImages.get(userBLockImage.getAttribute('src')).push(userBLockImage);
+        const userBlockImage = card.querySelector('.user-info img[src]:not([data-original-active])');
+        if (userBlockImage) {
+            if (!preventRemoveItemsFromDOM) userBlockImage.remove(); // Leave the icons on the page (they will be deleted later, along with all the content)
+            this.#cachedUserImages.get(userBlockImage.getAttribute('src')).add(userBlockImage);
         }
     }
 
