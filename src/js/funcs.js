@@ -231,6 +231,18 @@ function formatNumberIntl(number) {
     return defaultNumberFormant.format(number);
 }
 
+const HTML_ESCAPES = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+};
+const HTML_ESCAPE_RE = /[&<>"']/g;
+function escapeHtml(str) {
+    return String(str).replace(HTML_ESCAPE_RE, (c) => HTML_ESCAPES[c]);
+}
+
 function bibtexToHtml(bibtex) {
     const entry = {};
     const typeMatch = bibtex.match(/^@(\w+)\s*{\s*([^,]+),/);
@@ -429,7 +441,7 @@ class MasonryLayout {
         }
     }
 
-    addItems(items) {
+    addItems(items, dryAdd = false) {
         const options = this.#options;
         const itemsToUpdate = new Map();
         items.forEach(item => {
@@ -439,14 +451,17 @@ class MasonryLayout {
             }
 
             const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
-            const cardHeight = options.itemHeight ?? Math.round(options.itemWidth / item.aspectRatio);
+            const cardHeight = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
 
             const gridItem = {
                 id: item.id,
+                index: this.#items.length,
                 data: item.data,
                 aspectRatio: item.aspectRatio,
                 boundLeft: targetColumn.index * (options.itemWidth + options.gap),
                 boundTop: targetColumn.height,
+                boundWidth: options.itemWidth,
+                boundHeight: cardHeight,
                 boundBottom: targetColumn.height + cardHeight,
                 center: Math.round(targetColumn.height + cardHeight / 2),
                 inDOM: false
@@ -476,13 +491,17 @@ class MasonryLayout {
             });
         }
 
-        if (!this.#options.disableVirtualScroll) this.#handleScroll();
+        if (!this.#options.disableVirtualScroll) {
+            if (!dryAdd) this.#handleScroll();
+        }
         else {
+            const now = performance.now();
             this.#items.forEach(item => {
                 if (item.inDOM) return;
                 if (!item.element) {
-                    item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false });
+                    item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false, timestump: now });
                     item.element.tabIndex = -1;
+                    item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
                 }
                 item.element.style.left = `${item.boundLeft}px`;
                 item.element.style.top = `${item.boundTop}px`;
@@ -498,6 +517,11 @@ class MasonryLayout {
     }
 
     clear() {
+        this.#items.forEach(item => {
+            if (!item.inDOM) return;
+            this.#onElementRemove?.(item.element, item.data, true);
+        });
+
         this.#items = [];
         this.#inViewport = new Set();
         this.#itemsById = new Map();
@@ -557,6 +581,23 @@ class MasonryLayout {
             }
         }
 
+        return result;
+    }
+
+    #findEndIndex(overscanBottom, startIndex = 0) {
+        let low = startIndex;
+        let high = this.#items.length - 1;
+        let result = -1;
+
+        while (low <= high) {
+            const mid = (low + high) >> 1;
+            if (this.#items[mid].boundTop <= overscanBottom) {
+                result = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
         return result;
     }
 
@@ -652,7 +693,10 @@ class MasonryLayout {
     #handleScroll(e) {
         const firstDraw = !this.#inViewport.size; // Mark this as the first rendering (the generator can render everything at once, without delays)
         const now = performance.now();
-        const currentScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+        // scrollTopRelative - used to restore elements when moving through nav history, without causing a recalculation of styles
+        const currentScrollTop = typeof e?.scrollTopRelative === 'number'
+                                    ? e?.scrollTopRelative
+                                    : (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
 
         // --- speed calculation
         const delta = currentScrollTop - this.#lastScrollTop;
@@ -721,36 +765,29 @@ class MasonryLayout {
         // --- final screen boundaries
         const screenTop = currentScrollTop;
         const screenBottom = currentScrollTop + vh;
-        const overscanTop = screenTop - (direction < 0 ? this.#currentOverscan : minOverscan);
-        const overscanBottom = screenBottom + (direction > 0 ? this.#currentOverscan : minOverscan);
-
-        // const innerScrollTop = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
-        // const options = this.#options;
-        // const screenTop = innerScrollTop;
-        // const screenBottom = innerScrollTop + window.innerHeight;
-        // const overscan = window.innerHeight * options.overscan;
-        // const overscanTop = screenTop - overscan;
-        // const overscanBottom = screenBottom + overscan;
+        const overscanTop = screenTop - (direction < 0 ? this.#currentOverscan : minOverscan / 2);
+        const overscanBottom = screenBottom + (direction > 0 ? this.#currentOverscan : minOverscan / 2);
 
         let hasChanges = false;
 
+        const newStartIndex = this.#findStartIndex(overscanTop);
+        const newEndIndex = this.#findEndIndex(overscanBottom, newStartIndex);
+
         // Remove items that are no longer visible
-        this.#inViewport.forEach(item => {
-            if (item.boundBottom < overscanTop || item.boundTop > overscanBottom) {
+        for (const item of this.#inViewport) {
+            if (item.index < newStartIndex || item.index > newEndIndex) {
                 item.inDOM = false;
-                item.element.remove();
+                item.element?.remove();
                 this.#inViewport.delete(item);
                 this.#onElementRemove?.(item.element, item.data);
                 delete item.element;
                 hasChanges = true;
             }
-        });
+        }
 
         // Insert elements that are now visible
-        const startIndex = this.#findStartIndex(overscanTop);
-        for (let i = startIndex; i < this.#items.length; i++) {
+        for (let i = newStartIndex; i <= newEndIndex; i++) {
             const item = this.#items[i];
-            if (item.boundTop > overscanBottom) break;
 
             if (!item.inDOM) {
                 item.inDOM = true;
@@ -759,9 +796,11 @@ class MasonryLayout {
                         itemWidth: options.itemWidth,
                         itemHeight: options.itemHeight,
                         isVisible: item.boundBottom > screenTop - 300 && item.boundTop < screenBottom + 300, // isVisible - disable lazy loading
-                        firstDraw
+                        firstDraw,
+                        timestump: now
                     });
                     item.element.tabIndex = -1;
+                    item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
                 }
                 item.element.style.left = `${item.boundLeft}px`;
                 item.element.style.top = `${item.boundTop}px`;
@@ -791,10 +830,12 @@ class MasonryLayout {
                 });
 
                 if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = -1;
-                this.#focusedItem = best || [...this.#inViewport][0];
+                this.#focusedItem = best || this.#inViewport.values().next().value;
                 if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = 0;
             }
         }
+
+        return currentScrollTop;
     }
 
     #handleResize() {
@@ -838,7 +879,8 @@ class InfiniteCarousel {
 
             if (element) {
                 const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
-                item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px;` });
+                const itemHeight = itemWidth / aspectRatio;
+                item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px; height: ${itemHeight}px; contain-intrinsic-size: ${itemWidth}px ${itemHeight}px;` });
                 item.element.appendChild(element);
             }
 
@@ -911,7 +953,8 @@ class InfiniteCarousel {
     #addItemToDOM(item, usePrepend = false) {
         if (!item.element) {
             const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
-            item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px;` });
+            const itemHeight = itemWidth / item.aspectRatio;
+            item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px; height: ${itemHeight}px; contain-intrinsic-size: ${itemWidth}px ${itemHeight}px;` });
             item.element.appendChild(this.#generator(item.data));
         }
         if (usePrepend) this.#itemsListWrap.prepend(item.element);

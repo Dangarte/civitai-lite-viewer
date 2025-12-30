@@ -3,7 +3,16 @@ const SW_CONFIG = {
         api: 'civitai_light-api-cache-v1',
         blurhash: 'civitai_light-blurhash-cache-v1',
         static: 'civitai_light-static-cache-v1',
-        media: 'civitai_light-media-cache-v1'
+        media: 'civitai_light-media-cache-v1',
+        mediafull: 'civitai_light-mediafull-cache-v1',
+        mediathumbs: 'civitai_light-mediathumbs-cache-v1'
+    },
+    cacheByTarget: {
+        'model-preview': 'media',
+        'model-card': 'mediathumbs',
+        'user-image': 'media',
+        'full-image': 'mediafull',
+        'image-card': 'mediathumbs'
     },
     // base_url: 'http://127.0.0.1:3000/',
     // origin: 'http://127.0.0.1:3000',
@@ -14,26 +23,26 @@ const SW_CONFIG = {
     local_urls: {},
     local_params: [ 'target', 'original', 'cache', 'width', 'height', 'fit', 'format', 'quality', 'smoothing', 'position' ], // Parameters to remove when fetching (they were added only for passing parameters from the page to the sw)
     ttl: {
-        'model-preview': 12 * 60 * 60,      // Images in preview list on model page:    12 hours
+        'model-preview': 6 * 60 * 60,       // Images in preview list on model page:     6 hours
         'model-version': 2 * 24 * 60 * 60,  // Info about model version:                 2 days
-        'model-card': 24 * 60 * 60,         // Images in cards on models page:           1 day
-        'user-image': 2 * 24 * 60 * 60,     // Images in creator profile:                2 days
-        'full-image': 15 * 60,              // Images on full size image page:          15 mins
+        'model-card': 12 * 60 * 60,         // Images in cards on models page:          12 hours
+        'user-image': 24 * 60 * 60,         // Images in creator profile:                1 day
+        'full-image': 60 * 60,              // Images on full size image page:           1 hour
         'image-card': 30 * 60,              // Images images list:                      30 mins
         'unknown': 60 * 60,                 // Unknown target:                           1 hour
         'large-file': 15 * 60,              // Large files (14+ mb)                     15 mins
         'lite-viewer': 5 * 24 * 60 * 60,    // Files from repo                           5 days
         'lite-viewer-core': 3 * 60,         // Main file from the repo (index.html)      3 mins
-        'blur-hash': 30 * 60                // blurHash                                 30 mins
+        'blurhash': 30 * 60                 // blurhash                                 30 mins
     },
     api_key: null,
     task_time_limit: 60000, // 1 minute
 };
 SW_CONFIG.local_urls = {
     base: `${SW_CONFIG.base_url}local`,
-    blurHash: `${SW_CONFIG.base_url}local/blurhash`
+    blurhash: `${SW_CONFIG.base_url}local/blurhash`
 };
-const currentTasks = {};
+SW_CONFIG.validTargets = new Set([...Object.keys(SW_CONFIG.cacheByTarget), ...Object.keys(SW_CONFIG.ttl)]);
 
 self.addEventListener('activate', () => {
     Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => CacheManager.cleanExpiredCache({ cacheName }));
@@ -43,12 +52,55 @@ self.addEventListener('fetch', onFetch);
 self.addEventListener('message', onMessage);
 
 
+class TaskController {
+    constructor() {
+        this.taskQueues = new Map();
+    }
+
+    runTask(name, taskFn, timeoutMs) {
+        if (typeof taskFn !== 'function') return Promise.reject(new Error('taskFn must be a function'));
+
+        // The last task from the queue or an empty promise
+        const lastPromise = this.taskQueues.get(name) || Promise.resolve();
+
+        // A new task that will be executed after lastPromise
+        const newPromise = lastPromise.catch(() => {}).then(() => this.#runWithTimeout(taskFn, name, timeoutMs));
+
+        const trackedPromise = newPromise.finally(() => {
+            // If the current promise is still the last one in the queue, delete it
+            if (this.taskQueues.get(name) === trackedPromise) this.taskQueues.delete(name);
+        });
+
+        // Updating the queue
+        this.taskQueues.set(name, trackedPromise);
+
+        return trackedPromise;
+    }
+
+    #runWithTimeout(taskFn, name, timeoutMs) {
+        const taskPromise = Promise.resolve().then(() => taskFn());
+
+        const timeoutPromise = new Promise((_, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error(`Task "${name}" timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+
+            taskPromise.finally(() => clearTimeout(timer));
+        });
+
+        return Promise.race([taskPromise, timeoutPromise]);
+    }
+}
+
+const taskController = new TaskController();
+
 function onMessage(e) { // Messages
     const sendSuccess = response => {
-        console.log(`${e?.data?.action ?? 'Unknown action'}: `, response);
+        if (e.ports?.[0]) e.ports[0].postMessage({ ok: true, response });
     };
     const sendError = error => {
         console.error(`${e?.data?.action ?? 'Unknown action'}: `, error);
+        if (e.ports?.[0]) e.ports[0].postMessage({ ok: false, error });
     };
 
     if (!e.isTrusted || e.origin !== SW_CONFIG.origin || !e.source || e.source.url.indexOf(SW_CONFIG.base_url) !== 0) {
@@ -60,27 +112,20 @@ function onMessage(e) { // Messages
     }
     const { action, data } = e.data;
 
-    if (currentTasks[action] !== undefined && currentTasks[action] + TASK_TIME_LIMIT > Date.now()) {
-        return sendError(`Action '${action}' has already processing.`);
-    }
-    currentTasks[action] = Date.now();
+    let actionCallback = null;
+    if (action === 'clear_cache') actionCallback = () => actionClearCache(data);
+    else actionCallback = () => Promise.reject(`Undefined action: '${action}'`);
 
-    let actionPromise = null;
-    if (action === 'Clear Cache') actionPromise = Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => CacheManager.cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
-    else actionPromise = Promise.reject(`Undefined action: '${action}'`);
-    actionPromise.then(sendSuccess).catch(sendError).finally(() => delete currentTasks[action]);
+    const promise = taskController.runTask(action, actionCallback, SW_CONFIG.task_time_limit);
+    promise.then(sendSuccess).catch(sendError);
 
     return true;
-
 }
 
 function onFetch(e) { // Request interception
     if (e.request.url.startsWith(SW_CONFIG.local_urls.base)) {
-        let response;
-
-        if (e.request.url.startsWith(SW_CONFIG.local_urls.blurHash)) response = CacheManager.get(e.request, SW_CONFIG.cache.blurhash);
-        else response = CacheManager.get(e.request);
-
+        const cacheName = e.request.url.startsWith(SW_CONFIG.local_urls.blurhash) ? SW_CONFIG.cache.blurhash : null;
+        const response = CacheManager.get(e.request, cacheName);
         return e.respondWith(response);
     }
     if (!e.request.url.includes('https') || e.request.destination === 'video') return; // Allow only from https and skip video
@@ -89,10 +134,17 @@ function onFetch(e) { // Request interception
     let response;
     if (e.request.url.startsWith(SW_CONFIG.base_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.static);
     else if (e.request.url.startsWith(SW_CONFIG.api_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.api);
-    else if (e.request.url.startsWith(SW_CONFIG.images_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.media);
-    else response = CacheManager.get(e.request);
+    else if (e.request.url.startsWith(SW_CONFIG.images_url)) {
+        const target = getTargetFromUrl(e.request.url);
+        const cacheName = SW_CONFIG.validTargets.has(target) ? SW_CONFIG.cache[SW_CONFIG.cacheByTarget[target] ?? 'media'] : SW_CONFIG.cache.media;
+        response = CacheManager.get(e.request, cacheName);
+    } else response = CacheManager.get(e.request);
 
     e.respondWith(response);
+}
+
+function actionClearCache(data) {
+    return Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => CacheManager.cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
 }
 
 async function cacheFetch(request, cacheControl) {
@@ -100,24 +152,23 @@ async function cacheFetch(request, cacheControl) {
 
     let cacheName = SW_CONFIG.cache.media;
     const url = new URL(request.url);
+    const sParams = url.searchParams;
     const params = Object.fromEntries(url.searchParams.entries());
 
     if (request.url.startsWith(SW_CONFIG.base_url)) {
-        if (!cacheControl) {
-            if (url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html') {
-                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer-core']}`; // Cache for a 3 mins only 
-            } else {
-                cacheControl = `max-age=${SW_CONFIG.ttl['lite-viewer']}`;
-            }
-        }
         cacheName = SW_CONFIG.cache.static;
+        if (!cacheControl) {
+            const isCore = url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html';
+            cacheControl = `max-age=${SW_CONFIG.ttl[isCore ? 'lite-viewer-core' : 'lite-viewer']}`;
+        }
     } else if (request.url.startsWith(SW_CONFIG.api_url)) {
         cacheName = SW_CONFIG.cache.api;
-    } else if (request.url.startsWith(SW_CONFIG.images_url) || ['model-preview', 'model-card', 'user-image', 'full-image', 'image-card'].includes(params.target) ) {
-        cacheName = SW_CONFIG.cache.media;
+        if (!cacheControl && url.pathname.includes('/model-versions/')) {
+            cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
+        }
+    } else if (request.url.startsWith(SW_CONFIG.images_url)) {
+        cacheName = SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'] : SW_CONFIG.cache.media;
     }
-
-    if (!cacheControl && !url.pathname.includes('/model-versions/')) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
 
     // if (params.original) {
     //     const u = new URL(url, self.location.origin);
@@ -127,9 +178,9 @@ async function cacheFetch(request, cacheControl) {
     // }
 
     try {
-        const before = url.searchParams.size;
-        for (const key of SW_CONFIG.local_params) url.searchParams.delete(key); // Removing unnecessary parameters
-        const after = url.searchParams.size;
+        const before = sParams.size;
+        for (const key of SW_CONFIG.local_params) sParams.delete(key); // Removing unnecessary parameters
+        const after = sParams.size;
         const modified = before !== after;
         const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
         const fetchResponse = await fetch(modified ? requestWithoutLocalParams : request);
@@ -143,19 +194,19 @@ async function cacheFetch(request, cacheControl) {
                 cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
             }
             else {
-                const maxAge = blob.size < 15000000 ? SW_CONFIG.ttl[params?.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl['large-file'];
+                const maxAge = blob.size < 15000000 ? SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl.unknown : SW_CONFIG.ttl['large-file'];
                 cacheControl = `max-age=${maxAge}`;
             }
         }
 
         const forceDisableAnimation = request.url.includes(',anim=false,');
-        if (blob.type.indexOf('image/') === 0 && ((params && (params.width || params.height || params.format)) || forceDisableAnimation)) {
+        if (blob.type.indexOf('image/') === 0 && ((params.width || params.height || params.format) || forceDisableAnimation)) {
             // Store original
             // if (await isImageAnimated(blob)) {
             //     const originalResponse = responseFromBlob(blob, cacheControl);
             //     const editedUrl = request.url.includes('?') ? `${request.url}&original=true` : `${request.url}?original=true`;
             //     const editedRequest = cloneRequestWithModifiedUrl(request, editedUrl);
-            //     if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(editedRequest, originalResponse, cacheName);
+            //     if (params.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(editedRequest, originalResponse, cacheName);
             //     customHeaders.push([ 'X-Animated', true ]);
             // }
 
@@ -167,7 +218,7 @@ async function cacheFetch(request, cacheControl) {
 
         const response = responseFromBlob(blob, cacheControl);
         if (customHeaders.length) customHeaders.forEach(([k, v]) => response.headers.set(k, v));
-        if (params?.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(request, response.clone(), cacheName);
+        if (params.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(request, response.clone(), cacheName);
         return response;
     } catch (_) {
         console.error(_);
@@ -183,10 +234,10 @@ async function cacheFetch(request, cacheControl) {
 }
 
 async function localFetch(request) {
-    if (request.url.indexOf(SW_CONFIG.local_urls.blurHash) === 0) {
+    if (request.url.indexOf(SW_CONFIG.local_urls.blurhash) === 0) {
         const { hash, width = 32, height = 32, punch = 1 } = Object.fromEntries(new URLSearchParams(request.url.substring(request.url.indexOf('?') + 1)));
         const blob = await blurhashToImageBlob(hash, Number(width), Number(height), Number(punch));
-        const response = responseFromBlob(blob, `max-age=${SW_CONFIG.ttl['blur-hash']}`);
+        const response = responseFromBlob(blob, `max-age=${SW_CONFIG.ttl['blurhash']}`);
         CacheManager.put(request, response.clone(), SW_CONFIG.cache.blurhash);
         return response;
     }
@@ -274,11 +325,20 @@ async function isImageAnimated(blob) {
     return false;
 }
 
+function getTargetFromUrl(url) {
+    const start = url.indexOf('target=');
+    if (start === -1) return null;
+
+    const sub = url.substring(start + 7);
+    const end = sub.indexOf('&');
+    return end === -1 ? sub : sub.substring(0, end);
+}
+
 function responseFromBlob(blob, cacheControl) {
     return new Response(blob, { headers: { 'Content-Type': blob.type, 'Content-Length': blob.size, ...(cacheControl ? { 'Cache-Control': cacheControl, 'Date': new Date().toUTCString() } : {}) } });
 }
 
-async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1) {
+function blurhashToPixels(blurhash, width = 32, height = 32, punch = 1) {
     // https://github.com/mad-gooze/fast-blurhash/blob/main/index.js
     const digitLookup = new Uint8Array(128);
     for (let i = 0; i < 83; i++) {
@@ -392,8 +452,13 @@ async function blurhashToImageBlob(blurhash, width = 32, height = 32, punch = 1)
     }
 
     const pixels = decodeBlurHash(blurhash, width, height, punch);
+    return pixels;
+}
+
+async function blurhashToImageBlob(blurhash, width, height, punch) {
+    const pixels = blurhashToPixels(blurhash, width, height, punch);
     const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     const imageData = new ImageData(pixels, width, height);
     ctx.putImageData(imageData, 0, 0);
     const blob = await canvas.convertToBlob({ type: 'image/png' });
@@ -415,6 +480,8 @@ function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
 
 class CacheManager {
     static #cacheMap = new Map(); // stores open Cache objects
+    static #hotCacheUrls = [ SW_CONFIG.local_urls.blurhash ]; // url startsWith
+    static #hotCache = new Map(); // RAM cache (only for blurhash)
 
     // Get cache by name, open if not already open
     static async #getCache(cacheName) {
@@ -429,22 +496,41 @@ class CacheManager {
     static async get(request, cacheName) {
         let response;
 
+        const isHotUrl = this.#isHotUrl(request.url);
+        if (isHotUrl) {
+            const cached = this.#hotCache.get(request.url);
+            if (cached) {
+                if (Date.now() < cached.expireTime) {
+                    return cached.response.clone();
+                } else {
+                    this.#hotCache.delete(request.url);
+                }
+            }
+        }
+
         if (cacheName) {
-            const cache = await this.#getCache(cacheName);
+            const cache = this.#cacheMap.get(cacheName) ?? await this.#getCache(cacheName);
             response = await cache.match(request);
         } else {
             response = await caches.match(request);
         }
 
-        if (response && this.#checkCacheMaxAge(response)) return response;
-        return cacheFetch(request, cacheName);
+        if (!response || !this.#checkCacheMaxAge(response)) response = await cacheFetch(request);
+
+        if (isHotUrl) this.#putInHotCache(request.url, response);
+
+        return response;
     }
 
     // Cache the answer
     static async put(request, response, cacheName) {
         if (!cacheName) throw new Error('cacheName required for put');
+
+        if (this.#isHotUrl(request.url)) this.#putInHotCache(request.url, response);
+
         const cache = await this.#getCache(cacheName);
         await cache.put(request, response);
+
         return response;
     }
 
@@ -459,6 +545,25 @@ class CacheManager {
             if (age <= maxAge) return true;
         }
         return false;
+    }
+
+    // Checking whether this URL should be cached in RAM
+    static #isHotUrl(url) {
+        return this.#hotCacheUrls.some(hotUrl => url.startsWith(hotUrl));
+    }
+
+    // Place the answer in RAM
+    static #putInHotCache(url, response) {
+        // Limit the Map size to avoid overflowing the SW memory
+        if (this.#hotCache.size > 800) {
+            const firstKey = this.#hotCache.keys().next().value;
+            this.#hotCache.delete(firstKey);
+        }
+
+        this.#hotCache.set(url, {
+            response: response.clone(),
+            expireTime: Date.now() + 5 * 60 * 1000 // 5 mins // TODO: noraml time from Cache-Control header
+        });
     }
 
     // Check and remove all old data (max-age expired)
@@ -503,4 +608,3 @@ class CacheManager {
         return `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`;
     }
 }
-
