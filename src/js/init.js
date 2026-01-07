@@ -1,12 +1,14 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 22,
+    version: 23,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
+    images_url: 'https://image.civitai.com/',
     api_status_url: 'https://status.civitai.com/status/public',
+    local_params: [ 'target', 'original', 'cache', 'width', 'height', 'fit', 'format', 'quality', 'smoothing', 'position' ], // Parameters to remove when dragging (they were added only for passing parameters from the page to the sw)
     local_urls: {
         local: 'local',
         blurHash: 'local/blurhash'
@@ -77,6 +79,7 @@ const SETTINGS = {
     showCurrentModelVersionStats: true,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
+    colorCorrection: true,
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
@@ -210,21 +213,7 @@ class CivitaiAPI {
         if (id) url.searchParams.append('imageId', id);
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
 
-        // bs:
-            //   to get an image you need to know its nsfw level,
-            //   but to find out this level you need to get an image...
-            //   result: you need to spam requests with all possible options...
-            //   what nonsense...
-        if (!nsfwLevel) {
-            console.log('nsfwLevel not specified, attempting to guess (multiple requests to server)');
-            // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
-            const nsfwLevels = [ 'None', 'X' ];
-
-            const image = await Promise.allSettled(nsfwLevels.map(lvl => this.fetchImageMeta(id, lvl)))
-                .then(result => result.filter(item => item.value)?.[0]?.value);
-
-            return image || null;
-        }
+        // Guessing the nsfw level has been moved to sw
 
         const data = await this.#getJSON({ url, target: `image meta (id: ${id}; nsfwLevel: ${nsfwLevel})` });
         return data?.items?.[0] ?? null;
@@ -341,44 +330,120 @@ class Controller {
         ],
         labels: {
             AuraFlow: 'Aura Flow',
-            ZImageTurbo: 'Z-Image Turbo'
+            ZImageTurbo: 'Z-Image Turbo',
+            'PixArt a': 'PixArt α',
+            'PixArt E': 'PixArt Σ',
+            'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V A14B',
+            'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V A14B',
+            'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V 5B',
         },
         labels_short: {
             'SD 1.5 LCM': 'SD 1.5 LCM',
             'SD 1.5 Hyper': 'SD 1.5 H',
-            'SDXL 1.0': 'XL',
+            'SD 2.1': 'SD 2.1',
+            'SD 2.1 768': 'SD 2.1 768',
             'SD 3.5 Medium': 'SD 3.5 M',
             'SD 3.5 Large': 'SD 3.5 L',
             'SD 3.5 Large Turbo': 'SD 3.5 L T',
             'Flux.1 S': 'F1 S',
             'Flux.1 D': 'F1',
-            'Flux.1 Krea': 'Flux.1 Krea',
-            'Flux.1 Kontext': 'F1 Kontext',
+            'Flux.1 Krea': 'F1 Krea',
+            'Flux.1 Kontext': 'F1 Ktxt',
             'Flux.2 D': 'F2',
             'Aura Flow': 'Aura',
-            'SDXL Lightning': 'XL Lightning',
-            'SDXL Hyper': 'XL Hyper',
+            'SDXL 1.0': 'XL',
+            'SDXL Turbo': 'XL T',
+            'SDXL Lightning': 'XL Light',
+            'SDXL Hyper': 'XL H',
             'PixArt α': 'PA α',
             'PixArt Σ': 'PA Σ',
-            'Hunyuan 1': 'Hunyuan',
+            'Hunyuan 1': 'HY 1',
+            'Hunyuan Video': 'HY Vid',
             'Illustrious': 'IL',
             'CogVideoX': 'Cog',
-            'NoobAI': 'NAI',
+            'NoobAI': 'Noob',
             'Wan Video': 'Wan',
             'Wan Video 1.3B t2v': 'Wan 1.3B t2v',
             'Wan Video 14B t2v': 'Wan 14B t2v',
             'Wan Video 14B i2v 480p': 'Wan 14B i2v 480p',
             'Wan Video 14B i2v 720p': 'Wan 14B i2v 720p',
-            'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V-5B',
-            'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V-A14B',
-            'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V-A14B',
+            'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V 5B',
+            'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V A14B',
+            'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V A14B',
             'Wan Video 2.5 T2V': 'Wan 2.5 T2V',
             'Wan Video 2.5 I2V': 'Wan 2.5 I2V',
             'HiDream': 'HiD',
             'ZImageTurbo': 'ZIT',
+        },
+        tags: {
+            'AuraFlow': ['image', 'weights', 'fal-ai', 'multilingual'],
+            'Chroma': ['image', 'weights', 'multilingual'],
+            'CogVideoX': ['video', 'weights', 'zhipu-ai', 'multilingual'],
+            'Flux.1 D': ['image', 'weights', 'black-forest-labs', 'multilingual', 'dev'],
+            'Flux.1 Kontext': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux.1 Krea': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux.1 S': ['image', 'weights', 'black-forest-labs', 'multilingual', 'schnell'],
+            'Flux.2 D': ['image', 'weights', 'black-forest-labs', 'multilingual', 'dev'],
+            'HiDream': ['image', 'weights', 'chinese'],
+            'Hunyuan 1': ['image', 'weights', 'tencent', 'multilingual'],
+            'Hunyuan Video': ['video', 'weights', 'tencent', 'multilingual'],
+            'Illustrious': ['image', 'weights', 'sdxl', 'community', 'uncensored'],
+            'NoobAI': ['image', 'weights', 'sdxl', 'community', 'uncensored'],
+            'Pony': ['image', 'weights', 'sdxl', 'community', 'uncensored'],
+            'Pony V7': ['image', 'weights', 'sdxl', 'community', 'uncensored'],
+            'Imagen4': ['image', 'closed', 'google', 'censored'],
+            'Nano Banana': ['image', 'closed', 'google', 'censored'],
+            'Kolors': ['image', 'weights', 'sdxl', 'kuaishou', 'chinese'],
+            'LTXV': ['video', 'weights', 'lightricks', 'multilingual'],
+            'Lumina': ['image', 'weights', 'multilingual'],
+            'Mochi': ['video', 'weights', 'genmo', 'multilingual'],
+            'ODOR': ['image', 'weights', 'multilingual'],
+            'OpenAI': ['image', 'closed', 'openai', 'dalle', 'censored', 'multilingual'],
+            'PixArt E': ['image', 'weights', 'multilingual'],
+            'PixArt a': ['image', 'weights', 'multilingual'],
+            'Playground v2': ['image', 'weights', 'sdxl', 'playground-ai', 'multilingual'],
+            'Qwen': ['image', 'weights', 'alibaba', 'multilingual'],
+            'SD 1.4': ['image', 'weights', 'sd15', 'stability-ai', 'legacy'],
+            'SD 1.5': ['image', 'weights', 'sd15', 'stability-ai'],
+            'SD 1.5 Hyper': ['image', 'weights', 'sd15', 'stability-ai'],
+            'SD 1.5 LCM': ['image', 'weights', 'sd15', 'stability-ai'],
+            'SD 2.0': ['image', 'weights', 'sd2', 'stability-ai', 'legacy', 'censored'],
+            'SD 2.0 768': ['image', 'weights', 'sd2', 'stability-ai', 'legacy', 'censored'],
+            'SD 2.1': ['image', 'weights', 'sd2', 'stability-ai', 'legacy', 'censored'],
+            'SD 2.1 768': ['image', 'weights', 'sd2', 'stability-ai', 'legacy', 'censored'],
+            'SD 2.1 Unclip': ['image', 'weights', 'sd2', 'stability-ai', 'legacy', 'censored'],
+            'SD 3': ['image', 'weights', 'sd3', 'stability-ai', 'censored'],
+            'SD 3.5': ['image', 'weights', 'sd3', 'stability-ai', 'multilingual'],
+            'SD 3.5 Large': ['image', 'weights', 'sd3', 'stability-ai', 'multilingual'],
+            'SD 3.5 Large Turbo': ['image', 'weights', 'sd3', 'stability-ai'],
+            'SD 3.5 Medium': ['image', 'weights', 'sd3', 'stability-ai'],
+            'SDXL 0.9': ['image', 'weights', 'sdxl', 'stability-ai', 'legacy'],
+            'SDXL 1.0': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SDXL 1.0 LCM': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SDXL Distilled': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SDXL Hyper': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SDXL Lightning': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SDXL Turbo': ['image', 'weights', 'sdxl', 'stability-ai'],
+            'SVD': ['video', 'weights', 'stability-ai', 'legacy'],
+            'SVD XT': ['video', 'weights', 'stability-ai'],
+            'Seedream': ['image', 'weights', 'multilingual'],
+            'Sora 2': ['video', 'closed', 'openai', 'censored', 'multilingual'],
+            'Stable Cascade': ['image', 'weights', 'cascade', 'stability-ai'],
+            'Veo 3': ['video', 'closed', 'google', 'censored', 'multilingual'],
+            'Wan Video': ['video', 'weights', 'alibaba', 'multilingual', 'uncensored'],
+            'Wan Video 1.3B t2v': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
+            'Wan Video 14B i2v 480p': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
+            'Wan Video 14B i2v 720p': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
+            'Wan Video 14B t2v': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.2 I2V-A14B': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.2 T2V-A14B': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.2 TI2V-5B': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.5 I2V': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.5 T2V': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
+            'ZImageTurbo': ['image', 'weights', 'multilingual'],
+            'Other': ['misc']
         }
     };
-
     static #types = {
         options: [
             'Checkpoint',
@@ -629,7 +694,7 @@ class Controller {
                             });
                         } else {
                             promise = this.api.fetchModelInfo(modelId).then(model => {
-                                const previewMedia = model?.modelVersions?.[0].images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                                const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
                                 const title = model.name ?? redirectUrl;
                                 results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
                             });
@@ -664,7 +729,7 @@ class Controller {
             if (q.indexOf(':') === -1 && hashSizes.some(n => q.length === n)) {
                 const baseHash = q.toUpperCase();
                 const processVersion = version => {
-                    console.log('version', version);
+                    if (!version) return;
                     const url = `#models?model=${version.modelId}&version=${version.id}`;
                     const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? url;
                     const previewMedia = version.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
@@ -716,14 +781,30 @@ class Controller {
         });
 
 
+        // This is a temporary description, so whatever
         const appContent = createElement('div', { class: 'app-content' });
         const tempHome =  window.languagePack?.temp?.home ?? {};
         insertElement('h1', appContent, undefined, window.languagePack?.text?.home);
-        insertElement('p', appContent, undefined, tempHome.p1?.[1]);
-        insertElement('p', appContent, undefined, tempHome.p1?.[2]);
-        insertElement('p', appContent, undefined, tempHome.p1?.[3]);
-        insertElement('p', appContent, undefined, tempHome.p1?.[4]);
-        insertElement('p', appContent, undefined, tempHome.p1?.[5]);
+        insertElement('p', appContent, undefined, tempHome.p1?.description);
+        insertElement('p', appContent, undefined, tempHome.p1?.tipsListTitle);
+        if (tempHome.p1?.tipsList) {
+            const ul = insertElement('ul', appContent);
+            insertElement('li', ul, undefined, tempHome.p1?.tipsList[0]);
+            const itemWithIconText = tempHome.p1?.tipsList[1];
+            if (itemWithIconText) {
+                const start = itemWithIconText.indexOf(':civitai:');
+                if (start < 0) insertElement('li', ul, undefined, itemWithIconText);
+                else {
+                    const li = insertElement('li', ul, undefined, itemWithIconText.substring(0, start >= 0 ? start : undefined));
+                    const icon = getIcon('civitai');
+                    icon.style.display = 'inline';
+                    li.appendChild(icon);
+                    li.appendChild(document.createTextNode(itemWithIconText.substring(start + ':civitai:'.length)));
+                }
+            }
+            insertElement('li', ul, undefined, tempHome.p1?.tipsList[2]);
+        }
+        insertElement('p', appContent, undefined, tempHome.p1?.goodluck);
 
         insertElement('br', appContent);
         insertElement('hr', appContent);
@@ -772,7 +853,20 @@ class Controller {
                     savePageSettings();
                 },
                 value: SETTINGS.autoplay,
-                label: tempHome.autoplay ?? 'autoplay'
+                label: tempHome.autoplay ?? 'Autoplay'
+            }).element,
+        });
+
+        // Color correction
+        addSetting({
+            description: tempHome.colorCorrectionDescription ?? 'If enabled, the text color in the model descriptions will be adjusted to improve readability.',
+            toggleElement: this.#genBoolean({
+                onchange: ({ newValue }) => {
+                    SETTINGS.colorCorrection = newValue;
+                    savePageSettings();
+                },
+                value: SETTINGS.colorCorrection,
+                label: tempHome.colorCorrection ?? 'Color adjustment'
             }).element,
         });
 
@@ -787,6 +881,7 @@ class Controller {
                 const cacheFileSize = insertElement('span', cachesSizeWrap, { class: 'error-text' }, filesizeToString(caches));
 
                 const updateCacheSize = () => {
+                    if (!this.appElement.contains(cacheFileSize)) return;
                     navigator.storage.estimate().then(info => {
                         const caches = info.usageDetails?.caches ?? info.usage;
                         if (caches < 200000000) cacheFileSize.classList.remove('error-text');
@@ -798,15 +893,22 @@ class Controller {
                 const buttonRemoveOld = insertElement('button', buttonsWrap, undefined, tempHome?.removeCacheOld ?? 'Delete old cache');
                 const buttonRemoveAll = insertElement('button', buttonsWrap, undefined, tempHome?.removeCacheAll ?? 'Delete all cache');
 
+                // Timers are needed because it updates with a delay
                 buttonRemoveOld.addEventListener('click', () => {
-                    clearCache('old');
-                    setTimeout(updateCacheSize(), 500);
-                    setTimeout(updateCacheSize(), 2500);
+                    clearCache('old').then(response => {
+                        updateCacheSize();
+                        setTimeout(updateCacheSize, 500);
+                        setTimeout(updateCacheSize, 2500);
+                        notify(`Removed ${response?.countRemoved ?? -1} item(s)`);
+                    });
                 });
                 buttonRemoveAll.addEventListener('click', () => {
-                    clearCache('all');
-                    setTimeout(updateCacheSize(), 500);
-                    setTimeout(updateCacheSize(), 2500);
+                    clearCache('all').then(response => {
+                        updateCacheSize();
+                        setTimeout(updateCacheSize, 500);
+                        setTimeout(updateCacheSize, 2500);
+                        notify(`Removed ${response?.countRemoved ?? -1} item(s)`);
+                    });
                 });
             }
         });
@@ -1110,12 +1212,14 @@ class Controller {
 
     static openFromCivitUrl(href) {
         try {
-            let redirectUrl = this.convertCivUrlToLocal(href);
+            const redirectUrl = this.convertCivUrlToLocal(href);
             if (!redirectUrl) throw new Error('Unsupported url');
-            window.location.href = redirectUrl;
+            gotoLocalLink(redirectUrl);
         } catch(error) {
             const appContent = createElement('div', { class: 'app-content' });
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Unsupported url'));
+
+            document.title = CONFIG.title;
 
             this.#clearAppElement();
             this.appElement.appendChild(appContent);
@@ -1128,16 +1232,16 @@ class Controller {
             if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
             const searchParams = Object.fromEntries(url.searchParams);
             let localUrl;
-            if (url.pathname.indexOf('/models/') === 0) {
+            if (url.pathname.startsWith('/models/')) {
                 const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
                 if (!modelId) throw new Error('There is no model id in the link');
                 localUrl = `#models?model=${modelId}`;
                 if (searchParams.modelVersionId) localUrl += `&version=${searchParams.modelVersionId}`;
-            } else if (url.pathname.indexOf('/images/') === 0) {
+            } else if (url.pathname.startsWith('/images/')) {
                 const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
                 if (!imageId) throw new Error('There is no image id in the link');
                 localUrl = `#images?image=${imageId}`;
-            } else if (url.pathname.indexOf('/posts/') === 0) {
+            } else if (url.pathname.startsWith('/posts/')) {
                 const postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1];
                 if (!postId) throw new Error('There is no post id in the link');
                 localUrl = `#images?post=${postId}`;
@@ -1150,6 +1254,76 @@ class Controller {
         }
     }
 
+    static createLinkPreview(url) {
+        if (!(url instanceof URL)) {
+            try {
+                url = new URL(url, location.origin);
+            } catch (_) {
+                return;
+            }
+        }
+
+        let imageId = null, modelId = null, modelVersionId = null;
+
+        if (url.origin === CONFIG.civitai_url) {
+            if (url.pathname.startsWith('/images/')) {
+                imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
+            } else if (url.pathname.startsWith('/models/')) {
+                modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
+                const params = Object.fromEntries(url.searchParams);
+                modelVersionId = params.modelVersionId;
+            }
+        }
+
+        if (url.origin === location.origin) {
+            const [ pageId, paramString ] = url.hash.split('?') ?? [];
+            const params = Object.fromEntries(new URLSearchParams(paramString));
+            imageId = params.image;
+            modelId = params.model;
+            modelVersionId = params.version;
+        }
+
+        if (imageId) {
+            const showImage = media => {
+                const baseWidth = CONFIG.appearance.imageCard.width;
+                const aspectRatio = Math.min(media.width / media.height, 2);
+                const itemWidth = aspectRatio > 1.38 ? Math.round(baseWidth * aspectRatio) : baseWidth;
+                const card = this.#genImageCard(media, { isVisible: true, firstDraw: true, itemWidth, forceAutoplay: true });
+                return card;
+            };
+    
+            const cached = this.#cache.images.get(imageId);
+            if (cached) return showImage(cached);
+
+            return this.api.fetchImageMeta(imageId).then(media => {
+                if (media) this.#cache.images.set(imageId, media);
+                return showImage(media);
+            }).catch(error => this.#genErrorPage(error?.message ?? 'Error'));
+        } else if (modelId) {
+            const showModel = model => {
+                const card = this.#genModelCard(model, { isVisible: true, firstDraw: true, itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
+                return card;
+            };
+
+            if (this.#cache.models.has(modelId)) {
+                const cached = this.#cache.models.get(modelId);
+                if (cached) return showModel(cached);
+                else return this.#genErrorPage(`No model with id ${modelId}`);
+            }
+
+
+            return this.api.fetchModelInfo(modelId).then(model => {
+                if (model) this.#cache.models.set(modelId, model);
+                return showModel(model);
+            }).catch(error => {
+                if (error?.message.startsWith('No model with id')) {
+                    this.#cache.models.set(modelId, null); // Do not try to download again if there is no model with this ID
+                }
+                return this.#genErrorPage(error?.message ?? 'Error');
+            });
+        }
+    }
+
     static #genModelPage(options) {
         const { model, version = null, state: navigationState = {...this.#state} } = options;
         const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
@@ -1157,7 +1331,6 @@ class Controller {
 
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         if (!cache.descriptionImages) cache.descriptionImages = new Map();
-        const cacheDescriptionImages = cache.descriptionImages;
 
         // Model name
         const modelNameWrap = insertElement('div', page, { class: 'model-name' });
@@ -1168,8 +1341,9 @@ class Controller {
             // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
             { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
         ];
-        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : (modelVersion.publishedAt > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
-        if (availabilityBadge) statsList.push({ icon: 'information', value: window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge, type: availabilityBadge });
+        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
+        const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
+        if (availabilityBadge) statsList.push({ icon: iconId || 'information', value: window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge, type: availabilityBadge });
         const statsFragment = this.#genStats(statsList);
         if (availabilityBadge) statsFragment.children[statsFragment.children.length - 1].classList.add('model-availability');
         modelNameH1.appendChild(statsFragment);
@@ -1204,13 +1378,28 @@ class Controller {
 
         // Model sub name
         const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
-        const publishedAt = new Date(modelVersion.publishedAt);
+        const publishedAt = new Date(modelVersion.publishedAt ?? modelVersion.createdAt);
         insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`) }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
         const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
-        model.tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
-        if (modelVersion.baseModel) {
-            const baseModel = createElement('div', { class: 'badge' }, this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel);
-            modelTagsWrap.prepend(baseModel);
+        const updateTags = tags => {
+            modelTagsWrap.textContent = '';
+            tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
+            
+            if (modelVersion.baseModel) {
+                const baseModel = createElement('div', { class: 'badge' }, this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel);
+                modelTagsWrap.prepend(baseModel);
+            }
+        };
+        if (this.#state.model_tags || model.tags.length <= 12) updateTags(model.tags);
+        else {
+            updateTags(model.tags.slice(0, 12));
+            const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
+            showMore.appendChild(getIcon('arrow_down'));
+            insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - 12}`);
+            showMore.addEventListener('click', () => {
+                this.#state.model_tags = true;
+                updateTags(model.tags);
+            }, { once: true });
         }
 
         const modelVersionsWrap = insertElement('div', page, { class: 'badges model-versions' });
@@ -1297,33 +1486,10 @@ class Controller {
             showMore.appendChild(getIcon('arrow_down'));
             el.appendChild(showMore);
             showMore.addEventListener('click', () => {
-                if (navigationState.id !== this.#state.id) return;
-
                 this.#state[`long_description_${descriptionId}`] = true;
                 el.classList.remove('hide-long-description');
                 showMore.remove();
             }, { once: true });
-        };
-        const prepareParsedDescriptionFragment = fragment => {
-            fragment.querySelectorAll('img').forEach(img => {
-                const src = img.getAttribute('src');
-                if (cacheDescriptionImages.has(src)) {
-                    const item = cacheDescriptionImages.get(src);
-                    img.style.aspectRatio = item.ratio;
-                    img.style.height = `${item.offsetHeight}px`;
-                } else {
-                    img.addEventListener('load', () => {
-                        if (!img.naturalHeight) return;
-                        const item = {
-                            ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
-                            offsetHeight: img.offsetHeight
-                        };
-                        cacheDescriptionImages.set(src, item);
-                    }, { once: true });
-                }
-                img.setAttribute('loading', 'lazy');
-                img.setAttribute('decoding', 'async');
-            });
         };
 
         // Model version description block
@@ -1369,15 +1535,20 @@ class Controller {
             const userBLock = this.#genUserBlock(userInfo);
             if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
             modelVersionDescription.appendChild(userBLock);
+            const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
+            userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', model.creator?.username || 'user'));
         }
+
+        // to select the background color when correcting colors
+        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
 
         // Version description
         if (modelVersion.description) {
             const description = this.#analyzeModelDescriptionString(modelVersion.description);
             const modelVersionFragment = safeParseHTML(description);
-            prepareParsedDescriptionFragment(modelVersionFragment);
+            this.#analyzeModelDescription(modelVersionFragment, cache);
+            if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
             modelVersionDescription.appendChild(modelVersionFragment);
-            this.#analyzeModelDescription(modelVersionDescription);
             if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('modelVersion', modelVersionDescription);
         }
 
@@ -1385,28 +1556,11 @@ class Controller {
         const modelDescription = insertElement('div', page, { class: 'model-description' });
         const description = this.#analyzeModelDescriptionString(model.description);
         const modelDescriptionFragment = safeParseHTML(description);
-        prepareParsedDescriptionFragment(modelDescriptionFragment);
+        this.#analyzeModelDescription(modelDescriptionFragment, cache);
+        if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
         modelDescription.appendChild(modelDescriptionFragment);
         if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('model', modelDescription);
 
-        // Reduce all colors
-        // const supportsColorMix = () => {
-        //     const el = document.createElement('div');
-        //     el.style.color = 'color-mix(in oklab, #fff, #000)';
-        //     return el.style.color !== '';
-        // }
-        // if (supportsColorMix()) {
-        //     modelDescription.querySelectorAll('span[style^="color:"]').forEach(span => {
-        //         const originalColor = span.style.color;
-        //         span.style.color = `color-mix(in oklab, ${originalColor} 80%, currentColor 20%)`;
-        //     });
-        // }
-        // or remove all...
-        // const spanColors = new Set(Array.from(modelDescription.querySelectorAll('span[style^="color:"]')).map(span => span.style.color)); // Set() to remove colors with full match
-        // if (spanColors.size > 5) modelDescription.classList.add('nuke-all-colors');
-
-        // Analyze descriptions and find patterns to improve display
-        this.#analyzeModelDescription(modelDescription);
 
         // Open in CivitAI
         insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
@@ -1448,16 +1602,18 @@ class Controller {
                 const createdAt = new Date(media.createdAt);
                 insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
             }
+            const draggableTitleBase = window.languagePack?.text?.images_from ?? 'Images from {username}';
+            creator.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', media.username || 'user'));
             container.appendChild(creator);
 
             // Stats
             const statsList = [
                 { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
                 { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
-                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
-                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
-                // { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
+                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber, unit: 'cry' },
+                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber, unit: 'heart' },
+                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
+                { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' },
             ];
             const statsFragment = this.#genStats(statsList, true);
 
@@ -1819,11 +1975,11 @@ class Controller {
             if (hideEmpty && !value) return;
             const statWrap = insertElement('div', statsWrap, { class: 'badge', 'data-value': value });
             if (!value) statWrap.setAttribute('inert', '');
-            const lilpipeValue = typeof value === 'number' && value > 999 ? formatNumberIntl(value) : value;
+            const lilpipeValue = typeof value === 'number' && value > 999 ? formatNumberIntl(value) : escapeHtml(value);
             if (unit) {
                 const units = window.languagePack?.units?.[unit];
-                statWrap.setAttribute('lilpipe-text', escapeHtml(units ? `${lilpipeValue} ${pluralize(value, units)}` : lilpipeValue));
-            } else if (!type) statWrap.setAttribute('lilpipe-text', escapeHtml(lilpipeValue));
+                statWrap.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+            } else if (!type) statWrap.setAttribute('lilpipe-text', lilpipeValue);
             if (type) statWrap.setAttribute('data-badge', type);
             if (icon) statWrap.appendChild(getIcon(icon));
             // if (iconString) statWrap.appendChild(document.createTextNode(iconString));
@@ -1862,38 +2018,186 @@ class Controller {
         return rules.reduce((acc, { skip, regex, replacement }) => !skip ? acc.replace(regex, replacement) : acc, description);
     }
 
-    static #analyzeModelDescription(description) {
+    static #analyzeModelDescription(description, cache) {
+        const cacheDescriptionImages = cache?.descriptionImages ?? new Map();
+
         // Remove garbage (empty elements and all unnecessary things)
         description.querySelectorAll('p:empty, h3:empty').forEach(el => el.remove());
 
-        const promptTitles = {
-            positive: {
+        // Add loading lazy and decoding async
+        description.querySelectorAll('img').forEach(img => {
+            const src = img.getAttribute('src');
+            if (cacheDescriptionImages.has(src)) {
+                const item = cacheDescriptionImages.get(src);
+                img.style.aspectRatio = item.ratio;
+                img.style.height = `${item.offsetHeight}px`;
+            } else {
+                img.addEventListener('load', () => {
+                    if (!img.naturalHeight) return;
+                    const item = {
+                        ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
+                        offsetHeight: img.offsetHeight
+                    };
+                    cacheDescriptionImages.set(src, item);
+                }, { once: true });
+            }
+            img.setAttribute('decoding', 'async');
+
+            img.setAttribute('data-src', src);
+            img.removeAttribute('src');
+            onTargetInViewport(img, () => {
+                img.setAttribute('src', img.getAttribute('data-src'));
+                img.removeAttribute('data-src');
+            });
+        });
+
+        const setLinkPreview = a => {
+            const icon = getIcon('civitai');
+            icon.classList.add('link-preview-position');
+            a.prepend(icon);
+            a.classList.add('link-hover-preview', 'link-with-favicon');
+            a.setAttribute('data-link-preview', '');
+        };
+        const fixLinkSpacing = (a) => {
+            const moveOutside = (node, isStart) => {
+                if (isStart) {
+                    a.parentNode.insertBefore(node, a);
+                } else {
+                    a.parentNode.insertBefore(node, a.nextSibling);
+                }
+            };
+
+            const cleanEdge = (isStart) => {
+                while (true) {
+                    let target = isStart ? a.firstChild : a.lastChild;
+                    if (!target) break;
+
+                    // <br>>
+                    if (target.nodeName === 'BR') {
+                        moveOutside(target, isStart);
+                        continue;
+                    }
+
+                    // text
+                    if (target.nodeType === Node.TEXT_NODE) {
+                        const text = target.textContent;
+                        const regex = isStart ? /^\s+/ : /\s+$/;
+                        const match = text.match(regex);
+
+                        if (match) {
+                            const spaceContent = match[0];
+                            if (spaceContent.length === text.length) {
+                                moveOutside(target, isStart);
+                            } else {
+                                const remainingText = isStart ? text.slice(spaceContent.length) : text.slice(0, -spaceContent.length);
+                                target.textContent = remainingText;
+                                moveOutside(document.createTextNode(spaceContent), isStart);
+                            }
+                            continue;
+                        }
+                    }
+
+                    // deep check
+                    if (target.nodeType === Node.ELEMENT_NODE) {
+                        const subTarget = isStart ? target.firstChild : target.lastChild;
+                        if (subTarget) {
+                            if (subTarget.nodeName === 'BR' || (subTarget.nodeType === Node.TEXT_NODE && /^\s*$/.test(subTarget.textContent))) {
+                                a.insertBefore(subTarget, isStart ? target : target.nextSibling);
+                                continue;
+                            }
+                        }
+                    }
+
+                    break;
+                }
+            };
+
+            cleanEdge(true);    // clean start
+            cleanEdge(false);   // clean end
+        };
+
+        // Add _blank and noopener to all links
+        description.querySelectorAll('a').forEach(a => {
+            const href = a.getAttribute('href');
+            const rel = (a.rel || '').split(' ');
+            if (!rel.includes('noopener')) rel.push('noopener');
+            a.setAttribute('rel', rel.join(' ').trim());
+            a.setAttribute('target', '_blank');
+            fixLinkSpacing(a);
+
+            // Add link preview and check url syntax
+            try {
+                const url = new URL(href);
+                if (url.origin === CONFIG.civitai_url) {
+                    if (url.pathname.startsWith('/images/')) {
+                        const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
+                        if (imageId) setLinkPreview(a);
+                    } else if (url.pathname.startsWith('/models/')) {
+                        const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
+                        if (modelId) setLinkPreview(a);
+                    } else {
+                        // a.prepend(getIcon('civitai'));
+                        // a.classList.add('link-with-favicon');
+                    }
+                } else if (url.protocol !== 'https:') {
+                    a.classList.add('link-warning');
+                    if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
+                }
+            } catch (_) {
+                a.classList.add('link-broken');
+                if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
+            }
+        });
+
+        // Remove bad styles (font family, font size)
+        description.querySelectorAll('span[style]').forEach(span => {
+            span.style.fontSize = '';
+            span.style.fontFamily = '';
+        });
+
+        // Remove underscores that are too large (they don't make sense if they're on multiple lines)
+        description.querySelectorAll('u').forEach(u => {
+            if (u.textContent.length >= 40) u.replaceWith(...u.childNodes);
+        });
+
+        // Try to fix the incorrect formatting of the code block
+        // description.querySelectorAll('p > code:only-child').forEach(code => {
+        //     const p = code.parentElement;
+        //     const pre = createElement('pre');
+        //     pre.appendChild(code);
+        //     p.parentNode?.replaceChild?.(pre, p);
+        // });
+
+        // Prompts
+
+        const promptTitles = [
+            {
                 exact: [ 'positive prompt', 'positive:' ],
-                startsWith: [ '+prompt', '+ prompt', 'positive prompt' ]
+                startsWith: [ '+prompt', '+ prompt', 'positive prompt' ],
+                type: 'positive'
             },
-            negative: {
-                exact: [ 'negative prompt', 'negative:' ],
-                startsWith: [ '-prompt', '- prompt', 'negative prompt' ]
+            {
+                exact: [ 'negative prompt', 'negative:', 'nprompt:' ],
+                startsWith: [ '-prompt', '- prompt', 'negative prompt' ],
+                type: 'negative'
             }
-        }
+        ];
 
-        description.querySelectorAll('p:has(+pre)').forEach(p => {
-            const text = p.textContent.trim().toLowerCase();
-            if (promptTitles.positive.exact.includes(text) || promptTitles.positive.startsWith.some(t => text.indexOf(t) === 0)) {
-                getFollowingTagGroup(p, 'pre').forEach(pre => {
-                    const code = pre.querySelector('code');
-                    if (!code) return;
-
-                    code.classList.add('prompt', 'prompt-positive');
-                });
-            } else if (promptTitles.negative.exact.includes(text) || promptTitles.negative.startsWith.some(t => text.indexOf(t) === 0)) {
-                getFollowingTagGroup(p, 'pre').forEach(pre => {
-                    const code = pre.querySelector('code');
-                    if (!code) return;
-
-                    code.classList.add('prompt', 'prompt-negative');
-                });
+        description.querySelectorAll('pre').forEach(pre => {
+            let headerCandidate = pre.previousElementSibling;
+            
+            while (headerCandidate && headerCandidate.tagName.toLowerCase() === 'pre') {
+                headerCandidate = headerCandidate.previousElementSibling;
             }
+
+            if (!headerCandidate) return;
+
+            const text = headerCandidate.textContent.trim().toLowerCase();
+            const code = pre.querySelector('code');
+            if (!code) return;
+
+            const type = promptTitles.find(r => r.exact.includes(text) || r.startsWith.some(t => text.startsWith(t)))?.type;
+            if (type) code.classList.add('prompt', `prompt-${type}`);
         });
 
         // If a block of code has a lot of commas, it's probably a prompt block
@@ -1906,24 +2210,6 @@ class Controller {
                 code.classList.add('code-block');
                 return;
             }
-        });
-
-        // Add _blank and noopener to all links
-        description.querySelectorAll('a').forEach(a => {
-            const rel = (a.rel || '').split(' ');
-            if (!rel.includes('noopener')) rel.push('noopener');
-            a.setAttribute('rel', rel.join(' ').trim());
-            a.setAttribute('target', '_blank');
-
-            // const href = a.href;
-            // if (href.indexOf(CONFIG.civitai_url) === 0) {
-            //     const localUrl = this.convertCivUrlToLocal(href);    
-            //     if (localUrl) {
-            //         a.href = localUrl;
-            //         if (a.textContent === href) a.textContent = localUrl;
-            //         a.removeAttribute('target');
-            //     }
-            // }
         });
 
         if (!SETTINGS.disablePromptFormatting) description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
@@ -2071,6 +2357,170 @@ class Controller {
         codeElement.appendChild(fragment);
     }
 
+    static #analyzeTextColors(element, bgRGB) {
+        // APCA correction part generated by ChatGPT-5.2
+        const TARGET_LC = 70;
+        const COLOR_LC_PENALTY = 12;
+        const MIN_CHROMA_RATIO = 0.65;
+        const MAX_ITER = 14;
+
+        /* ---------- APCA ---------- */
+
+        function lin(c) {
+            c /= 255;
+            return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        }
+
+        function getY(rgb) {
+            return (lin(rgb.r) * 0.2126729 + lin(rgb.g) * 0.7151522 + lin(rgb.b) * 0.0721750);
+        }
+
+        function apca(text, bg) {
+            const Ytxt = getY(text);
+            const Ybg  = getY(bg);
+
+            if (Math.abs(Ytxt - Ybg) < 0.005) return 0;
+
+            let Lc;
+            if (Ybg > Ytxt) {
+                Lc = (Math.pow(Ybg, 0.56) - Math.pow(Ytxt, 0.57)) * 1.14 - 0.027;
+            } else {
+                Lc = (Math.pow(Ybg, 0.65) - Math.pow(Ytxt, 0.62)) * 1.14 + 0.027;
+            }
+
+            return Lc * 100;
+        }
+
+        /* ---------- Utilities ---------- */
+
+        function clamp01(v) {
+            return Math.min(1, Math.max(0, v));
+        }
+
+        function rgbValid(rgb) {
+            return (rgb.r >= 0 && rgb.r <= 255 && rgb.g >= 0 && rgb.g <= 255 && rgb.b >= 0 && rgb.b <= 255);
+        }
+
+        /* ---------- High-quality correction ---------- */
+
+        function correctColor(textRGB, bgRGB) {
+            const startLc = apca(textRGB, bgRGB);
+            if (Math.abs(startLc) >= TARGET_LC) return null;
+
+            const baseLch = Color.convert(textRGB, 'oklch');
+            const isColorText = baseLch.c > 0.08;
+
+            const targetLc = (startLc <= 0 ? -1 : 1) *
+                (isColorText ? TARGET_LC - COLOR_LC_PENALTY : TARGET_LC);
+
+            const polarity = Math.sign(targetLc);
+            const bgY = getY(bgRGB);
+
+            let lowY, highY;
+            if (polarity > 0) {
+                lowY = 0;
+                highY = bgY - 0.0005;
+            } else {
+                lowY = bgY + 0.0005;
+                highY = 1;
+            }
+
+            let best = null;
+            let bestErr = Infinity;
+
+            const minChroma = baseLch.c * MIN_CHROMA_RATIO;
+
+            for (let i = 0; i < MAX_ITER; i++) {
+                const midY = (lowY + highY) / 2;
+
+                let l = clamp01(midY ** (1 / 2.2));
+                let lch = { ...baseLch, l };
+                let rgb = Color.convert(lch, 'rgba');
+
+                if (!rgbValid(rgb)) {
+                    let cLow = minChroma;
+                    let cHigh = lch.c;
+
+                    for (let j = 0; j < 6; j++) {
+                        const cMid = (cLow + cHigh) / 2;
+                        lch.c = cMid;
+                        rgb = Color.convert(lch, 'rgba');
+
+                        if (rgbValid(rgb)) cLow = cMid;
+                        else cHigh = cMid;
+                    }
+
+                    lch.c = cLow;
+                    rgb = Color.convert(lch, 'rgba');
+                }
+
+                const lc = apca(rgb, bgRGB);
+                const err = Math.abs(lc - targetLc);
+
+                if (err < bestErr) {
+                    bestErr = err;
+                    best = rgb;
+                }
+
+                if (lc * polarity > targetLc * polarity) {
+                    highY = midY;
+                } else {
+                    lowY = midY;
+                }
+            }
+
+            return best;
+        }
+
+
+        /* ---------- DOM ---------- */
+
+        const cache = new Map();
+        const colorRe = /rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)/;
+        const blend = (fg, bg, alpha) => {
+            return {
+                r: Math.round(fg.r * alpha + bg.r * (1 - alpha)),
+                g: Math.round(fg.g * alpha + bg.g * (1 - alpha)),
+                b: Math.round(fg.b * alpha + bg.b * (1 - alpha))
+            };
+        };
+
+        element.querySelectorAll('span[style*="color:"]').forEach(span => {
+            const color = span.style.color;
+            const bgColor = span.style.backgroundColor || '';
+            const colorKey = `${color}-${bgColor}`;
+
+            if (cache.has(colorKey)) {
+                const cached = cache.get(colorKey);
+                if (cached) span.style.color = cached;
+                return;
+            }
+
+            const m = color.match(colorRe);
+            if (!m) return;
+            const rgb = { r: +m[1], g: +m[2], b: +m[3] };
+
+            let finalBg = bgRGB
+            const mBg = bgColor?.match(colorRe);
+            if (mBg) {
+                const bgAlpha = mBg[4] !== undefined ? parseFloat(mBg[4]) : 1;
+                if (bgAlpha === 0) finalBg = bgRGB;
+                else if (bgAlpha < 1) finalBg = blend({ r: +mBg[1], g: +mBg[2], b: +mBg[3] }, bgRGB, bgAlpha);
+                else finalBg = { r: +mBg[1], g: +mBg[2], b: +mBg[3] };
+            }
+
+            const corrected = correctColor(rgb, finalBg);
+            if (!corrected) {
+                cache.set(colorKey, null);
+                return;
+            }
+
+            const css = `rgb(${corrected.r}, ${corrected.g}, ${corrected.b})`;
+            cache.set(colorKey, css);
+            span.style.color = css;
+        });
+    }
+
     static #genImageGenerationMeta(meta) {
         const container = createElement('div', { class: 'generation-info' });
 
@@ -2104,9 +2554,9 @@ class Controller {
                 const statsList = [
                     { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
                     { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-                    { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber },
-                    { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber },
-                    { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber },
+                    { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber, unit: 'cry' },
+                    { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber, unit: 'heart' },
+                    { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
                 ];
                 infoContainer.appendChild(this.#genStats(statsList, true));
 
@@ -2249,9 +2699,9 @@ class Controller {
         const resourceHashes = new Set();
         const resources = [];
         const addResourceToList = resource => {
-            if (resource.name?.indexOf('urn:') === 0 && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
+            if (!resource.name?.startsWith('urn:') && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
             const key = resource.hash || resource.modelVersionId;
-            if (resourceHashes.has(key)) return;
+            if (!key || resourceHashes.has(key)) return;
             resourceHashes.add(key);
             resources.push({ ...resource });
         };
@@ -2286,7 +2736,7 @@ class Controller {
 
                 const el = createElement(href ? 'a' : 'div', { class: 'meta-resource' });
                 if (href) el.href = href;
-                const titleElement = insertElement('span', el, { class: 'meta-resource-name' }, `${title} ` );
+                const titleElement = insertElement('span', el, { class: 'meta-resource-name link-preview-position' }, `${title} ` );
                 insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': escapeHtml(baseModel) }, type);
                 if(version) insertElement('strong', titleElement, undefined, version)
                 if (weight !== 1) {
@@ -2295,6 +2745,33 @@ class Controller {
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', escapeHtml(weight));
                 }
                 return el;
+            };
+            const replaceResourceRow = (info, item, el) => {
+                const modelKey = String(item.modelVersionId || item.hash || '').toUpperCase();
+                if (!info) {
+                    el.classList.add('no-model');
+                    el.prepend(getIcon('cross'));
+                    // This is to avoid trying to constantly send requests to the 404 model
+                    this.#cache.modelVersions.set(modelKey, null);
+                    return info;
+                }
+                if (info.id && loadedResources.has(info.id)) {
+                    el.remove();
+                    return info;
+                }
+                loadedResources.add(info.id);
+                const newEl = createResourceRowContent({
+                    title: info.model?.name,
+                    version: info.name,
+                    baseModel: info.baseModel,
+                    type: info.model?.type,
+                    weight: item.weight,
+                    href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
+                });
+                newEl.setAttribute('data-link-preview', '');
+                resourcesContainer.replaceChild(newEl, el);
+                if (modelKey) this.#cache.modelVersions.set(modelKey, info);
+                return info;
             };
             const processResources = items => {
                 items = items.filter(Boolean);
@@ -2397,6 +2874,7 @@ class Controller {
                 });
             };
 
+            const loadedResources = new Set();
             const resourcesFromCache = [];
             resources.forEach(item => {
                 const modelKey = String(item.modelVersionId || item.hash || '').toUpperCase();
@@ -2416,7 +2894,18 @@ class Controller {
                 resourcesContainer.appendChild(el);
 
                 if (modelInfo !== undefined) {
+                    if (!modelInfo) {
+                        el.classList.add('no-model');
+                        el.prepend(getIcon('cross'));
+                        return;
+                    }
                     resourcesFromCache.push(modelInfo);
+                    if (modelInfo.id && loadedResources.has(modelInfo.id)) {
+                        el.remove();
+                        return;
+                    }
+                    if (modelInfo.id) loadedResources.add(modelInfo.id);
+                    el.setAttribute('data-link-preview', '');
                     return;
                 }
 
@@ -2442,27 +2931,9 @@ class Controller {
                 if (!fetchPromise) return;
 
                 el.classList.add('meta-resource-loading');
-                const promise = fetchPromise.then(info => {
-                    if (!info) return info;
-                    const newEl = createResourceRowContent({
-                        title: info.model?.name,
-                        version: info.name,
-                        baseModel: info.baseModel,
-                        type: info.model?.type,
-                        weight: item.weight,
-                        href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
-                    });
-                    resourcesContainer.replaceChild(newEl, el);
-                    if (modelKey) this.#cache.modelVersions.set(modelKey, info);
-                    return info;
-                })
-                .catch(() => {
-                    // This is to avoid trying to constantly send requests to the 404 model
-                    this.#cache.modelVersions.set(modelKey, null);
-                })
-                .finally(() => {
-                    el.classList.remove('meta-resource-loading');
-                });
+                const promise = fetchPromise.then(info => replaceResourceRow(info, item, el))
+                .catch(() => replaceResourceRow(null, item, el))
+                .finally(() => el.classList.remove('meta-resource-loading'));
                 resourcePromises.push(promise);
             });
 
@@ -2471,9 +2942,7 @@ class Controller {
             if (resourcePromises.length) {
                 Promise.all(resourcePromises)
                 .then(processResources)
-                .finally(() => {
-                    resourcesContainer.classList.remove('meta-resources-loading');
-                });
+                .finally(() => resourcesContainer.classList.remove('meta-resources-loading'));
             } else {
                 resourcesContainer.classList.remove('meta-resources-loading');
             }
@@ -2537,25 +3006,25 @@ class Controller {
 
     static #genModelCard(model, options) {
         // Note: Adds a "modelUpdatedRecently" field to the model object
-        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null } = options ?? {};
-        const modelVersion = model.modelVersions[0];
-        const previewMedia = modelVersion.images.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, 'data-media': previewMedia?.type ?? 'none', href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;` });
-
+        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false, version = null } = options ?? {};
+        const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
+        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
+        
         // Image
-        if (!SETTINGS.autoplay) {
-            if (previewMedia?.type === 'video') card.classList.add('video-hover-play');
-            card.classList.add('image-hover-play');
-        }
+        const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump });
+            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
             mediaElement.classList.add('card-background');
             if (!SETTINGS.autoplay) {
-                if (previewMedia?.type === 'video') mediaElement.classList.remove('video-hover-play');
                 if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
+                else if (previewMedia?.type === 'video') {
+                    mediaElement.classList.remove('video-hover-play');
+                    card.classList.add('video-hover-play');
+                }
+                card.classList.add('image-hover-play');
             }
             card.appendChild(mediaElement);
-        } else if (modelVersion.images.length) {
+        } else if (modelVersion.images?.length) {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background nsfw-blur-hash' });
             const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element nsfw-filter' });
             const closestNSFWLevel = Math.min(...modelVersion.images.map(m => m.nsfwLevel));
@@ -2581,16 +3050,23 @@ class Controller {
 
         // Model Type
         const modelTypeBadges = insertElement('div', cardContentTop, { class: 'badges model-type-badges' });
-        const modelTypeWrap = insertElement('div', modelTypeBadges, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} | ${modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} | ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
+        const modelTypeWrap = insertElement('div', modelTypeBadges, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} | ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} | ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
 
         // Availability
         let availabilityBadge = null;
         if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
         else {
-            if (model.modelUpdatedRecently === undefined) model.modelUpdatedRecently = model.modelVersions.some(version => version.publishedAt > CONFIG.minDateForNewBadge);
+            if (model.modelUpdatedRecently === undefined) model.modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
             if (model.modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
         }
-        if (availabilityBadge) insertElement('div', modelTypeBadges, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+        if (availabilityBadge) {
+            const badge = insertElement('div', modelTypeBadges, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+            if (modelVersion.availability === 'Public' && model.modelUpdatedRecently) {
+                const publishedAt = new Date(model.modelUpdatedRecently.publishedAt ?? model.modelUpdatedRecently.createdAt);
+                const lilpipeText = `<b>${escapeHtml(model.modelUpdatedRecently.name || '')}</b><br>${escapeHtml(timeAgo(Math.round((Date.now() - publishedAt)/1000)))}`;
+                badge.setAttribute('lilpipe-text', lilpipeText);
+            }
+        }
 
         // Creator
         if (model.creator) cardContentBottom.appendChild(this.#genUserBlock({ image: model.creator.image, username: model.creator.username }));
@@ -2618,19 +3094,21 @@ class Controller {
             image = image.values().next().value;
         };
 
-        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null } = options ?? {};
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, 'data-media': image?.type ?? 'none', href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight ?? (itemWidth / (image.width/image.height))}px;` });
+        const { isVisible = false, firstDraw = false, itemWidth, timestump = null, forceAutoplay = false } = options ?? {};
+        const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
+        const itemHeight = options.itemHeight ?? (itemWidth / (image.width/image.height));
+        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': draggableTitle });
 
         // Image
-        if (!SETTINGS.autoplay) {
-            if (image?.type === 'video') card.classList.add('video-hover-play');
-            card.classList.add('image-hover-play');
-        }
-        const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, target: 'image-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump });
+        const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, target: 'image-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
         mediaElement.classList.add('card-background');
         if (!SETTINGS.autoplay) {
-            if (image?.type === 'video') mediaElement.classList.remove('video-hover-play');
             if (image?.type === 'image') mediaElement.classList.remove('image-hover-play');
+            else if (image?.type === 'video') {
+                mediaElement.classList.remove('video-hover-play');
+                card.classList.add('video-hover-play');
+            }
+            card.classList.add('image-hover-play');
         }
         card.appendChild(mediaElement);
 
@@ -2661,10 +3139,10 @@ class Controller {
         const statsContainer = this.#genStats([
             { iconString: '👍', value: image.stats.likeCount, formatter: formatNumber, unit: 'like' },
             { iconString: '👎', value: image.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-            { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber },
-            { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber },
-            { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber },
-            // { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' }, // Always empty (API does not give a value, it is always 0)
+            { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber, unit: 'cry' },
+            { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber, unit: 'heart' },
+            { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
+            { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' },
         ], true);
         cardContentWrap.appendChild(statsContainer);
 
@@ -2739,8 +3217,10 @@ class Controller {
             mediaElement = this.#finishLoading(mediaContainer, options);
         }
 
+        // forceBlurhash - This is necessary for the first rendering when navigating
+        //   (otherwise the image will have the dimensions, but will not be rendered on the first frame, and there will be empty space)
         // Problem: This check works even if the image is not ready (not decoded) yet
-        if (!mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) {
+        if (options.forceBlurhash || !mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) {
             if (media.hash) {
                 const blurSize = CONFIG.appearance.blurHashSize;
                 const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
@@ -2763,7 +3243,8 @@ class Controller {
         const size = `width=${this.#getNearestServerSize(targetWidth)}`;
         const paramString = target ? (`?target=${target}`) : '';
         const replaceWidthWith = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
-        const url = `${media.url.includes('/original=true/') ? media.url.replace('/original=true/', replaceWidthWith) : replace(/\/width=\d+\//, replaceWidthWith)}${paramString}`;
+        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', replaceWidthWith) : replace(/\/width=\d+\//, replaceWidthWith);
+        const url = `${urlBase}${paramString}`;
         const mediaElement = createElement('img', { class: 'media-element',  alt: ' ', crossorigin: 'anonymous' });
         let src;
 
@@ -2774,8 +3255,9 @@ class Controller {
                 mediaElement.classList.add('image-possibly-animated');
             }
         } else if (media.type === 'video') {
-            const source = original ? url : url.replace('optimized=true', 'optimized=true,transcode=true');
-            const poster = src = source;
+            // Video does not need any local parameters (video elements are skipped in sw)
+            const source = original ? urlBase : urlBase.replace('optimized=true', 'optimized=true,transcode=true');
+            const poster = src = `${source}${paramString}`;
             const videoSrc = source.replace(/anim=false,?/, '');
 
             mediaContainer.setAttribute('data-src', videoSrc);
@@ -2790,7 +3272,7 @@ class Controller {
         if (loading === 'eager') mediaElement.loading = loading;
         if (decoding === 'sync' || decoding === 'async') mediaElement.decoding = decoding;
 
-        mediaElement.src = src;
+        if (src) mediaElement.setAttribute('src', src);
 
         mediaElement.style.aspectRatio = +(ratio).toFixed(4);
         // if (resize) mediaContainer.setAttribute('data-resize', `${targetWidth}:${targetHeight || Math.round(targetWidth / ratio)}`);
@@ -2799,7 +3281,7 @@ class Controller {
     }
 
     static #genMediaPreviewFromPrevPage(mediaElement, mediaId) {
-        const previewImageOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"] .media-element:not(.loading)`);
+        const previewImageOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]:not(.loading) .media-element`);
         const previewImage = previewImageOriginal?.cloneNode(true);
         if (!previewImage) return;
 
@@ -3008,6 +3490,7 @@ class Controller {
             value: SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All',
             options: modelsOptions,
             label: window.languagePack?.text?.model ?? 'Model',
+            tags: this.#models.tags,
             labels: modelLabels
         });
         modelsList.element.classList.add('list-filter');
@@ -3039,6 +3522,7 @@ class Controller {
             },
             value: SETTINGS.checkpointType,
             options: trainedOrMergedOptions,
+            label: window.languagePack?.text?.origin ?? 'Origin',
             labels: trainedOrMergedLabels
         });
         trainedOrMergedList.element.classList.add('list-filter');
@@ -3124,12 +3608,13 @@ class Controller {
         };
 
         let imgSrc;
-        if (error.indexOf('No model with id') === 0) imgSrc = errorsImagesDictionary['HTTP 404'];
+        if (error.startsWith('No model with id')) imgSrc = errorsImagesDictionary['HTTP 404'];
+        else if (error.startsWith('CLUSTERDOWN')) imgSrc = errorsImagesDictionary['HTTP 500'];
         else imgSrc = errorsImagesDictionary[error] || errorImageDefault;
 
         const errorPage = createElement('div', { class: 'error-block' });
-        insertElement('img', errorPage, { alt: error, src: imgSrc });
-        insertElement('h1', errorPage, { class: 'error-text' }, `${window.languagePack?.errors?.error ?? 'Error'}: ${error}`);
+        insertElement('img', errorPage, { class: 'error-image', alt: error, src: imgSrc });
+        insertElement('h2', errorPage, { class: 'error-text' }, `${window.languagePack?.errors?.error ?? 'Error'}: ${error}`);
 
         return errorPage;
     }
@@ -3181,69 +3666,144 @@ class Controller {
         return { element, setValue };
     }
 
-    static #genList({ onchange, value, options, labels = {}, label = '' }) {
-        const element = createElement('button', { class: 'config config-list' });
+    static #genList({ onchange, value, options, labels = {}, tags = {}, label = '' }) {
+        const element = createElement('div', { class: 'config config-list' });
         let currentValue = value;
         const list = {};
         const listElements = {};
         options.forEach(key => list[key] = labels[key] ?? key);
-        let listVisible = false, focusIndex = 0, forceReturnFocus = false;
+        let listVisible = false, focusIndex = 0, displayedList = [], forceReturnFocus = false, isClicking = false;
 
         const selectedOptionElement = insertElement('div', element, { class: 'list-selected' }, label ? `${label}: ` : '');
+        const searchInput = insertElement('input', element, { type: 'text', class: 'list-search', hidden: '' });
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
         const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
-        options.forEach(key => {
-            listElements[key] = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key }, list[key]);
+        const searchQueryRegex = /[ \|-]/g;
+        options.forEach((key, index) => {
+            const element = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key });
+            const span = insertElement('span', element, undefined, list[key]);
+            const text = list[key] || '';
+            const optionTags = [ text, key, ...(tags[key] || []) ];
+            const tagLabels = {};
+            const searchTags = [];
+            optionTags.forEach(label => {
+                const tag = label.toLowerCase().replace(searchQueryRegex, '_');
+                tagLabels[tag] = label;
+                searchTags.push(tag);
+            });
+            const searchText = searchTags.join('||');
+            listElements[key] = { element, index, span, text, tagLabels, searchTags, searchText };
         });
-        listElements[currentValue]?.classList.add('option-selected');
+        focusIndex = listElements[currentValue]?.index ?? -1;
+        listElements[currentValue]?.element.classList.add('option-selected');
 
+        const searchForText = (q = '') => {
+            q = q.toLowerCase().replace(searchQueryRegex, '_');
+            searchInput.toggleAttribute('hidden', !q);
+            const currentIndex = listElements[displayedList[focusIndex]]?.index ?? null;
+            if (q) {
+                displayedList = Object.keys(listElements).filter(key => {
+                    const item = listElements[key];
+                    const index = item.searchText.indexOf(q);
+                    if (index === -1) {
+                        item.element.setAttribute('hidden', '');
+                        return false;
+                    }
+
+                    if (index < item.text.length) {
+                        item.span.textContent = '';
+                        const text = item.text;
+                        const startText = text.substring(0, index);
+                        if (startText) item.span.appendChild(document.createTextNode(startText));
+                        const postText = text.substring(index + q.length);
+                        insertElement('mark', item.span, undefined, text.substring(index, index + q.length));
+                        if (postText) item.span.appendChild(document.createTextNode(postText));
+                        item.element.removeAttribute('hidden');
+                        return true;
+                    }
+
+                    const matchedTag = item.searchTags.find(t => t.startsWith(q));
+                    if (!matchedTag) {
+                        item.element.setAttribute('hidden', '');
+                        return false;
+                    }
+
+                    item.span.textContent = item.text;
+                    insertElement('div', item.span, { class: 'list-tag' }, item.tagLabels[matchedTag]);
+
+                    item.element.removeAttribute('hidden');
+                    return true;
+                });
+            }
+            else {
+                displayedList = Object.keys(listElements);
+                optionsListElement.querySelectorAll('.list-option[hidden]').forEach(el => el.removeAttribute('hidden'));
+                displayedList.forEach(key => {
+                    listElements[key].span.textContent = list[key];
+                });
+            }
+
+            focusIndex = displayedList.indexOf(currentValue);
+            if (focusIndex < 0) focusIndex = 0;
+            if (currentIndex !== null && currentIndex !== listElements[displayedList[focusIndex]]?.index) setFakeFocus();
+        };
         const scrollToOption = option => optionsListElement.scrollTo({ top: option.offsetTop - optionsListElement.offsetHeight/2 + option.offsetHeight/2 });
         const setFakeFocus = () => {
-            const key = options[focusIndex];
-            if (listElements[key]) scrollToOption(listElements[key]);
+            const key = displayedList[focusIndex];
+            if (listElements[key]) scrollToOption(listElements[key].element);
             optionsListElement.querySelector('.option-focus')?.classList.remove('option-focus');
-            listElements[key]?.classList.add('option-focus');
+            listElements[key]?.element.classList.add('option-focus');
         };
         const onfocus = e => {
             if (listVisible) return;
             optionsListElement.classList.add('list-visible');
             selectedOptionElement.classList.add('list-visible');
+            if (!isClicking) selectedOptionElement.classList.add('keyboard-focus');
+            searchInput.value = '';
             optionsListElement.querySelector('.option-focus')?.classList.remove('option-focus');
-            focusIndex = options.indexOf(currentValue);
-            if (listElements[currentValue]) scrollToOption(listElements[currentValue]);
+            searchForText();
+            if (listElements[currentValue]) scrollToOption(listElements[currentValue].element);
             listVisible = true;
+            isClicking = false;
         };
         const onfocusout = e => {
             if (forceReturnFocus) {
                 forceReturnFocus = false;
-                element.focus();
+                searchInput.focus();
                 return;
             }
             if (!listVisible) return;
             optionsListElement.classList.remove('list-visible');
             selectedOptionElement.classList.remove('list-visible');
+            selectedOptionElement.classList.remove('keyboard-focus');
+            searchInput.setAttribute('hidden', '');
             listVisible = false;
+            isClicking = false;
         };
         const onkeydown = e => {
             if (e.code === 'ArrowDown') {
                 e.preventDefault();
-                focusIndex = (focusIndex + 1) % options.length;
+                focusIndex = (focusIndex + 1) % displayedList.length;
                 setFakeFocus();
             } else if (e.code === 'ArrowUp') {
                 e.preventDefault();
-                focusIndex = focusIndex > 0 ? (focusIndex - 1) % options.length : options.length - 1;
+                focusIndex = focusIndex > 0 ? (focusIndex - 1) % displayedList.length : displayedList.length - 1;
                 setFakeFocus();
             } else if (e.code === 'Enter') {
                 e.preventDefault();
-                const key = options[focusIndex];
+                const key = displayedList[focusIndex];
                 if (listElements[key]) {
-                    setValue(options[focusIndex]);
+                    setValue(displayedList[focusIndex]);
                     element.blur();
                     onfocusout(e);
                 }
+            } else if (e.code === 'Escape') {
+                element.blur();
+                onfocusout(e);
             } else forceReturnFocus = Boolean(e.code === 'Backspace');
         };
+        const oninput = () => searchForText(searchInput.value);
         const onclick = e => {
             const key = e.target.closest('.list-option[data-option]')?.getAttribute('data-option');
             if (key) {
@@ -3252,21 +3812,30 @@ class Controller {
                 onfocusout(e);
             }
         };
+        const oppointerdown = e => {
+            e.preventDefault();
+        };
 
         const setValue = newValue => {
             if (currentValue === newValue) return;
             onchange({ oldValue: currentValue, newValue });
-            listElements[currentValue]?.classList.remove('option-selected');
-            listElements[newValue]?.classList.add('option-selected');
+            listElements[currentValue]?.element.classList.remove('option-selected');
+            listElements[newValue]?.element.classList.add('option-selected');
             currentValue = newValue;
             selectedOptionTitle.textContent = list[newValue] ?? newValue;
         };
 
-        element.addEventListener('focus', onfocus);
-        element.addEventListener('focusout', onfocusout);
-        element.addEventListener('keydown', onkeydown);
-        optionsListElement.addEventListener('mousedown', e => e.preventDefault()); // Disable focus loss before click event when mouse is pressed
+        searchInput.addEventListener('focus', onfocus);
+        searchInput.addEventListener('focusout', onfocusout);
+        searchInput.addEventListener('keydown', onkeydown);
+        searchInput.addEventListener('input', oninput);
+        element.addEventListener('pointerdown', oppointerdown); // Disable focus loss before click event when mouse is pressed
         optionsListElement.addEventListener('click', onclick);
+        selectedOptionElement.addEventListener('click', () => {
+            isClicking = true;
+            if (listVisible) searchInput.blur();
+            else searchInput.focus();
+        });
 
         return { element, setValue };
     }
@@ -3477,7 +4046,7 @@ const onTargetInViewportObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
             const target = entry.target;
-            onTargetInViewportCallbacks.get(target)?.();
+            onTargetInViewportCallbacks.get(target)?.(target);
             onTargetInViewportClearTarget(target);
         }
     });
@@ -3514,13 +4083,43 @@ function cleanupDetachedObservers() {
 }
 
 
+function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
+    return new Promise(resolve => {
+        if (!sw) {
+            resolve({ ok: false, error: new Error('No active Service Worker') });
+            return;
+        }
+
+        const channel = new MessageChannel();
+        let settled = false;
+
+        channel.port1.onmessage = e => {
+            if (settled) return;
+            settled = true;
+
+            const data = e?.data ?? {};
+            if (data.ok) {
+                resolve({ ok: true, response: data.response });
+            } else {
+                resolve({ ok: false, error: data.error });
+            }
+        };
+
+        try {
+            sw.postMessage(message, [channel.port2]);
+        } catch (err) {
+            resolve({ ok: false, error: err });
+        }
+    });
+}
+
+
 const iconsCache = new Map();
 function addIconToCache(name, original) {
     const iconName = original ? `__original--${name}` : name;
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('class', 'icon');
+    svg.setAttribute('class', `icon icon-${name}`);
     svg.setAttribute('aria-hidden', 'true');
-    svg.setAttribute('icon-id', name);
     if (original) {
         svg.setAttribute('viewBox', '0 0 24 24');
         Array.from(document.getElementById(name)?.cloneNode(true)?.children).forEach(node => svg.appendChild(node));
@@ -3587,32 +4186,31 @@ function calcCharsInString(string, char, maxCount = 999) {
     return count;
 }
 
-function getFollowingTagGroup(startElem, tagName) {
-    const result = [];
-    let next = startElem.nextElementSibling;
-
-    tagName = tagName.toUpperCase(); // DOM API uses uppercase for tagName
-
-    while (next && next.tagName === tagName) {
-        result.push(next);
-        next = next.nextElementSibling;
-    }
-
-    return result;
-}
-
 function savePageSettings() {
     localStorage.setItem('civitai-lite-viewer--settings', JSON.stringify({ settings: SETTINGS, version: CONFIG.version }));
 }
 
 function clearCache(mode = 'old') {
+    const data = {};
     if (mode === 'all') {
-        navigator.serviceWorker?.controller?.postMessage({ action: 'clear_cache', data: { mode: 'all' } });
+        data.mode = 'all';
     } else {
-        const urlMask = [];
-        if (!SETTINGS.autoplay) urlMask.push('^.*anim=true.*[?&]target=model-card.*[?&]format=webp');                       // If autoplay is disabled, remove all animated images
-        navigator.serviceWorker?.controller?.postMessage({ action: 'clear_cache', data: { mode: 'max-age-expired', urlMask } });
+        data.mode = 'max-age-expired';
+        data.urlMask = [];
+        if (!SETTINGS.autoplay) data.urlMask.push('^.*anim=true.*[?&]target=model-card.*[?&]format=webp'); // If autoplay is disabled, remove all animated images
     }
+    return sendMessageToSW({ action: 'clear_cache', data }).then(result => result.response);
+}
+
+function clearUrlFromLocalParams(url) {
+    const urlObj = new URL(url);
+    CONFIG.local_params.forEach(param => urlObj.searchParams.delete(param));
+    return urlObj.toString();
+}
+
+function matchLinkDrop(e) {
+    const draggedTypes = Array.from(e.dataTransfer.types);
+    return draggedTypes.includes('text/uri-list') && !draggedTypes.includes('Files') && !draggedTypes.includes('x-source-type');
 }
 
 // Clear old cache (Cleaning every 5 minutes)
@@ -3679,6 +4277,15 @@ function onBodyMouseOver(e) {
         return startLilpipeEvent(e);
     }
 
+    // link previews
+    if (e.altKey) {
+        const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed])');
+        if (preview) {
+            e.eventTarget = preview;
+            return startLinkPreviewEvent(e);
+        }
+    }
+
     // videos
     const videoPLayback = e.target.closest('.video-hover-play');
     if (videoPLayback) startVideoPlayEvent(videoPLayback);
@@ -3696,6 +4303,13 @@ function onBodyFocus(e) {
         e.eventTarget = lilpipe;
         return startLilpipeEvent(e, { fromFocus: true });
     }
+
+    // link previews
+    // const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed])');
+    // if (preview) {
+    //     e.eventTarget = preview;
+    //     return startLinkPreviewEvent(e, { fromFocus: true });
+    // }
 
     // videos
     const videoPLayback = e.target.closest('.video-hover-play');
@@ -3755,62 +4369,35 @@ function markMediaAsLoadedWhenReady(el) {
 
     pendingMedia.add(el);
 
-    if (!batchTimer) {
-        batchTimer = requestAnimationFrame(() => {
-            const readyImages = [];
-            const instantMedia = [];
-            const otherMedia = [];
+    if (batchTimer) return;
+    batchTimer = requestAnimationFrame(() => {
+        batchTimer = null;
+        const readyImages = [];
+        const instantMedia = [];
 
-            for (const media of pendingMedia) {
-                if (!document.body.contains(media)) continue;
-                if (media.tagName === 'IMG' && media.complete) {
-                    readyImages.push(media);
-                } else if (media.readyState >= 2) {
-                    instantMedia.push(media);
-                } else {
-                    otherMedia.push(media);
-                }
-            }
+        for (const media of pendingMedia) {
+            if (!document.body.contains(media)) continue;
+            if (media.tagName === 'IMG') readyImages.push(media);
+            else instantMedia.push(media);
+        }
+        pendingMedia.clear();
 
-            pendingMedia.clear();
-            if (otherMedia.length) otherMedia.forEach(media => pendingMedia.add(media));
-            batchTimer = null;
+        // videos
+        for (const media of instantMedia) {
+            media.parentElement.classList.remove('loading');
+            media.parentElement.style.backgroundImage = '';
+        }
 
-            // videos
-            for (const media of instantMedia) {
-                media.parentElement.classList.remove('loading');
-                media.parentElement.style.backgroundImage = '';
-            }
-
-            // images (Waiting for decoding to eliminate possible flickering)
-            const decodedImages = [];
-            readyImages.forEach(img => {
-                if (img._decoded) {
-                    decodedImages.push(img);
-                    // img.parentElement.classList.remove('loading');
-                    // img.parentElement.style.backgroundImage = '';
-                    return;
-                }
-
-                img.decode()
-                .then(() => {
-                    img._decoded = true;
-                    markMediaAsLoadedWhenReady(img);
-                })
-                .catch(() => {});
-            });
-
-            // Wait to make sure the images is rendered and there is no flickering
-            if (decodedImages.length) {
-                setTimeout(() => {
-                    decodedImages.filter(img => document.body.contains(img)).forEach(img => {
-                        img.parentElement.classList.remove('loading');
-                        img.parentElement.style.backgroundImage = '';
-                    });
-                }, 120);
-            }
-        });
-    }
+        // images (Waiting to eliminate possible flickering)
+        if (readyImages.length) {
+            setTimeout(() => {
+                readyImages.filter(img => document.body.contains(img)).forEach(img => {
+                    img.parentElement.classList.remove('loading');
+                    img.parentElement.style.backgroundImage = '';
+                });
+            }, 180);
+        }
+    });
 }
 function onMediaElementLoaded(e) {
     markMediaAsLoadedWhenReady(e.target);
@@ -3842,11 +4429,201 @@ function onPopState(e) {
     Controller.gotoPage(hash, savedState);
 }
 
+function onDragstart_setDragCanvas(e, original) {
+    const ghost = createElement('canvas', { class: 'drag-ghost-container drag-ghost-image' });
+    const width = original.naturalWidth || original.videoWidth;
+    const height = original.naturalHeight || original.videoHeight;
+    const scale = Math.min(200 / Math.max(width, height), 1);
+    const scaledWidth = width * scale;
+    const scaledHeight = height * scale;
+    ghost.style.width = `${scaledWidth}px`;
+    ghost.style.height = `${scaledHeight}px`;
+    ghost.width = scaledWidth;
+    ghost.height = scaledHeight;
+
+    // draw small image
+    const ctx = ghost.getContext('2d', { alpha: true });
+    ctx.drawImage(original, 0, 0, scaledWidth, scaledHeight);
+
+    document.body.appendChild(ghost);
+
+    e.dataTransfer.setDragImage(ghost, Math.round(scaledWidth / 2), Math.round(scaledHeight / 2));
+    setTimeout(() => ghost.remove(), 0);
+}
+
+function onDragstart(e) {
+    const link = e.target.closest('a');
+    if (link) {
+        const title = link.getAttribute('data-draggable-title') || link.textContent.trim();
+        const href = link.href;
+
+        // Apply default browser behavior for dragging links
+        e.dataTransfer.setData('text/plain', title);
+        e.dataTransfer.setData('text/uri-list', href);
+        e.dataTransfer.setData('text/html', `<a href="${href}">${escapeHtml(title)}</a>`);
+        e.dataTransfer.dropEffect = 'link';
+
+        // Show ghost bubble with title
+        const ghost = createElement('div', { class: 'drag-ghost-container drag-ghost-link' });
+
+        let dragIcon = null;
+        const originalImg = link.querySelector('.media-container:not(.loading) img[src]');
+        if (originalImg) {
+            dragIcon = originalImg.cloneNode(true);
+            dragIcon.className = 'drag-ghost-img';
+            ghost.appendChild(dragIcon);
+        } else {
+            const originalMedia = link.querySelector('.media-container.loading');
+            const backgroundImage = originalMedia?.style.backgroundImage;
+            if (backgroundImage) {
+                dragIcon = insertElement('div', ghost, { class: 'drag-ghost-img loading', style: `background-image: ${backgroundImage};` });
+            }
+        }
+
+        const infoWrapper = insertElement('div', ghost, { class: 'drag-ghost-info' });
+        if (title && title !== href) insertElement('div', infoWrapper, { class: 'drag-ghost-title' }, title);
+        else infoWrapper.classList.add('info-only-url');
+        const urlElement = insertElement('div', infoWrapper, { class: 'drag-ghost-url' });
+
+        try {
+            const url = new URL(href);
+            if (url.origin === location.origin) {
+                if (url.pathname !== '/') {
+                    insertElement('span', urlElement, { class: 'darker-text' }, url.pathname);
+                }
+
+                if (url.hash) {
+                    insertElement('b', urlElement, { class: 'light-text' }, '#');
+                    insertElement('span', urlElement, undefined, url.hash.substring(1));
+                } 
+
+                if (url.pathname === '/' && !url.hash) {
+                    insertElement('span', urlElement, { class: 'darker-text' }, '/');
+                }
+
+                if (!dragIcon) {
+                    dragIcon = getIcon('civitai');
+                    dragIcon.classList.add('drag-ghost-img', 'img-small');
+                    ghost.prepend(dragIcon);
+                }
+            } else {
+                if (url.protocol === 'https:') {
+                    insertElement('span', urlElement, { class: 'darker-text' }, `${url.protocol}//`);
+                } else {
+                    insertElement('span', urlElement, { class: 'warning-text' }, url.protocol);
+                    insertElement('span', urlElement, { class: 'darker-text' }, '//');
+                }
+                insertElement('b', urlElement, undefined, url.host);
+                insertElement('span', urlElement, { class: 'darker-text' }, `${url.pathname + url.search}`);
+            }
+        } catch(_) {
+            urlElement.textContent = href;
+        }
+
+        document.body.appendChild(ghost);
+
+        e.dataTransfer.setDragImage(ghost, Math.round(ghost.offsetWidth / 2), Math.round(ghost.offsetHeight / 2));
+        setTimeout(() => ghost.remove(), 0);
+        return;
+    }
+
+    if (e.target.tagName === 'IMG') {
+        const original = e.target;
+
+        // Apply default browser behavior for dragging images
+        // (The browser may try to place the "Files" field itself, so there is no point in canceling it on error)
+        try {
+            const url = new URL(original.src);
+            const clearUrl = clearUrlFromLocalParams(url);
+            e.dataTransfer.setData('text/uri-list', clearUrl);
+            // e.dataTransfer.setData('DownloadURL', `image/webp:${url.pathname.split('/').at(-1)}:${clearUrl}`); // work weird
+            e.dataTransfer.setData('x-source-type', 'image');
+        } catch (_) {}
+
+        onDragstart_setDragCanvas(e, original);
+        return;
+    }
+
+    if (e.target.tagName === 'VIDEO') {
+        const original = e.target;
+
+        // Disable dragging when interacting with controls
+        if (original.hasAttribute('controls') && e.offsetY > original.clientHeight - 80) return e.preventDefault();
+
+        // Apply default browser behavior for dragging images
+        try {
+            const url = new URL(original.src);
+            const clearUrl = clearUrlFromLocalParams(url);
+            e.dataTransfer.setData('text/uri-list', clearUrl);
+            // The browser itself does not place the "Files" field when dragging a video, so let it at least download it if necessary
+            e.dataTransfer.setData('DownloadURL', `video/webp:${url.pathname.split('/').at(-1)}:${clearUrl}`);
+            e.dataTransfer.setData('x-source-type', 'video');
+        } catch (_) {
+            return e.preventDefault();
+        }
+
+        onDragstart_setDragCanvas(e, original);
+        return;
+    }
+}
+
+function onDragover(e) {
+    const match = matchLinkDrop(e);
+    if (match) e.preventDefault();
+}
+
+function onDrop(e) {
+    const match = matchLinkDrop(e);
+    if (!match) return;
+    e.preventDefault();
+
+    document.body.classList.remove('drop-hover');
+    document.getElementById('drop-link-container').classList.remove('drop-hover');
+
+    const target = e.target.closest('#drop-link-container');
+    if (!target) return;
+
+    const dt = e.dataTransfer;
+    const href = dt.getData('text/uri-list');
+    const redirectUrl = Controller.convertCivUrlToLocal(href);
+    if (redirectUrl) gotoLocalLink(redirectUrl);
+    else {
+        try {
+            const url = new URL(href);
+            if (url.origin !== location.origin) throw new Error('Unsupported url');
+            gotoLocalLink(url.hash);
+        } catch (_) {
+            notify('Unsupported url');
+        }
+    }
+}
+
+function onDragenter(e) {
+    const match = matchLinkDrop(e);
+    if (!match) return;
+    e.preventDefault();
+
+    document.body.classList.add('drop-hover');
+    const dropLinkContainer = document.getElementById('drop-link-container');
+    if (dropLinkContainer.contains(e.target)) dropLinkContainer.classList.add('drop-hover');
+}
+
+function onDragleave(e) {
+    const dropLinkContainer = document.getElementById('drop-link-container');
+    if (!dropLinkContainer.contains(e.relatedTarget)) dropLinkContainer.classList.remove('drop-hover');
+    if (document.body.contains(e.relatedTarget)) return;
+    const match = matchLinkDrop(e);
+    if (!match) return;
+    e.preventDefault();
+
+    document.body.classList.remove('drop-hover');
+}
+
 function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     const src = mediaContainer.getAttribute('data-src');
     const timestump = mediaContainer.getAttribute('data-timestump');
 
-    const video = createElement('video', { class: 'media-element',  muted: '', loop: '', crossorigin: 'anonymous' });
+    const video = createElement('video', { class: 'media-element',  muted: '', loop: '', crossorigin: 'anonymous', draggable: 'true' });
     video.volume = 0;
     video.muted = true;
     video.loop = true;
@@ -3854,7 +4631,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     if (mediaContainer.hasAttribute('data-controls')) video.controls = true;
     video.style.aspectRatio = mediaContainer.style.aspectRatio;
 
-    video.src = src;
+    video.setAttribute('src', src);
     video.currentTime = +timestump;
     video.play().catch(() => null);
 
@@ -3877,6 +4654,8 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
 function pauseVideo(mediaContainer) {
     const video = mediaContainer.querySelector('video:not([inert])');
     if (!video) return;
+
+    video.pause();
 
     // Resize if enabled
     let { videoWidth: width, videoHeight: height } = video;
@@ -4003,8 +4782,40 @@ function stopVideoPlayEvent(e) {
     e.target.removeEventListener('mouseleave', stopVideoPlayEvent);
 }
 
+function startLinkPreviewEvent(e, options = { fromFocus: false }) {
+    const target = e.eventTarget;
+    const result = Controller.createLinkPreview(target.getAttribute('href'));
+
+    if (!result) {
+        target.removeAttribute('data-link-preview');
+        return;
+    }
+
+    const previewElement = createElement('div', { class: 'link-preview loading', inert: '' });
+    insertElement('div', previewElement, { class: 'media-loading-indicator' });
+    let positionTarget = target.querySelector('.link-preview-position');
+
+    const showPreview = element => {
+        previewElement.classList.remove('loading');
+        previewElement.textContent = '';
+        previewElement.appendChild(element);
+    };
+
+    if (result instanceof Promise) {
+        result.then(element => {
+            if (!document.body.contains(previewElement)) return;
+            showPreview(element);
+            startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget }); // update position
+        });
+    } else {
+        showPreview(result);
+    }
+
+    startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget });
+}
+
 let prevLilpipeEvenetTime = 0, prevLilpipeTimer = null;
-function startLilpipeEvent(e, options = { fromFocus: false }) {
+function startLilpipeEvent(e, options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null }) {
     const target = e.eventTarget;
     const animationDuration = 150;
 
@@ -4015,10 +4826,12 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
     prevLilpipeTimer = null;
 
     // Prepare tooltip
-    const type = target.getAttribute('lilpipe-type');
-    const delay = e.altKey || options.fromFocus ? 0 : Number(target.getAttribute('lilpipe-delay') ?? 400);
+    const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
+    const type = options.type || target.getAttribute('lilpipe-type');
+    const delay = e.altKey || options.fromFocus ? 0 : options.delay !== null ? Number(options.delay) : Number(target.getAttribute('lilpipe-delay') ?? 400);
     const tooltip = createElement('div', { id: 'tooltip', class: `tooltip tooltip-${type ?? 'default'}` });
-    tooltip.innerHTML = target.getAttribute('lilpipe-text') || '';
+    if (options.element && options.element instanceof HTMLElement) tooltip.appendChild(options.element);
+    else tooltip.innerHTML = target.getAttribute('lilpipe-text') || '';
 
     // Add tooltip to page
     target.setAttribute('lilpipe-showed', '');
@@ -4039,7 +4852,7 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
         setTimeout(() => tooltip.remove?.(), 100);
     };
 
-    const { left, top, width, height } = target.getBoundingClientRect();
+    const { left, top, width, height } = positionTarget.getBoundingClientRect();
     const targetX = left + width/2 - tW/2;
     const targetY = top - tH - 8;
     const isBelow = targetY < 0;
@@ -4057,7 +4870,7 @@ function startLilpipeEvent(e, options = { fromFocus: false }) {
     tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
     if (isBelow) tooltip.setAttribute('tooltip-below', '');
 
-    if (delay && Date.now() - prevLilpipeEvenetTime > 272) {
+    if (delay && Date.now() - prevLilpipeEvenetTime > 400) {
         tooltip.remove();
         target.setAttribute('lilpipe-showed-delay', '');
         prevLilpipeTimer = setTimeout(() => {
@@ -4115,8 +4928,13 @@ function init() {
     document.body.addEventListener('mouseover', onBodyMouseOver, { passive: true, passive: true });
     document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('canplay', onMediaElementLoaded, { capture: true, passive: true });
+    document.body.addEventListener('dragover', onDragover);
+    document.body.addEventListener('drop', onDrop);
+    document.body.addEventListener('dragenter', onDragenter);
+    document.body.addEventListener('dragleave', onDragleave);
     document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });
     document.addEventListener('scroll', onScroll, { passive: true });
+    document.addEventListener('dragstart', onDragstart);
     window.addEventListener('resize', onResize, { passive: true });
     // document.addEventListener('scroll', rAFcreateCallback('scroll', onScroll), { passive: true });
     // window.addEventListener('resize', rAFcreateCallback('resize', onResize), { passive: true });

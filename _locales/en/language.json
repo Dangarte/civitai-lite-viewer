@@ -11,9 +11,12 @@
         "images": "Images",
         "image": "Image",
         "image_by": "Image by {username}",
+        "models_from": "Models by {username}",
+        "images_from": "Images by {username}",
         "view_post": "View Post",
         "period": "Period",
         "type": "Type",
+        "origin": "Origin",
         "copied": "Copied",
         "model": "Model",
         "group_posts": "Group posts",
@@ -69,7 +72,7 @@
     "errors": {
         "error": "Error",
         "no_media": "No Media",
-        "no_response": "Что-то не так, загрузка не должна занимать столько времени... Ты можешь проверить консоль разработчика (Ctrl + Shift + I) и статус API: {{api-status}}"
+        "no_response": "Something's wrong, loading shouldn't take that long... You can check the developer console (Ctrl + Shift + I) and status API: {{api-status}}"
     },
     "units": {
         "second": ["second", "seconds", "seconds"],
@@ -81,6 +84,9 @@
         "year": ["year", "years", "years"],
         "like": ["like", "likes", "likes"],
         "dislike": ["dislike", "dislikes", "dislikes"],
+        "cry": ["cry", "cries", "cries"],
+        "heart": ["heart", "hearts", "hearts"],
+        "laugh": ["laugh", "laughs", "laughter"],
         "download": ["download", "downloads", "downloads"],
         "bookmark": ["bookmark", "bookmarks", "bookmarks"],
         "message": ["message", "messages", "messages"],
@@ -99,13 +105,16 @@
     },
     "temp": {
         "home": {
-            "p1": [
-                "This is a 'simplified' version of the CivitAI website. The main purpose of this page was to create a way to search models on CivitAI without dealing with the original site's terrible performance.",
-                "Due to limitations of the public API from CivitAI, many features available on the original site are missing here.",
-                "It's sad that the API doesn't provide information about articles (list and content) 😭",
-                "Good luck finding models!",
-                "(You can switch the language in the page footer)"
-            ],
+            "p1": {
+                "description": "This is a simple unofficial interface for the public CivitAI API",
+                "tipsListTitle": "A few navigation tips",
+                "tipsList": [
+                    "You can change the language in the page footer",
+                    "Links with the :civitai: icon at the beginning show a preview when hovered while holding the Alt key",
+                    "Clicking a civitai.com link while holding the Alt key, if supported by the public API, will open it in the same tab in a simplified view"
+                ],
+                "goodluck": "Good luck finding models!"
+            },
             "search": {
                 "placeholder": "Search using CivitAI API...",
                 "noResults": "No results found",
@@ -118,8 +127,10 @@
             "autoplay": "Autoplay",
             "autoplayDescription": "If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.",
             "autoplayNote": "⚠ Strong impact on performance.",
+            "colorCorrectionDescription": "If enabled, text colors in model descriptions will be adapted to ensure optimal readability.",
+            "colorCorrection": "Color Adaptation",
             "cachesTitle": "Cache Info",
-            "cachesDescription": "This is information about the disk cache size used by this site. If you changed DPR (page/interface scaling), or the SW resizing setting, there may be outdated image sizes left. They will be cleaned up automatically over time, but you can also clear them manually.",
+            "cachesDescription": "This is information about the disk cache size used by this site. If you changed DPR (page/interface scaling), there may be outdated image sizes left. They will be cleaned up automatically over time, but you can also clear them manually.",
             "cachesSize": "Disk space used by cache",
             "removeCacheAll": "Clear all cache",
             "removeCacheOld": "Clear old cache"

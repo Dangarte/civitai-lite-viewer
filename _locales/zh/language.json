@@ -10,10 +10,13 @@
         "download": "下载",
         "images": "图片",
         "image": "图片",
-        "image_by": "图片来自 {username}",
+        "image_by": "{username} 的图片",
+        "models_from": "{username} 的模型",
+        "images_from": "{username} 的图片",
         "view_post": "查看帖子",
         "period": "周期",
         "type": "类型",
+        "origin": "来源",
         "copied": "已复制",
         "model": "模型",
         "group_posts": "分组帖子",
@@ -81,6 +84,9 @@
         "year": ["年", "年", "年"],
         "like": ["点赞", "点赞", "点赞"],
         "dislike": ["点踩", "一个点踩", "多个点踩"],
+        "cry": ["哭声", "大喊", "呼喊"],
+        "heart": ["心", "心脏", "内心"],
+        "laugh": ["笑声", "大笑", "笑"],
         "download": ["下载", "下载", "下载"],
         "bookmark": ["书签", "书签", "书签"],
         "message": ["消息", "消息", "消息"],
@@ -99,13 +105,16 @@
     },
     "temp": {
         "home": {
-            "p1": [
-                "这是 CivitAI 网站的“简化版”。该页面的主要目标是让你能搜索 CivitAI 上的模型，而无需忍受原始网站的糟糕性能。",
-                "由于 CivitAI 的公共 API 限制，这里缺少了很多原始网站上的功能。",
-                "不幸的是，API 不提供有关文章的信息（文章列表和内容）😭",
-                "祝你找到合适的模型！",
-                "（你可以在页面底部切换语言）"
-            ],
+            "p1": {
+                "description": "这是一个用于 CivitAI 公共 API 的简单非官方界面",
+                "tipsListTitle": "一些导航提示",
+                "tipsList": [
+                    "可以在页面底部切换语言",
+                    "以 :civitai: 图标开头的链接在按住 Alt 键并悬停时会显示预览",
+                    "在按住 Alt 键的情况下点击 civitai.com 链接，如果公共 API 支持，将在同一标签页中以简化视图打开"
+                ],
+                "goodluck": "祝你找到合适的模型！"
+            },
             "search": {
                 "placeholder": "使用 CivitAI API 搜索...",
                 "noResults": "未找到结果",
@@ -118,8 +127,10 @@
             "autoplay": "自动播放",
             "autoplayDescription": "如果关闭自动播放，卡片页面将不会显示 GIF，所有页面的视频默认暂停，仅在悬停时播放。",
             "autoplayNote": "⚠ 对性能有很大影响。",
+            "colorCorrectionDescription": "如果启用，模型描述中的文本颜色将进行优化以提高可读性。",
+            "colorCorrection": "色彩适应",
             "cachesTitle": "缓存信息",
-            "cachesDescription": "这是该网站在磁盘上使用的缓存大小信息。如果你更改了 DPR（页面或系统缩放）或 SW 尺寸设置，可能会有旧的图像尺寸残留。它们会自动清理，但你也可以手动清除。",
+            "cachesDescription": "这是该网站在磁盘上使用的缓存大小信息。如果你更改了 DPR（页面或系统缩放），可能会有旧的图像尺寸残留。它们会自动清理，但你也可以手动清除。",
             "cachesSize": "磁盘占用缓存大小",
             "removeCacheAll": "清除所有缓存",
             "removeCacheOld": "清除旧缓存"

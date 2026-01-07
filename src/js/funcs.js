@@ -317,6 +317,203 @@ function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
     }
 }
 
+class Color {
+    static convert(color, toFormat) {
+        // Input format check
+        let rgba;
+        if (typeof color === 'string') {
+            if (color.indexOf('rgb') === 0) {
+                // Support for "rgb(255, 0, 0)" and "rgb(255 0 0 / 1)"
+                const match = color.match(/rgba?\(\s*(\d+)\s*,?\s*(\d+)\s*,?\s*(\d+)\s*(?:\/\s*(\d*\.?\d+))?\s*\)/);
+                if (!match) throw new Error("Incorrect RGB(A) format");
+
+                rgba = {
+                    r: parseInt(match[1], 10),
+                    g: parseInt(match[2], 10),
+                    b: parseInt(match[3], 10),
+                    a: match[4] !== undefined ? parseFloat(match[4]) : 1
+                };
+
+                if (toFormat === 'rgba') return rgba;
+            } else if (color.indexOf('hsl') === 0) {
+                // Support "hsl(205deg 100% 50%)", "hsl(205, 100%, 50%)", "hsl(205 100% 50% / 0.5)"
+                const match = color.match(/hsla?\(\s*(\d+)(?:deg)?\s*,?\s*([\d.]+)%\s*,?\s*([\d.]+)%\s*(?:\/\s*(\d*\.?\d+))?\s*\)/);
+                if (!match) throw new Error("Incorrect HSL(A) format");
+
+                const hsla = {
+                    h: parseInt(match[1], 10),
+                    s: parseFloat(match[2]),
+                    l: parseFloat(match[3]),
+                    a: match[4] !== undefined ? parseFloat(match[4]) : 1
+                };
+
+                if (toFormat === 'hsla') return hsla;
+
+                rgba = this.hslToRgba(hsla);
+            } else {
+                color = color.replace(/^#/, '');
+                if (!/^[0-9a-fA-F]{3,4}$|^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/.test(color)) throw new Error("Incorrect hex length or format");
+
+                if (toFormat === 'hex') return `#${color}`;
+
+                rgba = this.hexToRgba(color);
+            }
+        } else if ('r' in color && 'g' in color && 'b' in color) {
+            rgba = { ...color, a: color.a ?? 1 };
+            if (toFormat === 'rgba') return rgba;
+        } else if ('h' in color && 's' in color && 'l' in color) {
+            if (toFormat === 'hsla') return { ...color, a: color.a ?? 1 };
+            rgba = this.hslToRgba(color);
+        } else if ('l' in color && 'a' in color && 'b' in color) {
+            if (toFormat === 'oklab') return { ...color };
+            if (toFormat === 'oklch') return this.oklabToOklch(color);
+            rgba = this.oklabToRgb(color);
+        } else if ('l' in color && 'c' in color && 'h' in color) {
+            if (toFormat === 'oklch') return { ...color };
+            const lab = this.oklchToOklab(color);
+            if (toFormat === 'oklab') return lab;
+            rgba = this.oklabToRgb(lab);
+        } else {
+            throw new Error("Unsupported color format");
+        }
+
+        // Convert to requested format
+        switch (toFormat?.toLowerCase()) {
+            case 'hex':
+                return this.rgbaToHex(rgba);
+            case 'rgba':
+                return rgba;
+            case 'hsla':
+                return this.rgbaToHsl(rgba);
+            case 'oklab':
+                return this.rgbToOklab(rgba);
+            case 'oklch':
+                const lab = this.rgbToOklab(rgba);
+                return this.oklabToOklch(lab);
+            default:
+                throw new Error("Unsupported target color format");
+        }
+    }
+
+    static rgbaToHex({ r, g, b, a = 1 }) {
+        let hexArray = [ r, g, b ];
+        if (a !== 1) hexArray.push(Math.round(a * 255));
+        hexArray = hexArray.map(c => c.toString(16).padStart(2, '0'));
+        if (!hexArray.some(c => c[0] !== c[1])) hexArray = hexArray.map(c => c[0]);
+        return `#${hexArray.join('')}`;
+    }
+
+    static rgbaToHsl({ r, g, b, a = 1 }) {
+        r /= 255; g /= 255; b /= 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h, s, l = (max + min) / 2;
+
+        if(max === min){
+            h = s = 0; // colorless
+        } else {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch(max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+
+        return {
+            h: Math.round(h * 360),
+            s: Math.round(s * 100),
+            l: Math.round(l * 100),
+            a: a
+        };
+    }
+
+    static hslToRgba({ h, s, l, a = 1 }) {
+        s /= 100; l /= 100;
+
+        const k = n => (n + h / 30) % 12;
+        const d = s * Math.min(l, 1 - l);
+        const f = n => l - d * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+
+        return {
+            r: Math.round(f(0) * 255),
+            g: Math.round(f(8) * 255),
+            b: Math.round(f(4) * 255),
+            a: a
+        };
+    }
+
+    static hexToRgba(hex) {
+        hex = hex.replace(/^#/, '');
+        if (hex.length === 3 || hex.length === 4) hex = hex.split('').map(char => char + char).join('');
+        if (hex.length === 6) hex += 'ff';
+        const [r, g, b, a] = hex.match(/.{2}/g).map(val => parseInt(val, 16));
+        return { r, g, b, a: +(a / 255).toFixed(2) };
+    }
+
+    static oklabToOklch(lab) {
+        const c = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
+        let h = Math.atan2(lab.b, lab.a) * 180 / Math.PI;
+        if (h < 0) h += 360;
+        return { l: lab.l, c, h };
+    }
+
+    static oklchToOklab(lch) {
+        const hr = lch.h * Math.PI / 180;
+        return {
+            l: lch.l,
+            a: Math.cos(hr) * lch.c,
+            b: Math.sin(hr) * lch.c
+        };
+    }
+
+    static rgbToOklab(rgb) {
+        const lr = this.#srgbToLinear(rgb.r);
+        const lg = this.#srgbToLinear(rgb.g);
+        const lb = this.#srgbToLinear(rgb.b);
+
+        const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
+        const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
+        const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
+
+        return {
+            l: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            a: 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            b: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+        };
+    }
+
+    static oklabToRgb(lab) {
+        const l_ = lab.l + 0.3963377774 * lab.a + 0.2158037573 * lab.b;
+        const m_ = lab.l - 0.1055613458 * lab.a - 0.0638541728 * lab.b;
+        const s_ = lab.l - 0.0894841775 * lab.a - 1.2914855480 * lab.b;
+
+        const L = l_ * l_ * l_;
+        const m = m_ * m_ * m_;
+        const s = s_ * s_ * s_;
+
+        const lr = +4.0767416621 * L - 3.3077115913 * m + 0.2309699292 * s;
+        const lg = -1.2684380046 * L + 2.6097574011 * m - 0.3413193965 * s;
+        const lb = -0.0041960863 * L - 0.7034186147 * m + 1.7076147010 * s;
+
+        return {
+            r: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lr) * 255))),
+            g: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lg) * 255))),
+            b: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lb) * 255)))
+        };
+    }
+
+    static #srgbToLinear(c) {
+        c = c / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }
+
+    static #linearToSrgb(c) {
+        return c <= 0.0031308 ? 12.92 * c : 1.055 * (c ** (1 / 2.4)) - 0.055;
+    }
+}
+
 // TODO: Animate scroll to element (when navigating with the keyboard)
 class MasonryLayout {
     #container;
@@ -743,13 +940,8 @@ class MasonryLayout {
         const stopThreshold = options.stopThreshold ?? 0.1; // px/ms
         const cooldownTime = options.cooldownTime ?? 200; // ms
 
-        if (speed < stopThreshold) {
-            if (this.#overscanCooldown === 0) {
-                this.#overscanCooldown = now + cooldownTime;
-            }
-        } else {
-            this.#overscanCooldown = 0;
-        }
+        if (speed > stopThreshold) this.#overscanCooldown = 0;
+        else if (this.#overscanCooldown === 0) this.#overscanCooldown = now + cooldownTime;
 
         // if the collapse time has passed, we reset to a minimum
         if (this.#overscanCooldown && now > this.#overscanCooldown) {
@@ -758,9 +950,8 @@ class MasonryLayout {
         }
 
         // --- smooth interpolation (so it doesn't jitter)
-        const lerp = (a, b, t) => a + (b - a) * t;
         const smooth = options.smoothFactor ?? 0.2; // the smaller, the smoother
-        this.#currentOverscan = lerp(this.#currentOverscan || minOverscan, Math.max(overscanForward, overscanBackward), smooth);
+        this.#currentOverscan = this.#lerp(this.#currentOverscan || minOverscan, Math.max(overscanForward, overscanBackward), smooth);
 
         // --- final screen boundaries
         const screenTop = currentScrollTop;
@@ -842,6 +1033,10 @@ class MasonryLayout {
         const options = this.#options;
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
         if (columnsCount !== this.#columns.length) this.resize(true);
+    }
+
+    #lerp(a, b, t) {
+        return a + (b - a) * t;
     }
 }
 

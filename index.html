@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="color-scheme" content="dark light"/>
     <meta name="author" content="Dangart"/>
-    <meta name="description" content="CivitAI Lite Viewer by Dangart"/>
+    <meta name="description" content="This is a simple unofficial interface for the public CivitAI API"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CivitAI Lite Viewer</title>
     <link rel="icon" type="image/svg+xml" sizes="any" href="src/icons/logo.svg">
@@ -16,9 +16,9 @@
         html[color-scheme="light"] body { background: #fff; color: #555; }
     </style>
 
-    <link rel="stylesheet" href="src/css/styles.css?v=22">
-    <script src="src/js/funcs.js?v=22"></script>
-    <script src="src/js/init.js?v=22"></script>
+    <link rel="stylesheet" href="src/css/styles.css?v=23">
+    <script src="src/js/funcs.js?v=23"></script>
+    <script src="src/js/init.js?v=23"></script>
 </head>
 <body>
     <header>
@@ -27,17 +27,23 @@
         </h1>
         <nav id="main-menu">
             <ul class="menu">
-                <li><a class="link-button" href="#home"><svg class="icon" icon-id="home"><use href="#home"></use></svg> <span>Home</span></a></li>
-                <li><a class="link-button" href="#models"><svg class="icon" icon-id="database"><use href="#database"></use></svg> <span>Models</span></a></li>
-                <li><a class="link-button" href="#articles"><svg class="icon" icon-id="file_alt"><use href="#file_alt"></use></svg> <span>Articles</span></a></li>
-                <li><a class="link-button" href="#images"><svg class="icon" icon-id="image"><use href="#image"></use></svg> <span>Images</span></a></li>
+                <li><a class="link-button" href="#home"><svg class="icon icon-home"><use href="#home"></use></svg> <span>Home</span></a></li>
+                <li><a class="link-button" href="#models"><svg class="icon icon-database"><use href="#database"></use></svg> <span>Models</span></a></li>
+                <li><a class="link-button" href="#articles"><svg class="icon icon-file_alt"><use href="#file_alt"></use></svg> <span>Articles</span></a></li>
+                <li><a class="link-button" href="#images"><svg class="icon icon-image"><use href="#image"></use></svg> <span>Images</span></a></li>
             </ul>
         </nav>
     </header>
 
     <main id="app">
-        <div id="load-more"><svg class="icon" icon-id="infinity"><use href="#infinity"></use></svg></div>
+        <div id="load-more"><svg class="icon icon-infinity"><use href="#infinity"></use></svg></div>
     </main>
+
+    <div id="drop-link-container">
+        <div class="drop-wrap">
+            <svg class="icon icon-import"><use href="#import"></use></svg> <span>Drop CivitAI link here to open it in lite mode<br>[TODO] Translate this message</span>
+        </div>
+    </div>
 
     <footer>
         <p>Unofficial CivitAI frontend created by <a href="https://github.com/Dangarte/civitai-lite-viewer/" target="_blank"><b>Dangart</b></a></p>
@@ -45,7 +51,7 @@
         <p>Original site <a href="https://civitai.com/" target="_blank"><b>civitai.com</b></a></p>
         <div>
             <div id="language-toggle">
-                <button id="language-button"><svg class="icon" icon-id="language" title="Language"><use href="#language"></use></svg></button>
+                <button id="language-button"><svg class="icon icon-language" title="Language"><use href="#language"></use></svg></button>
                     <ul id="language-list" style="--count: 3;" class="hidden">
                         <li data-language="en" style="--num: 0;" class="active"><button>English<img data-src="src/icons/flags/GB.png" alt="GB" /></button></li>
                         <li data-language="ru" style="--num: 1;"><button>Русский<img data-src="src/icons/flags/RU.png" alt="RU" /></button></li>
@@ -57,6 +63,11 @@
     </footer>
 
     <svg id="svg-symbols" style="display: none;" xmlns="http://www.w3.org/2000/svg"><g>
+        <symbol id="civitai" class="icon" viewBox="-1 0 22.7 22.7">
+            <path d="M1.5,6.6v10l8.7,5l8.7-5v-10l-8.7-5L1.5,6.6z" style="fill: #081692;"></path>
+            <path d="M10.2,4.7l5.9,3.4V15l-5.9,3.4L4.2,15V8.1 L10.2,4.7 M10.2,1.6l-8.7,5v10l8.7,5l8.7-5v-10C18.8,6.6,10.2,1.6,10.2,1.6z" style="fill: #0a20c9;"></path>
+            <path d="M11.8,12.4l-1.7,1l-1.7-1v-1.9l1.7-1l1.7,1h2.1V9.3l-3.8-2.2L6.4,9.3v4.3l3.8,2.2l3.8-2.2v-1.2H11.8z" style="fill: #fff;"></path>
+        </symbol>
         <symbol id="language" class="icon" viewBox="0 0 24 24">
             <path c-accent="" d="M.5 3.35H12M6.25.48v2.87m2.87 0c0 3.52-3.28 8.2-7.66 10.55" />
             <path c-accent="" d="M4.51 7.37A16.4 16.4 0 0 0 11 13.9" />

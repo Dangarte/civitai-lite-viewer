@@ -25,6 +25,7 @@ const SW_CONFIG = {
     ttl: {
         'model-preview': 6 * 60 * 60,       // Images in preview list on model page:     6 hours
         'model-version': 2 * 24 * 60 * 60,  // Info about model version:                 2 days
+        'image-meta': 30 * 60,              // Info about image (loaded separately):    30 mins
         'model-card': 12 * 60 * 60,         // Images in cards on models page:          12 hours
         'user-image': 24 * 60 * 60,         // Images in creator profile:                1 day
         'full-image': 60 * 60,              // Images on full size image page:           1 hour
@@ -144,7 +145,9 @@ function onFetch(e) { // Request interception
 }
 
 function actionClearCache(data) {
-    return Promise.all(Object.entries(SW_CONFIG.cache).map(([, cacheName]) => CacheManager.cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName })));
+    const cacheKeys = Object.values(SW_CONFIG.cache);
+    const promises = cacheKeys.map(cacheName => CacheManager.cleanExpiredCache({ mode: data.mode,  urlMask: data.urlMask, cacheName }));
+    return Promise.all(promises).then(result => ({ countRemoved: result.reduce((c, response) => c + response.countRemoved, 0) }));
 }
 
 async function cacheFetch(request, cacheControl) {
@@ -154,6 +157,7 @@ async function cacheFetch(request, cacheControl) {
     const url = new URL(request.url);
     const sParams = url.searchParams;
     const params = Object.fromEntries(url.searchParams.entries());
+    let specialFetch = fetch;
 
     if (request.url.startsWith(SW_CONFIG.base_url)) {
         cacheName = SW_CONFIG.cache.static;
@@ -163,8 +167,12 @@ async function cacheFetch(request, cacheControl) {
         }
     } else if (request.url.startsWith(SW_CONFIG.api_url)) {
         cacheName = SW_CONFIG.cache.api;
-        if (!cacheControl && url.pathname.includes('/model-versions/')) {
-            cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
+        if (!cacheControl) {
+            if (url.pathname.includes('/model-versions/')) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
+            else if (url.pathname.endsWith('/images') && params.imageId) {
+                cacheControl = `max-age=${SW_CONFIG.ttl['image-meta']}`;
+                if (!params.nsfw) specialFetch = fetchImageWithUnknownNSFW;
+            }
         }
     } else if (request.url.startsWith(SW_CONFIG.images_url)) {
         cacheName = SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'] : SW_CONFIG.cache.media;
@@ -183,7 +191,7 @@ async function cacheFetch(request, cacheControl) {
         const after = sParams.size;
         const modified = before !== after;
         const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
-        const fetchResponse = await fetch(modified ? requestWithoutLocalParams : request);
+        const fetchResponse = await specialFetch(modified ? requestWithoutLocalParams : request);
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
@@ -200,7 +208,7 @@ async function cacheFetch(request, cacheControl) {
         }
 
         const forceDisableAnimation = request.url.includes(',anim=false,');
-        if (blob.type.indexOf('image/') === 0 && ((params.width || params.height || params.format) || forceDisableAnimation)) {
+        if (blob.type.startsWith('image/') && (params.width || params.height || params.format || forceDisableAnimation)) {
             // Store original
             // if (await isImageAnimated(blob)) {
             //     const originalResponse = responseFromBlob(blob, cacheControl);
@@ -232,6 +240,37 @@ async function cacheFetch(request, cacheControl) {
         return new Response('', { status: 500, statusText: 'Network Error' });
     }
 }
+
+// bs:
+    //   to get an image you need to know its nsfw level,
+    //   but to find out this level you need to get an image...
+    //   result: you need to spam requests with all possible options...
+    //   what nonsense...
+async function fetchImageWithUnknownNSFW(request) {
+    // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
+    const nsfwLevels = ['None', 'X'];
+
+    const fetches = nsfwLevels.map(nsfw => {
+        const url = new URL(request.url);
+        url.searchParams.set('nsfw', nsfw);
+
+        const req = cloneRequestWithModifiedUrl(request, url.toString());
+
+        return fetch(req)
+            .then(async response => {
+                let body = null;
+                try { body = await response.clone().json(); } catch(_) {}
+                return { response, body };
+            });
+    });
+
+    const results = await Promise.all(fetches);
+    const hit = results.find(r => r.body?.items?.length);
+    if (!hit) throw new Error('Image not found for any NSFW level');
+
+    return hit.response;
+}
+
 
 async function localFetch(request) {
     if (request.url.indexOf(SW_CONFIG.local_urls.blurhash) === 0) {
@@ -569,9 +608,16 @@ class CacheManager {
     // Check and remove all old data (max-age expired)
     static async cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) {
         if (mode === 'all') {
+            const cache = await this.#getCache(cacheName);
+            const keys = await cache.keys();
+            const countRemoved = keys.length;
             await caches.delete(cacheName);
             this.#cacheMap.delete(cacheName);
-            return `Cache ${cacheName} removed`;
+            return {
+                message: `Cache ${cacheName} removed`,
+                cacheName,
+                countRemoved
+            };
         }
 
         const cache = await this.#getCache(cacheName);
@@ -605,6 +651,10 @@ class CacheManager {
 
         await Promise.all(promises);
 
-        return `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`;
+        return {
+            message: `Cache ${cacheName} cleared, ${countRemoved} element(s) removed`,
+            cacheName,
+            countRemoved
+        };
     }
 }
