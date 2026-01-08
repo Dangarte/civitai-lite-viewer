@@ -616,6 +616,10 @@ body.prevent-all::before {
 
 .notification-placeholder {
     position: fixed;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .5em;
     z-index: 9999;
     left: 50%;
     top: 50px;
@@ -625,6 +629,10 @@ body.prevent-all::before {
     padding: 1em;
     background-color: var(--c-bg-light);
     animation: notificationIn .2s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1;
+}
+
+.notification-placeholder > .icon:first-child {
+    font-size: 1.5em;
 }
 
 @keyframes notificationIn {
@@ -1226,6 +1234,7 @@ footer a {
     display: inline;
     color: var(--c-main-text);
     text-decoration: none;
+    font-weight: 500;
 }
 
 .model-description a:focus-visible,
@@ -1391,7 +1400,7 @@ footer a {
     transition: 0s !important;
     background-color: var(--c-bg);
     /* Force new layer */
-    transform: translateZ(0);
+    will-change: transform;
 }
 
 .card:focus-visible {
@@ -2014,6 +2023,7 @@ a[href].meta-resource:hover .meta-resource-name {
 .meta-other .meta-other-item {
     color: var(--c-text-dark);
     padding: .5em;
+    border-radius: var(--radius);
 }
 
 .meta-other .meta-other-item[lilpipe-text]::after {

@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 23,
+    version: 24,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -83,6 +83,7 @@ const SETTINGS = {
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
+    assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
 };
 
 Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
@@ -600,7 +601,7 @@ class Controller {
             if (params.hash) {
                 this.#preClickResults[params.hash] = this.api.fetchModelVersionInfo(params.hash, true);
             } else if (params.model) {
-                if (!this.#cache.models.get(`${params.model}`)) {
+                if (!this.#cache.models.has(`${params.model}`)) {
                     this.#preClickResults[params.model] = this.api.fetchModelInfo(params.model);
                 }
             } else {
@@ -619,6 +620,13 @@ class Controller {
                 };
 
                 this.#preClickResults[JSON.stringify(query)] = this.api.fetchModels(query);
+            }
+        } else if (pageId === '#images') {
+            const params = Object.fromEntries(new URLSearchParams(paramString));
+            if (params.image) {
+                if (!this.#cache.images.has(`${params.image}`)) {
+                    this.#preClickResults[params.image] = this.api.fetchImageMeta(params.image, params.nsfw);
+                }
             }
         }
     }
@@ -941,7 +949,8 @@ class Controller {
         }
 
         const pageNavigation = this.#pageNavigation;
-        return this.api.fetchImageMeta(imageId, nsfwLevel).then(media => {
+        const apiPromise = this.#preClickResults[imageId] ?? this.api.fetchImageMeta(imageId, nsfwLevel);
+        return apiPromise.then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.log('Loaded image info', media);
             if (!media) throw new Error('No Meta');
@@ -1097,6 +1106,17 @@ class Controller {
             onElementRemove: this.#onCardRemoved.bind(this)
         });
 
+        let modelById = new Map();
+        if (SETTINGS.assumeListSameAsModel) {
+            listElement.addEventListener('pointerdown', e => {
+                const a = e.target.closest('a[data-id]');
+                const id = Number(a?.getAttribute('data-id'));
+                if (!modelById.has(id)) return;
+                const model = modelById.get(id);
+                this.#cache.models.set(`${id}`, model);
+            }, { capture: true });
+        }
+
         const { onScroll, onResize } = layout.getCallbacks();
         this.#onScroll = onScroll;
         this.#onResize = onResize;
@@ -1108,6 +1128,11 @@ class Controller {
             const modelsCountAll = models.length;
             models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
             if (models.length !== modelsCountAll) console.log(`Due to the selected tags for hiding, ${modelsCountAll - models.length} model(s) were hidden`);
+
+            models.forEach(model => {
+                if (modelById.has(model.id)) return;
+                modelById.set(model.id, model);
+            });
 
             layout.addItems(models.map(data => ({ id: data.id, data })), firstDraw);
 
@@ -1157,6 +1182,7 @@ class Controller {
             this.#state.modelsFilter = JSON.stringify(query);
 
             const pageNavigation = this.#pageNavigation;
+            modelById = new Map();
 
             if (cache.modelsFilter === this.#state.modelsFilter && cache.models) {
                 console.log('Loading models (nav cache)');
@@ -1285,6 +1311,7 @@ class Controller {
 
         if (imageId) {
             const showImage = media => {
+                if (!media) return this.#genErrorPage('No Meta');
                 const baseWidth = CONFIG.appearance.imageCard.width;
                 const aspectRatio = Math.min(media.width / media.height, 2);
                 const itemWidth = aspectRatio > 1.38 ? Math.round(baseWidth * aspectRatio) : baseWidth;
@@ -1706,7 +1733,7 @@ class Controller {
 
         let imagesMetaById = new Map();
         let postsById = new Map();
-        listElement.addEventListener('click', e => {
+        listElement.addEventListener('pointerdown', e => {
             const a = e.target.closest('a[data-id]');
             const id = Number(a?.getAttribute('data-id'));
             if (!imagesMetaById.has(id)) return;
@@ -2153,6 +2180,7 @@ class Controller {
         description.querySelectorAll('span[style]').forEach(span => {
             span.style.fontSize = '';
             span.style.fontFamily = '';
+            span.style.fontWeight = '';
         });
 
         // Remove underscores that are too large (they don't make sense if they're on multiple lines)
@@ -2359,7 +2387,25 @@ class Controller {
 
     static #analyzeTextColors(element, bgRGB) {
         // APCA correction part generated by ChatGPT-5.2
-        const TARGET_LC = 70;
+        const TARGET_LC = 75;
+        const TARGET_LC_MIN = 50;
+        const TARGET_LC_Headers = {
+            H1: 60,
+            H2: 65,
+            H3: 70
+        };
+        const TARGET_LC_Modificators = [
+            {
+                selector: 'strong, b',
+                tagNames: [ 'STRONG', 'B' ],
+                modificator: -5
+            },
+            {
+                selector: 'em, i',
+                tagNames: [ 'EM', 'I' ],
+                modificator: +10
+            }
+        ];
         const COLOR_LC_PENALTY = 12;
         const MIN_CHROMA_RATIO = 0.65;
         const MAX_ITER = 14;
@@ -2403,15 +2449,15 @@ class Controller {
 
         /* ---------- High-quality correction ---------- */
 
-        function correctColor(textRGB, bgRGB) {
+        function correctColor(textRGB, bgRGB, targetLC = TARGET_LC) {
             const startLc = apca(textRGB, bgRGB);
-            if (Math.abs(startLc) >= TARGET_LC) return null;
+            if (Math.abs(startLc) >= targetLC) return null;
 
             const baseLch = Color.convert(textRGB, 'oklch');
             const isColorText = baseLch.c > 0.08;
 
             const targetLc = (startLc <= 0 ? -1 : 1) *
-                (isColorText ? TARGET_LC - COLOR_LC_PENALTY : TARGET_LC);
+                (isColorText ? targetLC - COLOR_LC_PENALTY : targetLC);
 
             const polarity = Math.sign(targetLc);
             const bgY = getY(bgRGB);
@@ -2488,7 +2534,16 @@ class Controller {
         element.querySelectorAll('span[style*="color:"]').forEach(span => {
             const color = span.style.color;
             const bgColor = span.style.backgroundColor || '';
-            const colorKey = `${color}-${bgColor}`;
+            const header = span.closest('h1, h2, h3');
+            let targetLС = header ? TARGET_LC_Headers[header.tagName] : TARGET_LC;
+            TARGET_LC_Modificators.forEach(m => {
+                const tagName = span.children[0]?.tagName;
+                if (!span.closest(m.selector) && !m.tagNames.includes(tagName)) return;
+                if (m.modificator < 0 && header) targetLС += Math.floor(m.modificator / 2);
+                else targetLС += m.modificator;
+            });
+            targetLС = Math.max(targetLС, TARGET_LC_MIN);
+            const colorKey = `fg${color}-bg${bgColor}-lc${targetLС}`;
 
             if (cache.has(colorKey)) {
                 const cached = cache.get(colorKey);
@@ -2509,7 +2564,7 @@ class Controller {
                 else finalBg = { r: +mBg[1], g: +mBg[2], b: +mBg[3] };
             }
 
-            const corrected = correctColor(rgb, finalBg);
+            const corrected = correctColor(rgb, finalBg, targetLС);
             if (!corrected) {
                 cache.set(colorKey, null);
                 return;
@@ -3168,7 +3223,7 @@ class Controller {
                     pool.delete(img);
                 }
 
-                if (img === null) img = createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', src, decoding: 'async' });
+                if (img === null) img = createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', decoding: 'async', fetchPriority: 'low', src });
 
                 container.appendChild(img);
             }
@@ -4139,9 +4194,10 @@ function getIcon(name, original = false) {
 
 // PLACEHOLDER
 // TODO: notifications
-function notify(text) {
+function notify(text, icon) {
     console.log('TODO: notifications');
     const div = insertElement('div', document.body, { class: 'notification-placeholder' }, text);
+    if (icon) div.prepend(getIcon(icon));
     setTimeout(() => {
         div.remove();
     }, 3000);
@@ -4202,6 +4258,14 @@ function clearCache(mode = 'old') {
     return sendMessageToSW({ action: 'clear_cache', data }).then(result => result.response);
 }
 
+async function performHardCleanup() {
+    CONFIG.langauges.forEach(lang => localStorage.removeItem(`civitai-lite-viewer--languagePack:${lang}`));
+    localStorage.removeItem('civitai-lite-viewer--time:nextCacheClearTime');
+    sessionStorage.setItem('civitai-lite-viewer--cacheCleared', 'true');
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map(name => caches.delete(name)));
+}
+
 function clearUrlFromLocalParams(url) {
     const urlObj = new URL(url);
     CONFIG.local_params.forEach(param => urlObj.searchParams.delete(param));
@@ -4210,7 +4274,7 @@ function clearUrlFromLocalParams(url) {
 
 function matchLinkDrop(e) {
     const draggedTypes = Array.from(e.dataTransfer.types);
-    return draggedTypes.includes('text/uri-list') && !draggedTypes.includes('Files') && !draggedTypes.includes('x-source-type');
+    return draggedTypes.includes('text/uri-list') && !draggedTypes.includes('x-source-type');
 }
 
 // Clear old cache (Cleaning every 5 minutes)
@@ -4892,6 +4956,24 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
 // and avoid a language jump or crooked display
 
 function init() {
+    if (navigator.serviceWorker.controller === null) {
+        console.log('"SW === null", probably a hard page reload, cache clearing and page reload is starting');
+        if (sessionStorage.getItem('civitai-lite-viewer--cacheCleared') !== 'true') {
+            performHardCleanup().then(() => location.reload()); // reload page (sw is critical)
+            return;
+        } else {
+            console.error('Something went wrong, SW is not ready and the page has already been reloaded...');
+            document.getElementById('app').textContent = 'Something went wrong...';
+            notify('Something went wrong...', 'cross');
+            return;
+        }
+    } else {
+        if (sessionStorage.getItem('civitai-lite-viewer--cacheCleared')) {
+            sessionStorage.removeItem('civitai-lite-viewer--cacheCleared');
+            notify('Cache clear', 'check');
+        }
+    }
+
     Controller.appElement = document.getElementById('app');
     loadLanguagePack(SETTINGS.language);
 
@@ -4923,7 +5005,7 @@ function init() {
     // };
 
     document.body.addEventListener('click', onBodyClick);
-    document.body.addEventListener('mousedown', onBodyMousedown, { passive: true });
+    document.body.addEventListener('pointerdown', onBodyMousedown, { passive: true });
     document.body.addEventListener('focus', onBodyFocus, { capture: true, passive: true });
     document.body.addEventListener('mouseover', onBodyMouseOver, { passive: true, passive: true });
     document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
@@ -4943,11 +5025,22 @@ function init() {
 }
 
 (function waitForBody() {
-    if (document.body && document.getElementById('svg-symbols')) return init();
+    const bodyIsReady = () => {
+        if (navigator.serviceWorker.controller) return init();
+
+        // Wait for SW to start if not active (avoid clearing cache on first opening)
+        Promise.race([
+            new Promise(resolve => {
+                navigator.serviceWorker.addEventListener('controllerchange', () => resolve(true), { once: true });
+            }),
+            new Promise(resolve => setTimeout(() => resolve(false), 200))
+        ]).then(init);
+    };
+    if (document.body && document.getElementById('svg-symbols')) return bodyIsReady();
     new MutationObserver((_, obs) => {
         if (document.body && document.getElementById('svg-symbols')) {
             obs.disconnect();
-            init();
+            bodyIsReady();
         }
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();

@@ -377,7 +377,111 @@ function responseFromBlob(blob, cacheControl) {
     return new Response(blob, { headers: { 'Content-Type': blob.type, 'Content-Length': blob.size, ...(cacheControl ? { 'Cache-Control': cacheControl, 'Date': new Date().toUTCString() } : {}) } });
 }
 
-function blurhashToPixels(blurhash, width = 32, height = 32, punch = 1) {
+function blurhashToPixels(hash, width = 32, height = 32, punch = 1) {
+    const lookup = new Uint8Array(128);
+    for (let i = 0; i < 83; i++) {
+        lookup['0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~'.charCodeAt(i)] = i;
+    }
+
+    const decode83 = (str, start, end) => {
+        let val = 0;
+        while (start < end) val = val * 83 + lookup[str.charCodeAt(start++)];
+        return val;
+    };
+
+    const sizeFlag = decode83(hash, 0, 1);
+    const numX = (sizeFlag % 9) + 1;
+    const numY = ~~(sizeFlag / 9) + 1;
+    const size = numX * numY;
+    const maxVal = ((decode83(hash, 1, 2) + 1) / 13446) * (punch | 1);
+
+    const colors = new Float32Array(size * 3);
+    const avg = decode83(hash, 2, 6);
+
+    const sRGBToLinear = v => {
+        v /= 255;
+        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+
+    const linearTosRGB = v => {
+        v = v < 0 ? 0 : v > 1 ? 1 : v;
+        return ~~(v > 0.0031308 ? 255 * (1.055 * Math.pow(v, 0.416666) - 0.055) : v * 3294.6 + 0.5);
+    };
+
+    colors[0] = sRGBToLinear(avg >> 16);
+    colors[1] = sRGBToLinear((avg >> 8) & 255);
+    colors[2] = sRGBToLinear(avg & 255);
+
+    for (let i = 1; i < size; i++) {
+        const v = decode83(hash, 4 + i * 2, 6 + i * 2);
+        const i3 = i * 3;
+        const x = ~~(v / 361) - 9;
+        const y = (~~(v / 19) % 19) - 9;
+        const z = (v % 19) - 9;
+        colors[i3] = (x < 0 ? -x * x : x * x) * maxVal;
+        colors[i3 + 1] = (y < 0 ? -y * y : y * y) * maxVal;
+        colors[i3 + 2] = (z < 0 ? -z * z : z * z) * maxVal;
+    }
+
+    const cosX = new Float32Array(width * numX);
+    for (let i = 0; i < numX; i++) {
+        for (let x = 0; x < width; x++) {
+            cosX[i * width + x] = Math.cos((Math.PI * x * i) / width);
+        }
+    }
+
+    const cosY = new Float32Array(height * numY);
+    for (let j = 0; j < numY; j++) {
+        for (let y = 0; y < height; y++) {
+            cosY[j * height + y] = Math.cos((Math.PI * y * j) / height);
+        }
+    }
+
+    const tmp = new Float32Array(width * numY * 3);
+    for (let j = 0; j < numY; j++) {
+        const jOffset = j * width * 3;
+        const colorOffset = j * numX * 3;
+        for (let x = 0; x < width; x++) {
+            let r = 0, g = 0, b = 0;
+            for (let i = 0; i < numX; i++) {
+                const basisX = cosX[i * width + x];
+                const cIdx = colorOffset + i * 3;
+                r += colors[cIdx] * basisX;
+                g += colors[cIdx + 1] * basisX;
+                b += colors[cIdx + 2] * basisX;
+            }
+            const tIdx = jOffset + x * 3;
+            tmp[tIdx] = r;
+            tmp[tIdx + 1] = g;
+            tmp[tIdx + 2] = b;
+        }
+    }
+
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        const pixelRowOffset = y * width * 4;
+        for (let x = 0; x < width; x++) {
+            let r = 0, g = 0, b = 0;
+            for (let j = 0; j < numY; j++) {
+                const basisY = cosY[j * height + y];
+                const tIdx = (j * width + x) * 3;
+                r += tmp[tIdx] * basisY;
+                g += tmp[tIdx + 1] * basisY;
+                b += tmp[tIdx + 2] * basisY;
+            }
+
+            const pIdx = pixelRowOffset + x * 4;
+            pixels[pIdx] = linearTosRGB(r);
+            pixels[pIdx + 1] = linearTosRGB(g);
+            pixels[pIdx + 2] = linearTosRGB(b);
+            pixels[pIdx + 3] = 255;
+        }
+    }
+
+    return pixels;
+}
+
+function blurhashToPixels_old(blurhash, width = 32, height = 32, punch = 1) {
     // https://github.com/mad-gooze/fast-blurhash/blob/main/index.js
     const digitLookup = new Uint8Array(128);
     for (let i = 0; i < 83; i++) {
@@ -494,14 +598,35 @@ function blurhashToPixels(blurhash, width = 32, height = 32, punch = 1) {
     return pixels;
 }
 
+function pixelsToBmpBlob(pixels, width, height) {
+    const fileSize = 54 + pixels.length;
+    const buffer = new ArrayBuffer(fileSize);
+    const view = new DataView(buffer);
+
+    // BMP Header (File Header)
+    view.setUint16(0, 0x4D42, true);         // "BM"
+    view.setUint32(2, fileSize, true);       // File size
+    view.setUint32(10, 54, true);            // Offset to image data
+
+    // DIB Header (Windows BITMAPINFOHEADER)
+    view.setUint32(14, 40, true);            // Header size
+    view.setInt32(18, width, true);          // Width
+    view.setInt32(22, -height, true);        // Height (negative for top-down)
+    view.setUint16(26, 1, true);             // Planes
+    view.setUint16(28, 32, true);            // Bits per pixel (RGBA)
+    view.setUint32(30, 0, true);             // BI_RGB (no compression)
+    view.setUint32(34, pixels.length, true); // Image size
+
+    // Copy pixels
+    const imgArray = new Uint8Array(buffer, 54);
+    imgArray.set(pixels);
+
+    return new Blob([buffer], { type: 'image/bmp' });
+}
+
 async function blurhashToImageBlob(blurhash, width, height, punch) {
     const pixels = blurhashToPixels(blurhash, width, height, punch);
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d', { alpha: false });
-    const imageData = new ImageData(pixels, width, height);
-    ctx.putImageData(imageData, 0, 0);
-    const blob = await canvas.convertToBlob({ type: 'image/png' });
-    return blob;
+    return pixelsToBmpBlob(pixels, width, height);
 }
 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {

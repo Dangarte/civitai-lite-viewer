@@ -582,26 +582,53 @@ class MasonryLayout {
         }
 
         // Calc current positions
-        const currentPositions = new Map();
+        const startPositions = new Map();
+        const startOffsetLeft = this.#container.offsetLeft;
         if (animate) {
+            const startScrollTop = this.#lastScrollTop;
             this.#inViewport.forEach(item => {
-                currentPositions.set(item.id, item.element.getBoundingClientRect());
+                startPositions.set(item.id, { left: item.boundLeft, top: item.boundTop - startScrollTop, height: item.boundHeight, width: item.boundWidth });
             });
         }
 
         // Recalculate the position of all elements
         const items = this.#items;
         if (items.length) {
+            const lastFocusedItem = this.#focusedItem;
+            this.#focusedItem?.element?.setAttribute('tabIndex', -1);
             this.#items = [];
             this.#inViewport = new Set();
             this.#itemsById = new Map();
             this.#allowUseElementFromAddItems = true;
-            this.addItems(items);
+            this.#focusedItem = null;
+            this.addItems(items, Boolean(lastFocusedItem));
             this.#allowUseElementFromAddItems = false;
+
+            if (lastFocusedItem) {
+                const focusedItem = this.#itemsById.get(lastFocusedItem.id);
+                let scrollToElement = null;
+                if (focusedItem) {
+                    const targetScrollOffset = this.#lastScrollTop - lastFocusedItem.boundTop;
+                    const targetScroll = focusedItem.boundTop + targetScrollOffset;
+                    this.#handleScroll({ scrollTopRelative: targetScroll });
+                    if (this.#focusedItem.id !== focusedItem.id) {
+                        this.#focusedItem?.element?.setAttribute('tabIndex', -1);
+                        this.#focusedItem = focusedItem;
+                        this.#focusedItem?.element?.setAttribute('tabIndex', 0);
+                    }
+                    scrollToElement = focusedItem.element ?? null;
+                    document.documentElement.scrollTo({ top: this.#lastScrollTop + this.#container.offsetTop, behavior: 'instant' });
+                } else {
+                    this.#handleScroll({ scrollTopRelative: this.#lastScrollTop || 0 });
+                }
+            }
 
             items.forEach(item => {
                 const gridItem = this.#itemsById.get(item.id);
-                if (item.inDOM && !this.#inViewport.has(gridItem)) {
+                if (!item.inDOM) return;
+                if (this.#inViewport.has(gridItem)) {
+                    gridItem.element.getAnimations().forEach(a => a.cancel());
+                } else {
                     gridItem.element.remove();
                     this.#onElementRemove?.(gridItem.element, gridItem.data);
                     delete gridItem.element;
@@ -615,18 +642,20 @@ class MasonryLayout {
         if (animate) {
             const animations = [];
             const windowHeight = window.innerHeight;
+            const endScrollTop = this.#lastScrollTop;
+            const deltaOffsetLeft = startOffsetLeft - this.#container.offsetLeft;
             this.#inViewport.forEach(item => {
                 const keyframes = {};
-                const end = item.element.getBoundingClientRect();
-                if (currentPositions.has(item.id)) {
-                    const start = currentPositions.get(item.id);
+                const end = { left: item.boundLeft, top: item.boundTop - endScrollTop, height: item.boundHeight, width: item.boundWidth };
+                if (startPositions.has(item.id)) {
+                    const start = startPositions.get(item.id);
                     if (
-                        (start.left === end.left && start.top === end.top)
+                        (start.left === end.left && start.top === end.top && !deltaOffsetLeft)
                         || (start.top + start.height < 0 && end.top + end.height < 0)
                         || (start.top > windowHeight && end.top > windowHeight)
                     ) return;
 
-                    keyframes.transform = [ `translate(${start.left - end.left}px, ${start.top - end.top}px)`, 'translate(0, 0)' ];
+                    keyframes.transform = [ `translate(${deltaOffsetLeft + start.left - end.left}px, ${start.top - end.top}px)`, 'translate(0, 0)' ];
                 } else {
                     if (end.top + end.height < 0 || end.top > windowHeight) return;
                     keyframes.transform = [ 'scale(0)', 'scale(1)' ];
@@ -799,16 +828,10 @@ class MasonryLayout {
     }
 
     #setFocus(item, preventScroll = false) {
-        if (this.#focusedItem?.element) {
-            this.#focusedItem.element.tabIndex = -1;
-        }
-
+        this.#focusedItem?.element?.setAttribute('tabIndex', -1);
         this.#focusedItem = item;
-
-        if (item?.element) {
-            item.element.tabIndex = 0;
-            item.element.focus?.({ preventScroll });
-        }
+        this.#focusedItem?.element?.setAttribute('tabIndex', 0);
+        this.#focusedItem?.element?.focus?.({ preventScroll });
     }
 
     #findNearestInDirection(currentItem, direction) {
@@ -990,7 +1013,7 @@ class MasonryLayout {
                         firstDraw,
                         timestump: now
                     });
-                    item.element.tabIndex = -1;
+                    item.element.setAttribute('tabIndex', -1);
                     item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
                 }
                 item.element.style.left = `${item.boundLeft}px`;
@@ -1020,9 +1043,9 @@ class MasonryLayout {
                     }
                 });
 
-                if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = -1;
+                this.#focusedItem?.element?.setAttribute('tabIndex', -1);
                 this.#focusedItem = best || this.#inViewport.values().next().value;
-                if (this.#focusedItem?.element) this.#focusedItem.element.tabIndex = 0;
+                this.#focusedItem?.element?.setAttribute('tabIndex', 0);
             }
         }
 
