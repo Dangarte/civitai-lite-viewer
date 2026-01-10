@@ -273,14 +273,30 @@ async function fetchImageWithUnknownNSFW(request) {
 
 
 async function localFetch(request) {
-    if (request.url.indexOf(SW_CONFIG.local_urls.blurhash) === 0) {
+    if (request.url.startsWith(SW_CONFIG.local_urls.blurhash)) {
         const { hash, width = 32, height = 32, punch = 1 } = Object.fromEntries(new URLSearchParams(request.url.substring(request.url.indexOf('?') + 1)));
-        const blob = await blurhashToImageBlob(hash, Number(width), Number(height), Number(punch));
-        const response = responseFromBlob(blob, `max-age=${SW_CONFIG.ttl['blurhash']}`);
+
+        const response = createBlurhashResponse(hash, +width, +height, punch);
+
         CacheManager.put(request, response.clone(), SW_CONFIG.cache.blurhash);
         return response;
     }
     return new Response('', { status: 500, statusText: 'Unknown local URL' });
+}
+
+function createBlurhashResponse(hash, width, height, punch) {
+    const pixels = blurhashToPixelsBGRA(hash, width, height, punch);
+
+    const size = pixels.length;
+    const buffer = new ArrayBuffer(54 + size);
+    const v = new DataView(buffer);
+
+    v.setUint16(0, 0x4D42, true); v.setUint32(2, 54 + size, true); v.setUint32(10, 54, true);
+    v.setUint32(14, 40, true); v.setInt32(18, width, true); v.setInt32(22, -height, true);
+    v.setUint16(26, 1, true); v.setUint16(28, 32, true); v.setUint32(30, 0, true); v.setUint32(34, size, true);
+
+    new Uint8Array(buffer, 54).set(pixels);
+    return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Cache-Control': `max-age=${SW_CONFIG.ttl['blurhash']}`, 'Date': new Date().toUTCString() } });
 }
 
 async function resizeBlobImage(blob, options) { // Resize image blob
@@ -377,7 +393,7 @@ function responseFromBlob(blob, cacheControl) {
     return new Response(blob, { headers: { 'Content-Type': blob.type, 'Content-Length': blob.size, ...(cacheControl ? { 'Cache-Control': cacheControl, 'Date': new Date().toUTCString() } : {}) } });
 }
 
-function blurhashToPixels(hash, width = 32, height = 32, punch = 1) {
+function blurhashToPixelsBGRA(hash, width = 32, height = 32, punch = 1) {
     const lookup = new Uint8Array(128);
     for (let i = 0; i < 83; i++) {
         lookup['0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~'.charCodeAt(i)] = i;
@@ -470,163 +486,16 @@ function blurhashToPixels(hash, width = 32, height = 32, punch = 1) {
                 b += tmp[tIdx + 2] * basisY;
             }
 
+            // BMP expects Little-Endian order for 32-bit: Blue, Green, Red, Alpha
             const pIdx = pixelRowOffset + x * 4;
-            pixels[pIdx] = linearTosRGB(r);
+            pixels[pIdx] = linearTosRGB(b);
             pixels[pIdx + 1] = linearTosRGB(g);
-            pixels[pIdx + 2] = linearTosRGB(b);
+            pixels[pIdx + 2] = linearTosRGB(r);
             pixels[pIdx + 3] = 255;
         }
     }
 
     return pixels;
-}
-
-function blurhashToPixels_old(blurhash, width = 32, height = 32, punch = 1) {
-    // https://github.com/mad-gooze/fast-blurhash/blob/main/index.js
-    const digitLookup = new Uint8Array(128);
-    for (let i = 0; i < 83; i++) {
-        digitLookup['0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~'.charCodeAt(i)] = i;
-    }
-    const decode83 = (str, start, end) => {
-        let value = 0;
-        while (start < end) {
-            value = value * 83 + digitLookup[str.charCodeAt(start++)];
-        }
-        return value;
-    };
-
-    const pow = Math.pow;
-    const PI = Math.PI;
-    const PI2 = PI * 2;
-    const d = 3294.6;
-    const e = 269.025;
-    const sRGBToLinear = value => value > 10.31475 ? pow(value / e + 0.052132, 2.4) : value / d;
-    const linearTosRGB = v => ~~(v > 0.00001227 ? e * pow(v, 0.416666) - 13.025 : v * d + 1);
-    const signSqr = x => x < 0 ? - x * x : x * x;
-
-    /**
-     * Fast approximate cosine implementation
-     * Based on FTrig https://github.com/netcell/FTrig
-     */
-    const fastCos = (x) => {
-        x = ((x + PI * 1.5) % PI2 + PI2) % PI2 - PI;
-        const cos = 1.27323954 * x - 0.405284735 * signSqr(x);
-        return 0.225 * (signSqr(cos) - cos) + cos;
-    };
-
-    function getBlurHashAverageColor(blurHash) {
-        const val = decode83(blurHash, 2, 6);
-        return [val >> 16, (val >> 8) & 255, val & 255];
-    }
-
-    function decodeBlurHash(blurHash, width, height, punch) {
-        const sizeFlag = decode83(blurHash, 0, 1);
-        const numX = (sizeFlag % 9) + 1;
-        const numY = ~~(sizeFlag / 9) + 1;
-        const size = numX * numY;
-
-        let i = 0,
-            j = 0,
-            x = 0,
-            y = 0,
-            r = 0,
-            g = 0,
-            b = 0,
-            basis = 0,
-            basisY = 0,
-            colorIndex = 0,
-            pixelIndex = 0,
-            value = 0;
-
-        const maximumValue = ((decode83(blurHash, 1, 2) + 1) / 13446) * (punch | 1);
-
-        const colors = new Float32Array(size * 3);
-
-        const averageColor = getBlurHashAverageColor(blurHash);
-        for (i = 0; i < 3; i++) {
-            colors[i] = sRGBToLinear(averageColor[i]);
-        }
-
-        for (i = 1; i < size; i++) {
-            value = decode83(blurHash, 4 + i * 2, 6 + i * 2);
-            colors[i * 3] = signSqr(~~(value / 361) - 9) * maximumValue;
-            colors[i * 3 + 1] = signSqr((~~(value / 19) % 19) - 9) * maximumValue;
-            colors[i * 3 + 2] = signSqr((value % 19) - 9) * maximumValue;
-        }
-
-        const cosinesY = new Float32Array(numY * height);
-        const cosinesX = new Float32Array(numX * width);
-        for (j = 0; j < numY; j++) {
-            for (y = 0; y < height; y++) {
-                cosinesY[j * height + y] = fastCos((PI * y * j) / height);
-            }
-        }
-        for (i = 0; i < numX; i++) {
-            for (x = 0; x < width; x++) {
-                cosinesX[i * width + x] = fastCos((PI * x * i) / width);
-            }
-        }
-
-        const bytesPerRow = width * 4;
-        const pixels = new Uint8ClampedArray(bytesPerRow * height);
-
-        for (y = 0; y < height; y++) {
-            for (x = 0; x < width; x++) {
-                r = g = b = 0;
-                for (j = 0; j < numY; j++) {
-                    basisY = cosinesY[j * height + y];
-                    for (i = 0; i < numX; i++) {
-                        basis = cosinesX[i * width + x] * basisY;
-                        colorIndex = (i + j * numX) * 3;
-                        r += colors[colorIndex] * basis;
-                        g += colors[colorIndex + 1] * basis;
-                        b += colors[colorIndex + 2] * basis;
-                    }
-                }
-
-                pixelIndex = 4 * x + y * bytesPerRow;
-                pixels[pixelIndex] = linearTosRGB(r);
-                pixels[pixelIndex + 1] = linearTosRGB(g);
-                pixels[pixelIndex + 2] = linearTosRGB(b);
-                pixels[pixelIndex + 3] = 255; // alpha
-            }
-        }
-        return pixels;
-    }
-
-    const pixels = decodeBlurHash(blurhash, width, height, punch);
-    return pixels;
-}
-
-function pixelsToBmpBlob(pixels, width, height) {
-    const fileSize = 54 + pixels.length;
-    const buffer = new ArrayBuffer(fileSize);
-    const view = new DataView(buffer);
-
-    // BMP Header (File Header)
-    view.setUint16(0, 0x4D42, true);         // "BM"
-    view.setUint32(2, fileSize, true);       // File size
-    view.setUint32(10, 54, true);            // Offset to image data
-
-    // DIB Header (Windows BITMAPINFOHEADER)
-    view.setUint32(14, 40, true);            // Header size
-    view.setInt32(18, width, true);          // Width
-    view.setInt32(22, -height, true);        // Height (negative for top-down)
-    view.setUint16(26, 1, true);             // Planes
-    view.setUint16(28, 32, true);            // Bits per pixel (RGBA)
-    view.setUint32(30, 0, true);             // BI_RGB (no compression)
-    view.setUint32(34, pixels.length, true); // Image size
-
-    // Copy pixels
-    const imgArray = new Uint8Array(buffer, 54);
-    imgArray.set(pixels);
-
-    return new Blob([buffer], { type: 'image/bmp' });
-}
-
-async function blurhashToImageBlob(blurhash, width, height, punch) {
-    const pixels = blurhashToPixels(blurhash, width, height, punch);
-    return pixelsToBmpBlob(pixels, width, height);
 }
 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {

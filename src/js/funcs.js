@@ -31,11 +31,6 @@ function emptyElement(element) {
     return element;
 }
 
-function replaceElement(newChild, oldChild) {
-    oldChild.parentNode.replaceChild(newChild, oldChild);
-    return newChild;
-}
-
 function insertTextNode(text, parent) {
     parent.appendChild(document.createTextNode(text));
 }

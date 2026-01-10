@@ -1,12 +1,12 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 24,
+    version: 25,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
     api_url: 'https://civitai.com/api/v1',
-    images_url: 'https://image.civitai.com/',
+    images_url: 'https://image.civitai.com',
     api_status_url: 'https://status.civitai.com/status/public',
     local_params: [ 'target', 'original', 'cache', 'width', 'height', 'fit', 'format', 'quality', 'smoothing', 'position' ], // Parameters to remove when dragging (they were added only for passing parameters from the page to the sw)
     local_urls: {
@@ -15,6 +15,7 @@ const CONFIG = {
     },
     langauges: [ 'en', 'ru', 'zh', 'uk' ],
     appearance_normal: {
+        descriptionMaxWidth: 800,
         imageCard: {
             width: 360,
             gap: 16
@@ -32,6 +33,7 @@ const CONFIG = {
         blurHashSize: 32, // minimum size of blur preview
     },
     appearance_small: {
+        descriptionMaxWidth: 800,
         imageCard: {
             width: 360,
             gap: 10
@@ -235,7 +237,7 @@ class CivitaiAPI {
     }
 }
 
-// TODO: Normalize the management of the title and history, I don't like that inside #genImageFullPage the history and title are touched...
+// TODO: Normalize the management of the history, I don't like that inside #genImageFullPage the history are touched...
 // TODO: Prerender pages when pointerdown, and show on click
 class Controller {
     static api = new CivitaiAPI(CONFIG.api_url);
@@ -486,7 +488,7 @@ class Controller {
         if (this.#state.id && this.#state.id === savedState?.id) return;
 
         const [ pageId, paramString ] = page?.split('?') ?? [];
-        document.title = CONFIG.title;
+        this.#setTitle();
 
         // Clear cache records created after the current new transition
         if (this.#state && (!savedState || Date.now() - savedState.id < 10)) this.#cache.history.keys().forEach(id => {
@@ -632,7 +634,7 @@ class Controller {
     }
 
     static gotoHome() {
-        document.title = `${CONFIG.title} - ${window.languagePack?.text?.home ?? 'Home'}`;
+        this.#setTitle(window.languagePack?.text?.home ?? 'Home');
 
         const searchLang = window.languagePack?.temp?.home?.search ?? {};
         const searchWrap = createElement('div', { class: 'app-content main-search-container' });
@@ -734,7 +736,7 @@ class Controller {
             } catch(_) {}
 
             // try search by hash
-            if (q.indexOf(':') === -1 && hashSizes.some(n => q.length === n)) {
+            if (!q.includes(':') && hashSizes.some(n => q.length === n)) {
                 const baseHash = q.toUpperCase();
                 const processVersion = version => {
                     if (!version) return;
@@ -928,7 +930,7 @@ class Controller {
 
     static gotoArticles() {
         const appContent = createElement('div', { class: 'app-content' });
-        document.title = `${CONFIG.title} - ${window.languagePack?.text?.articles ?? 'Articles'}`;
+        this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
         const p = insertElement('p', appContent, { class: 'error-text' });
         p.appendChild(getIcon('cross'));
         insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
@@ -974,9 +976,9 @@ class Controller {
     }
 
     static gotoImages(options = {}) {
-        const { modelId, username, userId, modelVersionId, postId } = options; // 
+        const { modelId, username, userId, modelVersionId, postId } = options;
 
-        document.title = `${CONFIG.title} - ${window.languagePack?.text?.images ?? 'Images'}`;
+        this.#setTitle(window.languagePack?.text?.images ?? 'Images');
 
         if (username || userId || modelVersionId || modelId || postId) {
             const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
@@ -1022,7 +1024,7 @@ class Controller {
 
         const insertModelPage = model => {
             const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
-            document.title = `${model.name} - ${modelVersion.name} | ${modelVersion.baseModel} | ${model.type} | ${CONFIG.title}`;
+            this.#setTitle([model.name, modelVersion.name, modelVersion.baseModel, model.type]);
 
             const appContent = createElement('div', { class: 'app-content' });
             appContent.appendChild(this.#genModelPage({ model, version, state: navigationState }));
@@ -1092,13 +1094,13 @@ class Controller {
         const listWrap = insertElement('div', appContent, { id: 'models-list' });
         const listElement = insertElement('div', listWrap, { class: 'cards-list models-list' });
         appContent.appendChild(this.#genScrollToTopButton());
-        document.title = `${CONFIG.title} - ${window.languagePack?.text?.models ?? 'Models'}`;
+        this.#setTitle(window.languagePack?.text?.models ?? 'Models');
 
         const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
-            generator: (data, options) => this.#genModelCard(data, options),
+            generator: this.#genModelCard.bind(this),
             minOverscan: 1,
             maxOverscan: 3,
             passive: true,
@@ -1106,7 +1108,7 @@ class Controller {
             onElementRemove: this.#onCardRemoved.bind(this)
         });
 
-        let modelById = new Map();
+        let modelById = new Map(), hiddenModels = 0;
         if (SETTINGS.assumeListSameAsModel) {
             listElement.addEventListener('pointerdown', e => {
                 const a = e.target.closest('a[data-id]');
@@ -1127,7 +1129,10 @@ class Controller {
 
             const modelsCountAll = models.length;
             models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
-            if (models.length !== modelsCountAll) console.log(`Due to the selected tags for hiding, ${modelsCountAll - models.length} model(s) were hidden`);
+            if (models.length !== modelsCountAll) {
+                console.log(`Due to the selected tags for hiding, ${modelsCountAll - models.length} model(s) were hidden`);
+                hiddenModels += modelsCountAll - models.length;
+            }
 
             models.forEach(model => {
                 if (modelById.has(model.id)) return;
@@ -1138,15 +1143,16 @@ class Controller {
 
             if (query.cursor) {
                 const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
-                loadMoreTrigger.appendChild(getIcon('infinity'));
+                insertElement('div', loadMoreTrigger, { class: 'media-loading-indicator' });
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
-                    loadMore().then(() => loadMoreTrigger.remove());
+                    loadMore().finally(() => loadMoreTrigger.remove());
                 });
             } else {
                 const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
+                insertElement('span', loadNoMore, { class: 'darker-text' }, `Due to the selected tags for hiding, ${hiddenModels} model(s) were hidden`);
             }
         };
 
@@ -1155,13 +1161,19 @@ class Controller {
             if (!query.cursor) return;
             return this.api.fetchModels(query).then(data => {
                 if (pageNavigation !== this.#pageNavigation) return;
-                query.cursor = data.metadata?.nextCursor ?? null;
-                cache.nextModelsCursor = query.cursor;
-                cache.models = cache.models.concat(data.items);
-                insertModels(data.items);
+                if (data.items?.length > 0) {
+                    query.cursor = data.metadata?.nextCursor ?? null;
+                    cache.nextModelsCursor = query.cursor;
+                    cache.models = cache.models.concat(data.items);
+                    insertModels(data.items);
+                } else {
+                    cache.nextModelsCursor = null;
+                    insertModels([]);
+                }
             }).catch(error => {
                 if (pageNavigation !== this.#pageNavigation) return;
                 console.error('Failed to fetch models:', error?.message ?? error);
+                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
             });
         };
 
@@ -1183,6 +1195,7 @@ class Controller {
 
             const pageNavigation = this.#pageNavigation;
             modelById = new Map();
+            hiddenModels = 0;
 
             if (cache.modelsFilter === this.#state.modelsFilter && cache.models) {
                 console.log('Loading models (nav cache)');
@@ -1218,7 +1231,7 @@ class Controller {
         };
 
         const firstLoadingPlaceholder = insertElement('div', listWrap, { id: 'load-more' });
-        firstLoadingPlaceholder.appendChild(getIcon('infinity'));
+        insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
 
         this.#clearAppElement();
         this.appElement.appendChild(this.#genModelsListFilters(() => {
@@ -1245,7 +1258,7 @@ class Controller {
             const appContent = createElement('div', { class: 'app-content' });
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Unsupported url'));
 
-            document.title = CONFIG.title;
+            this.#setTitle();
 
             this.#clearAppElement();
             this.appElement.appendChild(appContent);
@@ -1580,13 +1593,16 @@ class Controller {
         }
 
         // Model descrition
-        const modelDescription = insertElement('div', page, { class: 'model-description' });
-        const description = this.#analyzeModelDescriptionString(model.description);
-        const modelDescriptionFragment = safeParseHTML(description);
-        this.#analyzeModelDescription(modelDescriptionFragment, cache);
-        if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
-        modelDescription.appendChild(modelDescriptionFragment);
-        if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('model', modelDescription);
+        if (model.description) {
+            const modelDescription = createElement('div', { class: 'model-description' });
+            const description = this.#analyzeModelDescriptionString(model.description);
+            const modelDescriptionFragment = safeParseHTML(description);
+            this.#analyzeModelDescription(modelDescriptionFragment, cache);
+            if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+            modelDescription.appendChild(modelDescriptionFragment);
+            if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('model', modelDescription);
+            if (modelDescription.childNodes.length) page.appendChild(modelDescription);
+        }
 
 
         // Open in CivitAI
@@ -1621,7 +1637,7 @@ class Controller {
         }
 
         const insertMeta = (media, container) => {
-            document.title = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username);
+            this.#setTitle((window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username));
 
             // Creator and Created At
             const creator = this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` });
@@ -1680,12 +1696,13 @@ class Controller {
 
         if (carouselItems.length > 1) {
             const item = carouselItems.find(item => item.id === media.id);
+            const itemWidth = Math.min(carouselItems.reduce((w, it) => it.width < w ? it.width : w, carouselItems[0].width), 800);
             item.element = mediaElement;
             const carouselElement = new InfiniteCarousel(carouselItems, {
                 gap: 0,
                 visibleCount: 1,
                 active: item.index,
-                itemWidth: 800,
+                itemWidth,
                 generator: mediaGenerator,
                 onElementRemove: this.#onCardRemoved.bind(this),
                 onScroll: id => {
@@ -1719,7 +1736,7 @@ class Controller {
         const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
             gap: CONFIG.appearance.imageCard.gap,
             itemWidth: CONFIG.appearance.imageCard.width,
-            generator: (data, options) => this.#genImageCard(data, options),
+            generator: this.#genImageCard.bind(this),
             minOverscan: 1,
             maxOverscan: 3,
             passive: true,
@@ -1750,7 +1767,7 @@ class Controller {
         }));
 
         const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-        firstLoadingPlaceholder.appendChild(getIcon('infinity'));
+        insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
 
         fragment.appendChild(listWrap);
 
@@ -1764,7 +1781,9 @@ class Controller {
                 cache.images = cache.images.concat(data.items);
                 insertImages(data.items);
             }).catch(error => {
+                if (pageNavigation !== this.#pageNavigation) return;
                 console.error('Failed to fetch images:', error?.message ?? error);
+                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
             });
         };
 
@@ -1824,10 +1843,10 @@ class Controller {
 
             if (query.cursor) {
                 const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
-                loadMoreTrigger.appendChild(getIcon('infinity'));
+                insertElement('div', loadMoreTrigger, { class: 'media-loading-indicator' });
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
-                    loadMore().then(() => loadMoreTrigger.remove());
+                    loadMore().finally(() => loadMoreTrigger.remove());
                 });
             } else {
                 const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
@@ -2048,16 +2067,83 @@ class Controller {
     static #analyzeModelDescription(description, cache) {
         const cacheDescriptionImages = cache?.descriptionImages ?? new Map();
 
-        // Remove garbage (empty elements and all unnecessary things)
-        description.querySelectorAll('p:empty, h3:empty').forEach(el => el.remove());
+        // Remove garbage (empty elements, duplicates and all unnecessary things)
+        description.querySelectorAll('p:empty, h3:empty, hr + hr').forEach(el => el.remove());
+        description.querySelectorAll('p, h3').forEach(el => !el.children.length && !el.textContent.trim() ? el.remove() : null);
 
-        // Add loading lazy and decoding async
+        if (!description.children.length) {
+            const text = description.textContent;
+            description.textContent = '';
+            if (text) insertElement('p', description, undefined, text);
+            return;
+        }
+
+        const headers = description.querySelectorAll('h1, h2, h3');
+
+        // The entire header wrapped in <strong/u/em/b/i> makes no sense
+        headers.forEach(header => {
+            header.querySelectorAll('strong, u, em, b, i').forEach(el => {
+                const isFullWrap = el.textContent.trim() === header.textContent.trim();
+                if (isFullWrap) el.replaceWith(...el.childNodes);
+            });
+        });
+
+        // Remove headings if most of the description consists of them
+        // or Expand spam headings into a normal paragraph (contains line breaks or is too long)
+        if (headers.length / description.children.length >= .65) {
+            headers.forEach(header => {
+                const p = createElement('p');
+                p.append(...header.childNodes);
+                header.replaceWith(p);
+            });
+        } else {
+            headers.forEach(header => {
+                const hasBr = header.querySelector('br');
+                const isTooLong = header.textContent.length > 60;
+                if (hasBr && isTooLong) {
+                    const p = document.createElement('p');
+                    p.append(...header.childNodes);
+                    header.replaceWith(p);
+                }
+            });
+        }
+
+        // Add loading lazy, decoding async and srcset
         description.querySelectorAll('img').forEach(img => {
-            const src = img.getAttribute('src');
+            let src = img.getAttribute('src');
+            img.setAttribute('decoding', 'async');
+
+            let url = null, srcset = null;
+            try { url = new URL(src); } catch (_) {}
+
+            if (url && url.origin === CONFIG.images_url && !src.includes('original=true')) {
+                const urlWidth = Number(src.match(/width=(\d+)/)?.[1] || 0);
+                const baseWidth = this.#getNearestServerSize(Math.min(CONFIG.appearance.descriptionMaxWidth, urlWidth));
+                const sizes = [1, 2, 3];
+                const srcSetParts = [];
+
+                sizes.forEach(ratio => {
+                    const targetWidth = baseWidth * ratio;
+                    let currentSrc;
+
+                    if (targetWidth > 2200) currentSrc = src.replace(/width=\d+/, 'original=true');
+                    else currentSrc = src.replace(/width=\d+/, `width=${this.#getNearestServerSize(targetWidth)}`);
+
+                    srcSetParts.push(`${currentSrc} ${ratio}x`);
+                });
+
+                srcset = srcSetParts.join(', ');
+                if (urlWidth !== baseWidth) {
+                    src = src.replace(/width=\d+/, `width=${baseWidth}`);
+                    img.setAttribute('src', src);
+                }
+            }
+
             if (cacheDescriptionImages.has(src)) {
                 const item = cacheDescriptionImages.get(src);
                 img.style.aspectRatio = item.ratio;
                 img.style.height = `${item.offsetHeight}px`;
+                if (srcset) img.setAttribute('srcset', srcset);
             } else {
                 img.addEventListener('load', () => {
                     if (!img.naturalHeight) return;
@@ -2067,15 +2153,23 @@ class Controller {
                     };
                     cacheDescriptionImages.set(src, item);
                 }, { once: true });
-            }
-            img.setAttribute('decoding', 'async');
 
-            img.setAttribute('data-src', src);
-            img.removeAttribute('src');
-            onTargetInViewport(img, () => {
-                img.setAttribute('src', img.getAttribute('data-src'));
-                img.removeAttribute('data-src');
-            });
+                if (srcset) img.setAttribute('data-srcset', srcset);
+                img.setAttribute('data-src', src);
+                img.removeAttribute('src');
+                onTargetInViewport(img, () => {
+                    const src = img.getAttribute('data-src');
+                    const srcset = img.getAttribute('data-srcset');
+
+                    img.setAttribute('src', src);
+                    img.removeAttribute('data-src');
+                    if (srcset) {
+                        img.setAttribute('srcset', srcset);
+                        img.removeAttribute('data-srcset');
+                    }
+                });
+            }
+
         });
 
         const setLinkPreview = a => {
@@ -2189,11 +2283,12 @@ class Controller {
         });
 
         // Try to fix the incorrect formatting of the code block
+        // Disabled: Sometimes some of these "blocks" are just <span> with a background... and such blocks will be skipped, which looks weirder than the bad formatting
         // description.querySelectorAll('p > code:only-child').forEach(code => {
         //     const p = code.parentElement;
         //     const pre = createElement('pre');
         //     pre.appendChild(code);
-        //     p.parentNode?.replaceChild?.(pre, p);
+        //     p.replaceWith(pre);
         // });
 
         // Prompts
@@ -2205,11 +2300,25 @@ class Controller {
                 type: 'positive'
             },
             {
-                exact: [ 'negative prompt', 'negative:', 'nprompt:' ],
+                exact: [ 'negative prompt', 'negative:', 'nprompt:', 'n prompt:' ],
                 startsWith: [ '-prompt', '- prompt', 'negative prompt' ],
                 type: 'negative'
             }
         ];
+
+        // If something that matches exactly isn't followed by <pre>, it's probably just bad formatting
+        // Disabled: Sometimes there are multiple items below, so changing just one looks weird
+        // description.querySelectorAll('p').forEach(p => {
+        //     if (!p.nextSibling || p.nextSibling?.tagName !== 'P') return;
+        //     const text = p.textContent.trim().toLowerCase();
+
+        //     const type = promptTitles.find(r => r.exact.includes(text))?.type;
+        //     if (!type) return;
+
+        //     const pre = createElement('pre');
+        //     insertElement('code', pre, { class: `prompt prompt-${type}` }, p.nextSibling.textContent);
+        //     p.nextSibling.replaceWith(pre);
+        // });
 
         description.querySelectorAll('pre').forEach(pre => {
             let headerCandidate = pre.previousElementSibling;
@@ -2251,7 +2360,7 @@ class Controller {
         const tokenSpecs = [
             { type: 'lora',     regex: /<lora:[^:>]+:[^>]+>/y },
             { type: 'link',     regex: /https:\/\/civitai\.com\/[^\s]+/y },
-            { type: 'escaped',  regex: /\\[()]/y },
+            { type: 'escaped',  regex: /\\[\\():]/y },
             { type: 'weight',   regex: /:-?[0-9.]+/y },
             { type: 'bracket',  regex: /[()]/y },
             { type: 'punct',    regex: /[,]/y },
@@ -2657,11 +2766,10 @@ class Controller {
 
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
         const insertOtherMeta = (key, value) => {
-            const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? value ? `${key}: ` : key : '');
-            if (!value) return item;
+            const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? value !== undefined ? `${key}: ` : key : '');
+            if (value === undefined) return item;
 
-            if (typeof value === 'string') insertElement('span', item, { class: 'meta-value' }, value);
-            else insertElement('span', item, { class: 'meta-value' }, value);
+            insertElement('span', item, { class: 'meta-value' }, value);
             return item;
         };
 
@@ -2723,7 +2831,15 @@ class Controller {
             const related = Object.keys(meta).filter(k => k.startsWith(prefix));
             const tooltip = related.map(k => {
                 const cleanK = k.replace(prefix, '').trim();
-                return `<tr><td>${escapeHtml(cleanK)}</td><td>${escapeHtml(String(meta[k]))}</td></tr>`;
+                let valueString, valueType;
+                if (typeof meta[k] === 'object') {
+                    valueString = JSON.stringify(meta[k], null, '  ');
+                    valueType = 'json';
+                } else {
+                    valueString = String(meta[k]);
+                    valueType = 'string';
+                }
+                return `<tr><td>${escapeHtml(cleanK)}</td><td class="value-${valueType}">${escapeHtml(valueString)}</td></tr>`;
             }).join('');
 
             const item = renderItem(label, meta[mainKey]);
@@ -2753,9 +2869,10 @@ class Controller {
         // Resources
         const resourceHashes = new Set();
         const resources = [];
+        const hashSizes = [ 8, 10, 12, 64 ];
         const addResourceToList = resource => {
-            if (!resource.name?.startsWith('urn:') && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
-            const key = resource.hash || resource.modelVersionId;
+            if (resource.name?.startsWith('urn:') && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
+            const key = resource.hash && hashSizes.some(n => resource.hash.length === n) ? resource.hash : resource.modelVersionId;
             if (!key || resourceHashes.has(key)) return;
             resourceHashes.add(key);
             resources.push({ ...resource });
@@ -2824,7 +2941,7 @@ class Controller {
                     href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
                 });
                 newEl.setAttribute('data-link-preview', '');
-                resourcesContainer.replaceChild(newEl, el);
+                el.replaceWith(newEl);
                 if (modelKey) this.#cache.modelVersions.set(modelKey, info);
                 return info;
             };
@@ -2924,7 +3041,7 @@ class Controller {
                             fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
                         }
 
-                        parent.replaceChild(fragment, node);
+                        node.replaceWith(fragment);
                     });
                 });
             };
@@ -3297,8 +3414,8 @@ class Controller {
         const targetWidth = Math.round(Math.max(widthNeededForWidth, widthNeededForHeight) * this.#devicePixelRatio);
         const size = `width=${this.#getNearestServerSize(targetWidth)}`;
         const paramString = target ? (`?target=${target}`) : '';
-        const replaceWidthWith = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
-        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', replaceWidthWith) : replace(/\/width=\d+\//, replaceWidthWith);
+        const widthString = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
+        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : replace(/\/width=\d+\//, widthString);
         const url = `${urlBase}${paramString}`;
         const mediaElement = createElement('img', { class: 'media-element',  alt: ' ', crossorigin: 'anonymous' });
         let src;
@@ -4050,6 +4167,16 @@ class Controller {
         }
     }
 
+    static #setTitle(input) {
+        const SEPARATOR = '•';
+        const ESCAPED_SEP = '·';
+        const emojiRegex = /\p{Emoji_Presentation}|\p{Extended_Pictographic}|\u200d|\ufe0f/gu;
+        const parts = (Array.isArray(input) ? input : [input]).filter(Boolean);
+        const cleanedParts = parts.map(part => part.replace(emojiRegex, '').replace(new RegExp(SEPARATOR, 'g'), ESCAPED_SEP).trim());
+        const mainContent = cleanedParts.join(` ${SEPARATOR} `);
+        document.title = mainContent ? `${mainContent} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
+    }
+
     static onScroll(scrollTop) {
         this.#state.scrollTop = scrollTop;
         this.#state.scrollTopRelative = this.#onScroll?.({ scrollTop }) ?? null;
@@ -4708,7 +4835,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
         }
 
         const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
-        mediaContainer.replaceChild(video, mediaElement);
+        mediaElement.replaceWith(video);
     };
 
     video.addEventListener('canplay', play, { once: true });
@@ -4738,7 +4865,7 @@ function pauseVideo(mediaContainer) {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, offsetX, offsetY, cropWidth, cropHeight, 0, 0, targetWidth, targetHeight);
     mediaContainer.setAttribute('data-timestump', video.currentTime);
-    mediaContainer.replaceChild(canvas, video);
+    video.replaceWith(canvas);
 }
 
 function showOriginalImage(target) {
@@ -4939,6 +5066,7 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
         target.setAttribute('lilpipe-showed-delay', '');
         prevLilpipeTimer = setTimeout(() => {
             prevLilpipeTimer = null;
+            if (!document.body.contains(target)) return;
 
             target.removeAttribute('lilpipe-showed-delay');
             parent.appendChild(tooltip);

@@ -239,6 +239,7 @@ mark {
 
 p {
     margin-block: .75em;
+    line-height: 1.3125em;
 }
 
 pre {
@@ -342,7 +343,7 @@ a {
 a.selected,
 a:hover,
 a:focus-visible {
-    color: var(--c-main-text, #63adf7);
+    color: var(--c-main-text);
     text-decoration: underline;
     transition: .1s ease-out;
 }
@@ -410,6 +411,7 @@ hr {
     border: 2px solid var(--c-text-darker);
     border-radius: 2px;
     opacity: .6;
+    margin-block: 1em;
 }
 
 .config-list,
@@ -935,6 +937,7 @@ footer a {
     margin: 0 auto;
     width: -moz-fit-content;
     width: fit-content;
+    max-width: 600px;
 }
 
 .error-block img {
@@ -1087,7 +1090,6 @@ footer a {
     position: relative;
     flex-shrink: 0;
     contain: strict;
-    /* content-visibility: auto; */
     border-radius: var(--radius);
 }
 
@@ -1305,6 +1307,18 @@ footer a {
     width: fit-content;
 }
 
+.model-description h1 {
+    font-size: 1.5em;
+}
+
+.model-description h2 {
+    font-size: 1.25em;
+}
+
+.model-description h3 {
+    font-size: 1.172em;
+}
+
 .model-description span {
     border-radius: .25em;
     box-decoration-break: clone;
@@ -1323,6 +1337,7 @@ footer a {
 
 .model-version-description .model-version {
     margin-block-start: 0;
+    font-size: 1.5em;
     display: flex;
 }
 
@@ -1382,7 +1397,6 @@ footer a {
     position: absolute;
     bottom: 0;
     width: 100%;
-    content-visibility: auto;
     contain: strict;
 }
 
@@ -1396,7 +1410,6 @@ footer a {
     border-radius: var(--radius);
     overflow: hidden;
     contain: strict;
-    /* content-visibility: auto; */
     transition: 0s !important;
     background-color: var(--c-bg);
     /* Force new layer */
@@ -1894,6 +1907,11 @@ div.meta-resource {
     color: var(--c-error);
 }
 
+.meta-resource.no-model .meta-resource-type {
+    background-color: var(--c-bg);
+    color: var(--c-text-dark);
+}
+
 .meta-resource[data-link-preview][lilpipe-showed] {
     position: relative;
 }
@@ -2037,11 +2055,17 @@ a[href].meta-resource:hover .meta-resource-name {
 
 .meta-other .badge[data-badge="ComfyUI"] {
     background-color: var(--c-main-bg-dark);
+    border-color: var(--c-main-bg);
 }
 
 #tooltip.tooltip-meta-adetailer {
     max-width: 500px;
     padding: 0;
+}
+
+#tooltip.tooltip-meta-adetailer .value-json {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
 }
 
 .meta-other code.copy {
@@ -2070,15 +2094,19 @@ code.prompt {
     position: relative;
 }
 
+code.prompt:empty::after {
+    content: ' ';
+}
+
 .prompt span {
     border-radius: .25em;
     box-decoration-break: clone;
 }
 
-.prompt .keyword    { color: #e67e22; font-weight: 500; }
-.prompt .weight     { color: var(--c-bracket, var(--c-text-darker)); }
-.prompt .bracket    { color: var(--c-bracket, var(--c-text-darker)); }
-.prompt .lora       { color: #16a085; font-style: italic; }
+.prompt .keyword    { color: #e67e22; font-weight: 600; }
+.prompt .weight     { color: var(--c-bracket, var(--c-text-darker)); font-weight: 600; }
+.prompt .bracket    { color: var(--c-bracket, var(--c-text-darker)); font-weight: 600; }
+.prompt .lora       { color: #16a085; font-style: italic; font-weight: 600; }
 .prompt .link       { text-decoration: underline; }
 
 .prompt .keyword[data-keyword="BREAK"] {
@@ -2148,8 +2176,8 @@ code.prompt-positive::before {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    font-size: 2em;
-    height: 4em;
+    font-size: 1.5em;
+    height: 6em;
     line-height: 1;
     color: var(--c-text-dark);
     pointer-events: none;
@@ -2158,6 +2186,10 @@ code.prompt-positive::before {
 
 #load-no-more .icon {
     font-size: 3em;
+}
+
+#load-no-more span.darker-text {
+    font-size: .75em;
 }
 
 #load-no-more span {
@@ -2180,15 +2212,15 @@ code.prompt-positive::before {
     color: var(--c-text-dark);
 }
 
-#load-more .icon {
-    stroke-dasharray: 42 6;
-    animation: load-more-icon 1.5s ease-in-out infinite;
+#load-more .media-loading-indicator {
+    position: unset;
+    width: .5em;
+    height: .5em;
+    opacity: .8;
 }
 
-@keyframes load-more-icon {
-    0% { stroke-dashoffset: 0; }
-    60% { stroke-dashoffset: 48; }
-    100% { stroke-dashoffset: 48; }
+.page-loading #load-more .media-loading-indicator {
+    opacity: 1;
 }
 
 .model-page {
@@ -3038,19 +3070,22 @@ a.link-button.link-open-civitai::after {
     gap: 0;
 }
 
-.link-with-favicon {
-    display: inline-flex !important;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: .5ch;
-}
-
-.link-with-favicon::after {
-    transform: translate(-.5ch, -0.25em) !important; /* Add an offset to account for the flex gap */
-}
-
 .link-with-favicon .icon {
     flex-shrink: 0;
+    display: inline;
+    vertical-align: bottom;
+    box-sizing: border-box;
+    margin-inline-end: .25ch !important;
+    /* !!! height = line-height !!! */
+}
+
+ol .link-with-favicon .icon,
+ul .link-with-favicon .icon {
+    height: 1.5em;
+}
+
+p .link-with-favicon .icon {
+    height: 1.3125em;
 }
 
 .link-hover-preview[lilpipe-showed] {
