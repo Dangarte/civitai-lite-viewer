@@ -129,11 +129,11 @@ function onFetch(e) { // Request interception
         const response = CacheManager.get(e.request, cacheName);
         return e.respondWith(response);
     }
-    if (!e.request.url.includes('https') || e.request.destination === 'video') return; // Allow only from https and skip video
+    if (!e.request.url.startsWith('https:') || e.request.destination === 'video') return; // Allow only from https and skip video
 
     // search in specific cache
     let response;
-    if (e.request.url.startsWith(SW_CONFIG.base_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.static);
+    if (e.request.url.startsWith(SW_CONFIG.base_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.static, { event: e, SWR: true });
     else if (e.request.url.startsWith(SW_CONFIG.api_url)) response = CacheManager.get(e.request, SW_CONFIG.cache.api);
     else if (e.request.url.startsWith(SW_CONFIG.images_url)) {
         const target = getTargetFromUrl(e.request.url);
@@ -513,7 +513,7 @@ function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
 
 class CacheManager {
     static #cacheMap = new Map(); // stores open Cache objects
-    static #hotCacheUrls = [ SW_CONFIG.local_urls.blurhash ]; // url startsWith
+    static #hotCaches = [ SW_CONFIG.cache.blurhash ]; // cacheName
     static #hotCache = new Map(); // RAM cache (only for blurhash)
 
     // Get cache by name, open if not already open
@@ -526,11 +526,13 @@ class CacheManager {
     }
 
     // Get response from cache
-    static async get(request, cacheName) {
+    static async get(request, cacheName = null, options = { event: null, SWR: false, silent: false }) {
         let response;
 
-        const isHotUrl = this.#isHotUrl(request.url);
-        if (isHotUrl) {
+        request = this.#clearRequest(request);
+
+        const isHotCache = this.#isHotCache(cacheName);
+        if (isHotCache) {
             const cached = this.#hotCache.get(request.url);
             if (cached) {
                 if (Date.now() < cached.expireTime) {
@@ -548,9 +550,26 @@ class CacheManager {
             response = await caches.match(request);
         }
 
-        if (!response || !this.#checkCacheMaxAge(response)) response = await cacheFetch(request);
+        if (!response) response = await cacheFetch(request);
+        else if (!this.#checkCacheMaxAge(response)) {
+            if (!options?.SWR) response = await cacheFetch(request);
+            else {
+                (async () => {
+                    const responseOld = response.clone();
+                    const responseNew = await cacheFetch(request);
+                    const clientId = options?.event?.clientId ?? null;
+                    if (options?.silent || clientId === null) return;
+                    if (await this.#compareResponses(responseOld, responseNew)) return;
 
-        if (isHotUrl) this.#putInHotCache(request.url, response);
+                    const client = await self.clients.get(clientId);
+                    if (!client) return;
+                    client.postMessage({ type: 'CACHE_UPDATED', url: request.url });
+                })();
+                return response;
+            }
+        }
+
+        if (isHotCache) this.#putInHotCache(request.url, response);
 
         return response;
     }
@@ -559,12 +578,50 @@ class CacheManager {
     static async put(request, response, cacheName) {
         if (!cacheName) throw new Error('cacheName required for put');
 
-        if (this.#isHotUrl(request.url)) this.#putInHotCache(request.url, response);
+        request = this.#clearRequest(request);
+
+        if (this.#isHotCache(cacheName)) this.#putInHotCache(request.url, response);
 
         const cache = await this.#getCache(cacheName);
         await cache.put(request, response);
 
         return response;
+    }
+
+    static #clearRequest(request) {
+        if (!request.url.includes('#')) return request;
+        const url = new URL(request.url);
+        if (!url.hash) return request;
+        url.hash = '';
+        return cloneRequestWithModifiedUrl(request, url.toString());
+    }
+
+
+    static async #compareResponses(responseOld, responseNew) {
+        // Content-Length
+        const lenOld = responseOld.headers.get('Content-Length');
+        const lenNew = responseNew.headers.get('Content-Length');
+        if (lenOld !== null && lenNew !== null && lenOld !== lenNew) return false;
+
+        // arrayBuffer
+        try {
+            const bufferOld = await responseOld.clone().arrayBuffer();
+            const bufferNew = await responseNew.clone().arrayBuffer();
+
+            if (bufferOld.byteLength !== bufferNew.byteLength) return false;
+
+            const viewOld = new Uint8Array(bufferOld);
+            const viewNew = new Uint8Array(bufferNew);
+
+            for (let i = 0; i < viewOld.length; i++) {
+                if (viewOld[i] !== viewNew[i]) return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Error comparing responses:', error);
+            return false;
+        }
     }
 
     // Check ttl
@@ -581,8 +638,8 @@ class CacheManager {
     }
 
     // Checking whether this URL should be cached in RAM
-    static #isHotUrl(url) {
-        return this.#hotCacheUrls.some(hotUrl => url.startsWith(hotUrl));
+    static #isHotCache(cacheName) {
+        return this.#hotCaches.includes(cacheName);
     }
 
     // Place the answer in RAM

@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 25,
+    version: 26,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -81,6 +81,7 @@ const SETTINGS = {
     showCurrentModelVersionStats: true,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
+    hideImagesWithoutResources: false,
     colorCorrection: true,
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
@@ -142,7 +143,7 @@ class CivitaiAPI {
             rating = '',
             favorites = false,
             hidden = false,
-            primaryFileOnly = false,
+            primaryFileOnly = false, // Doesn't do anything without a token
             nsfw = false
         } = options;
 
@@ -162,7 +163,7 @@ class CivitaiAPI {
         if (favorites) url.searchParams.append('favorites', 'true');
         if (hidden) url.searchParams.append('hidden', 'true');
         if (nsfw) url.searchParams.append('nsfw', nsfw);
-        if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true');
+        if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true'); // (see above)
         if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // ERROR: (see above)
         if (status) url.searchParams.append('status', status);
 
@@ -592,6 +593,7 @@ class Controller {
 
     // This implementation seems wrong... and problematic in terms of support, but let it be for now
     static preparePage(page) {
+        console.log(`Preload ${page}`);
         // Start downloading or retrieving from cache in advance,
         // because after pressing it is highly likely that a click will occur... 
         const [ pageId, paramString ] = page?.split('?') ?? [];
@@ -616,7 +618,6 @@ class Controller {
                     sort: SETTINGS.sort,
                     period: SETTINGS.period,
                     checkpointType: SETTINGS.checkpointType,
-                    primaryFileOnly: true,
                     baseModels: SETTINGS.baseModels,
                     nsfw: SETTINGS.nsfw,
                 };
@@ -980,23 +981,14 @@ class Controller {
 
         this.#setTitle(window.languagePack?.text?.images ?? 'Images');
 
-        if (username || userId || modelVersionId || modelId || postId) {
-            const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
-            const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, username, userId, postId });
-            appContentWide.appendChild(imagesList);
-            appContentWide.appendChild(this.#genScrollToTopButton());
+        const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+        const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, username, userId, postId });
+        appContentWide.appendChild(imagesList);
+        appContentWide.appendChild(this.#genScrollToTopButton());
 
-
-            this.#clearAppElement();
-            this.appElement.appendChild(appContentWide);
-            return imagesListPromise;
-        }
-
-        const appContent = createElement('div', { class: 'app-content' });
-        insertElement('p', appContent, undefined, "Work In Progress");
-        insertElement('a', appContent, { href: 'https://developer.civitai.com/docs/api/public-rest#get-apiv1images' }, 'GET /api/v1/images');
         this.#clearAppElement();
-        this.appElement.appendChild(appContent);
+        this.appElement.appendChild(appContentWide);
+        return imagesListPromise;
     }
 
     static gotoModelByHash(hash) {
@@ -1152,7 +1144,12 @@ class Controller {
                 const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
-                insertElement('span', loadNoMore, { class: 'darker-text' }, `Due to the selected tags for hiding, ${hiddenModels} model(s) were hidden`);
+                if (hiddenModels) {
+                    const hiddenTextBase = window.languagePack?.text?.hiddenModels ?? 'Due to the selected hide tags, {count} were hidden';
+                    const units = window.languagePack?.units?.element ?? ['element', 'elements', 'elements'];
+                    const text = hiddenTextBase.replace('{count}', `${hiddenModels} ${escapeHtml(pluralize(hiddenModels, units))}`);
+                    insertElement('span', loadNoMore, { class: 'darker-text' }, text);
+                }
             }
         };
 
@@ -1167,6 +1164,7 @@ class Controller {
                     cache.models = cache.models.concat(data.items);
                     insertModels(data.items);
                 } else {
+                    query.cursor = null;
                     cache.nextModelsCursor = null;
                     insertModels([]);
                 }
@@ -1187,7 +1185,6 @@ class Controller {
                 sort: SETTINGS.sort,
                 period: SETTINGS.period,
                 checkpointType: SETTINGS.checkpointType,
-                primaryFileOnly: true,
                 baseModels: SETTINGS.baseModels,
                 nsfw: SETTINGS.nsfw,
             };
@@ -1391,7 +1388,12 @@ class Controller {
         // Download buttons
         const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
         const fileTypeRegex = /\.([^\.]+)$/;
+        const downloadFileHashes = new Set();
         modelVersion.files.forEach(file => {
+            const hash = file.hashes?.SHA256 || file.hashes?.AutoV3 || file.hashes?.AutoV2 || null;
+            if (!hash) console.log('This file has no hashes', file);
+            if (downloadFileHashes.has(hash)) return;
+            downloadFileHashes.add(hash);
             const download = window.languagePack?.text?.download ?? 'Download';
             const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
             const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-text': `<b>${escapeHtml(file.type)}</b><br><span style="word-break:break-word;">${escapeHtml(file.name)?.replace(fileTypeRegex, '<span style="color:var(--c-text-darker);">.$1</span>') || ''}</span>`, 'lilpipe-delay': 600 });
@@ -1748,8 +1750,7 @@ class Controller {
         this.#onScroll = onScroll;
         this.#onResize = onResize;
 
-        let imagesMetaById = new Map();
-        let postsById = new Map();
+        let imagesMetaById = new Map(), postsById = new Map(), hiddenImages = 0;
         listElement.addEventListener('pointerdown', e => {
             const a = e.target.closest('a[data-id]');
             const id = Number(a?.getAttribute('data-id'));
@@ -1794,13 +1795,32 @@ class Controller {
             if (SETTINGS.hideImagesWithoutPositivePrompt) {
                 const countAll = images.length;
                 images = images.filter(image => image.meta?.prompt || image.meta?.meta?.prompt); // For some reason the API started returning meta.meta...
-                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without positive prompt`);
+                if (images.length < countAll) {
+                    hiddenImages += countAll - images.length;
+                    console.log(`Hidden ${countAll - images.length} image(s) without positive prompt`);
+                }
             }
 
             if (SETTINGS.hideImagesWithoutNegativePrompt) {
                 const countAll = images.length;
                 images = images.filter(image => image.meta?.negativePrompt || image.meta?.meta?.negativePrompt); // For some reason the API started returning meta.meta...
-                if (images.length < countAll) console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
+                if (images.length < countAll) {
+                    hiddenImages += countAll - images.length;
+                    console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
+                }
+            }
+
+            if (SETTINGS.hideImagesWithoutResources) {
+                const countAll = images.length;
+                images = images.filter(image => {
+                    // For some reason the API started returning meta.meta...
+                    const meta = image.meta?.meta && Object.keys(image.meta).length < 4 ? image.meta?.meta : image.meta;
+                    return meta.civitaiResources?.length || meta.resources?.length || meta.additionalResources?.length || (meta.hashes && Object.keys(meta.hashes).length) || meta['Model hash'];
+                });
+                if (images.length < countAll) {
+                    hiddenImages += countAll - images.length;
+                    console.log(`Hidden ${countAll - images.length} image(s) without used resources`);
+                }
             }
 
             images.forEach(image => {
@@ -1852,6 +1872,12 @@ class Controller {
                 const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
+                if (hiddenImages) {
+                    const hiddenTextBase = window.languagePack?.text?.hiddenImages ?? 'Some images were hidden due to the selected filter settings ({count})';
+                    const units = window.languagePack?.units?.image ?? ['image', 'images', 'images'];
+                    const text = hiddenTextBase.replace('{count}', `${hiddenImages} ${escapeHtml(pluralize(hiddenImages, units))}`);
+                    insertElement('span', loadNoMore, { class: 'darker-text' }, text);
+                }
             }
         };
 
@@ -1960,6 +1986,7 @@ class Controller {
             const pageNavigation = this.#pageNavigation;
             imagesMetaById = new Map();
             postsById = new Map();
+            hiddenImages = 0;
 
             if (cache.imagesFilter === this.#state.imagesFilter && cache.images) {
                 console.log('Loading images (nav cache)');
@@ -2369,8 +2396,11 @@ class Controller {
             { type: 'other',    regex: /[^\s\w]/y },
         ];
 
-        // Some prompts are hard to read due to missing spaces after commas
-        const text = codeElement.textContent.replace(/(,)(?!\s)/g, '$1 ').trim();
+        const text = codeElement.textContent
+            .replace(/(,)(?!\s)/g, '$1 ') // Some prompts are hard to read due to missing spaces after commas
+            .replace(/\s+/g, ' ') // Collapse bloated spaces
+            .replace(/\n\s*\n\s*\n/g, '\n\n') // Collapse bloated line breaks
+            .trim();
         const tokens = [];
         let pos = 0;
 
@@ -2457,6 +2487,12 @@ class Controller {
 
             if (type === 'lora') {
                 insertElement('span', weightContainer, { class: 'lora' }, value);
+                // const span = insertElement('span', weightContainer, { class: 'lora' }, '<lora:');
+                // const indexEnd = value.lastIndexOf(':');
+                // insertElement('span', span, { class: 'lora-name' }, value.substring('<lora:'.length, indexEnd));
+                // span.appendChild(document.createTextNode(':'));
+                // insertElement('span', span, { class: 'lora-weight' }, value.substring(indexEnd + 1, value.length - 1));
+                // span.appendChild(document.createTextNode('>'));
             } else if (type === 'link') {
                 if (isURL(value)) insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
                 else insertElement('span', weightContainer, { class: 'link' }, value);
@@ -2722,10 +2758,16 @@ class Controller {
                     { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber, unit: 'heart' },
                     { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
                 ];
-                infoContainer.appendChild(this.#genStats(statsList, true));
+
+                const statsFragment = this.#genStats(statsList, true);
 
                 // NSFW LEvel
-                if (media.nsfwLevel !== 'None') insertElement('div', infoContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+                if (media.nsfwLevel !== 'None') {
+                    const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+                    statsFragment.prepend(nsfwBadge);
+                }
+
+                infoContainer.appendChild(statsFragment);
             };
             const loadRemixImage = () => {
                 const cachedMedia = this.#cache.images.get(`${meta?.extra?.remixOfId}`);
@@ -2739,6 +2781,10 @@ class Controller {
                 .then(media => {
                     this.#cache.images.set(`${media.id}`, media);
                     inertRemixImage(media);
+                }).catch(() => {
+                    const remixError = createElement('span', { class: 'meta-remixOfId error-text', style: 'height: 2em; opacity: .7;' }, ' Remix of non-existent image');
+                    remixError.prepend(getIcon('cross'));
+                    remixContainer.replaceWith(remixError);
                 });
             };
 
@@ -2880,7 +2926,7 @@ class Controller {
         meta.civitaiResources?.forEach(addResourceToList);
         meta.resources?.forEach(addResourceToList);
         meta.additionalResources?.forEach(addResourceToList);
-        if (meta.hashes) Object.keys(meta.hashes)?.forEach(key => addResourceToList({ hash: meta.hashes[key], name: key }));
+        if (meta.hashes) Object.keys(meta.hashes).forEach(key => addResourceToList({ hash: meta.hashes[key], name: key }));
         // if (meta['TI hashes']) Object.keys(meta['TI hashes'])?.forEach(key => addResourceToList({ hash: meta['TI hashes'][key], name: key })); // There always seem to be no models for these hashes on CivitAI // The image where this key was seen: 82695882
         if (meta['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
 
@@ -2908,14 +2954,16 @@ class Controller {
 
                 const el = createElement(href ? 'a' : 'div', { class: 'meta-resource' });
                 if (href) el.href = href;
-                const titleElement = insertElement('span', el, { class: 'meta-resource-name link-preview-position' }, `${title} ` );
-                insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': escapeHtml(baseModel) }, type);
-                if(version) insertElement('strong', titleElement, undefined, version)
+                const titleElement = insertElement('span', el, { class: 'meta-resource-name link-preview-position' });
+                insertElement('span', titleElement, { class: 'model-name' }, title);
+                titleElement.appendChild(document.createTextNode(' '));
+                if(version) insertElement('strong', titleElement, { class: 'model-version-name' }, version);
                 if (weight !== 1) {
                     const weightRounded = +weight.toFixed(4);
                     const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, weightRounded);
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', escapeHtml(weight));
                 }
+                insertElement('span', el, { class: 'meta-resource-type', 'lilpipe-text': escapeHtml(baseModel) }, type);
                 return el;
             };
             const replaceResourceRow = (info, item, el) => {
@@ -2948,34 +2996,24 @@ class Controller {
             const processResources = items => {
                 items = items.filter(Boolean);
                 const trainedWords = new Set();
-                const rawTooltips = {};
+                const triggerResources = {};
                 console.log('Loaded resources', items);
 
                 items.forEach(item => {
                     const type = item?.model?.type;
-                    if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length) return;
-
-                    const modelName = item.model.name;
-                    if (!modelName) return;
+                    if (!type || (type !== 'LORA' && type !== 'TextualInversion') || !item?.trainedWords?.length || !item.model.name) return;
 
                     item.trainedWords.forEach(word => {
                         word = word.indexOf(',') === -1 ? word.trim() : word.replace(/(,)(?!\s)/g, '$1 ').trim(); // This is necessary because the prompt block is formatted in a similar way
                         const splitWords = word.split(',').map(w => w.trim()).filter(Boolean);
 
                         splitWords.forEach(w => {
+                            w = w.toLowerCase();
                             trainedWords.add(w);
-                            if (!rawTooltips[w]) rawTooltips[w] = new Set();
-                            rawTooltips[w].add(modelName);
+                            if (!triggerResources[w]) triggerResources[w] = new Set();
+                            triggerResources[w].add(item);
                         });
                     });
-                });
-
-                const triggerTooltips = {};
-                trainedWords.forEach(word => {
-                    if (rawTooltips[word]) {
-                        const words = Array.from(rawTooltips[word]);
-                        triggerTooltips[word.toLowerCase()] = words.length > 1 ? `<ul>${words.map(w => `<li>${w}</li>`).join('')}</ul>` : words[0];
-                    }
                 });
 
                 if (!trainedWords.size || SETTINGS.disablePromptFormatting) return;
@@ -2993,6 +3031,8 @@ class Controller {
                         if (node.classList.contains('weight-container')) addTextNodesFromElement(node, out);
                     });
                 };
+
+                const resourceToTooltip = item => `<span class="meta-resource-name"><span class="model-name">${escapeHtml(item.model.name)}</span> <strong class="model-version-name">${escapeHtml(item.name)}</strong></span>`;
 
                 codeBlocks.forEach(code => {
                     const children = [];
@@ -3014,7 +3054,7 @@ class Controller {
                                     key = parts.join(':');
                                 }
                             }
-                            if (sortedWords.includes(key)) matches.push({ key, index: i + tag.search(/\S|$/) });
+                            if (sortedWords.includes(key.toLowerCase())) matches.push({ key, index: i + tag.search(/\S|$/) });
                             i += tag.length;
                         });
 
@@ -3031,8 +3071,12 @@ class Controller {
 
                             const span = insertElement('span', fragment, { class: 'trigger' }, key);
 
-                            const tooltip = triggerTooltips[key.toLowerCase()];
-                            if (tooltip) span.setAttribute('lilpipe-text', escapeHtml(tooltip));
+                            const models = triggerResources[key.toLowerCase()];
+                            if (models && models.size) {
+                                const tooltip = models.size > 1 ? `<ul>${Array.from(models).map(m => `<li>${resourceToTooltip(m)}</li>`).join('')}</ul>` : resourceToTooltip(models.values().next().value);
+                                span.setAttribute('lilpipe-text', tooltip);
+                                span.setAttribute('lilpipe-type', 'trigger-word-model');
+                            }
 
                             lastIndex = index + key.length;
                         });
@@ -3575,6 +3619,18 @@ class Controller {
         requiredNegativePrompt.element.classList.add('list-filter');
         metadataContiner.appendChild(requiredNegativePrompt.element);
 
+        // Hide without negative prompt
+        const requiredResources = this.#genBoolean({
+            onchange: ({ newValue }) => {
+                SETTINGS.hideImagesWithoutResources = newValue;
+                onAnyChange?.();
+            },
+            value: SETTINGS.hideImagesWithoutResources,
+            label: window.languagePack?.text?.hideImagesWithoutResources ?? 'Hide without resources'
+        });
+        requiredResources.element.classList.add('list-filter');
+        metadataContiner.appendChild(requiredResources.element);
+
 
         // Sort list
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
@@ -3760,8 +3816,17 @@ class Controller {
     static #genScrollToTopButton() {
         const button = createElement('button', { class: 'scroll-page-to-top' });
         button.appendChild(getIcon('arrow_up_alt'));
-        button.addEventListener('click', () => {
-            document.documentElement.scrollTo({ top: 0, behavior: 'smooth' });
+        button.addEventListener('click', e => {
+            let scrollTop = 0;
+
+            if (e.altKey) {
+                scrollTop = document.getElementById('images-list')?.offsetTop;
+                scrollTop = Math.max(scrollTop - 200, 0);
+            }
+
+            if (scrollTop > 0 && Math.abs(document.documentElement.scrollTop - scrollTop) < 100) scrollTop = 0;
+
+            document.documentElement.scrollTo({ top: scrollTop, behavior: 'smooth' });
         }, { passive: true });
         return button;
     }
@@ -4208,7 +4273,7 @@ const videPlaybackObserver = new IntersectionObserver(entries => {
             mediaContainer.removeAttribute('data-autoplay');
         }
     });
-}, { threshold: .25 });
+}, { threshold: .35 });
 
 function enableAutoPlayOnVisible(mediaContainer) {
     if (videPlaybackObservedElements.has(mediaContainer)) return;
@@ -4293,6 +4358,19 @@ function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
             resolve({ ok: false, error: err });
         }
     });
+}
+
+// Messages from SW
+function onMessage(e) {
+    const data = e.data ?? {};
+    if (
+        data.type === 'CACHE_UPDATED'
+        && (data.url === `${location.origin}/` || data.url === `${location.origin}/index.html`)
+        && sessionStorage.getItem('civitai-lite-viewer--versionChanged') !== 'true'
+    ) {
+        sessionStorage.setItem('civitai-lite-viewer--versionChanged', 'true');
+        location.reload();
+    }
 }
 
 
@@ -4436,6 +4514,7 @@ function onBodyClick(e) {
             if (localUrl) {
                 e.preventDefault();
                 gotoLocalLink(localUrl);
+                return;
             }
         }
     }
@@ -4449,20 +4528,39 @@ function onBodyClick(e) {
     }
 }
 
-function onBodyMousedown(e) {
-    if (e.ctrlKey || e.altKey) return;
-    if (e.button === 0) {
-        const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
-        if (href) Controller.preparePage(href);
-    }
+function onBodyPointerDown(e) {
+    if (e.ctrlKey || e.altKey || (e.pointerType === 'mouse' && e.button !== 0)) return;
+
+    const link = e.target.closest('a[href^="#"]:not([target="_blank"])');
+    if (!link) return;
+
+    const href = link.getAttribute('href');
+
+    if (e.pointerType !== 'touch') return Controller.preparePage(href);
+
+    let touchTimer = null;
+
+    const cleanup = () => {
+        clearTimeout(touchTimer);
+        link.removeEventListener('pointermove', cleanup);
+        link.removeEventListener('pointerup', cleanup);
+        link.removeEventListener('pointercancel', cleanup);
+    };
+
+    touchTimer = setTimeout(() => {
+        Controller.preparePage(href);
+        touchTimer = null;
+    }, 100);
+
+    link.addEventListener('pointermove', cleanup, { once: true });
+    link.addEventListener('pointerup', cleanup, { once: true });
+    link.addEventListener('pointercancel', cleanup, { once: true });
 }
 
 // TODO: check for animation in images
-function onBodyMouseOver(e) {
-    if (e.sourceCapabilities?.firesTouchEvents) return;
-
+function onBodyPointerOver(e) {
     // tooltips
-    const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed])');
+    const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     if (lilpipe) {
         e.eventTarget = lilpipe;
         return startLilpipeEvent(e);
@@ -4489,7 +4587,7 @@ function onBodyMouseOver(e) {
 
 function onBodyFocus(e) {
     // tooltips
-    const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed])');
+    const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     if (lilpipe) {
         e.eventTarget = lilpipe;
         return startLilpipeEvent(e, { fromFocus: true });
@@ -4874,7 +4972,7 @@ function showOriginalImage(target) {
 
     const hideOriginalImage = () => {
         target.removeEventListener('blur', hideOriginalImage);
-        target.removeEventListener('mouseleave', hideOriginalImage);
+        target.removeEventListener('pointerleave', hideOriginalImage);
 
         images.forEach(img => {
             if (!img.isConnected) return;
@@ -4906,7 +5004,7 @@ function showOriginalImage(target) {
     });
 
     target.addEventListener('blur', hideOriginalImage, { passive: true });
-    target.addEventListener('mouseleave', hideOriginalImage, { passive: true });
+    target.addEventListener('pointerleave', hideOriginalImage, { passive: true });
 }
 
 function replaceImageElement(img, newUrl, options) {
@@ -4959,7 +5057,7 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
     }, 200);
 
     target.addEventListener('blur', stopVideoPlayEvent, { passive: true });
-    target.addEventListener('mouseleave', stopVideoPlayEvent, { passive: true });
+    target.addEventListener('pointerleave', stopVideoPlayEvent, { passive: true });
 }
 
 function stopVideoPlayEvent(e) {
@@ -4970,7 +5068,7 @@ function stopVideoPlayEvent(e) {
         container.removeAttribute('data-focus-play');
     }
     e.target.removeEventListener('blur', stopVideoPlayEvent);
-    e.target.removeEventListener('mouseleave', stopVideoPlayEvent);
+    e.target.removeEventListener('pointerleave', stopVideoPlayEvent);
 }
 
 function startLinkPreviewEvent(e, options = { fromFocus: false }) {
@@ -5010,30 +5108,89 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
     const target = e.eventTarget;
     const animationDuration = 150;
 
-    // Remove old tooltip
-    document.getElementById('tooltip')?.remove();
-    document.querySelectorAll('[lilpipe-showed]')?.forEach(item => item.removeAttribute('lilpipe-showed'));
     if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
     prevLilpipeTimer = null;
 
     // Prepare tooltip
-    const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
-    const type = options.type || target.getAttribute('lilpipe-type');
-    const delay = e.altKey || options.fromFocus ? 0 : options.delay !== null ? Number(options.delay) : Number(target.getAttribute('lilpipe-delay') ?? 400);
-    const tooltip = createElement('div', { id: 'tooltip', class: `tooltip tooltip-${type ?? 'default'}` });
+    const type = options.type || target.getAttribute('lilpipe-type') || 'default';
+    const tooltip = createElement('div', { id: 'tooltip', class: `tooltip tooltip-${type}` });
+
     if (options.element && options.element instanceof HTMLElement) tooltip.appendChild(options.element);
     else tooltip.innerHTML = target.getAttribute('lilpipe-text') || '';
 
-    // Add tooltip to page
-    target.setAttribute('lilpipe-showed', '');
-    const parent = target.closest('dialog') ?? document.body;
-    parent.appendChild(tooltip);
+    const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
+    const render = () => {
+        // Remove old tooltip
+        document.getElementById('tooltip')?.remove();
+        document.querySelectorAll('[lilpipe-showed],[lilpipe-showed-delay]')?.forEach(item => {item.removeAttribute('lilpipe-showed-delay'); item.removeAttribute('lilpipe-showed')});
 
-    const tH = Math.ceil(tooltip.offsetHeight);
-    const tW = Math.ceil(tooltip.offsetWidth);
-    const wW = window.innerWidth;
+        // Append new tooltip
+        target.setAttribute('lilpipe-showed', '');
+        const parent = target.closest('dialog') ?? document.body;
+        parent.appendChild(tooltip);
 
-    const onmouseleave = () => {
+        // Place new tooltip
+        const tH = Math.ceil(tooltip.offsetHeight);
+        const tW = Math.ceil(tooltip.offsetWidth);
+        const wW = window.innerWidth;
+
+        let rect = positionTarget.getBoundingClientRect();
+        const style = window.getComputedStyle(positionTarget);
+
+        if (style.display === 'inline') {
+            const rects = positionTarget.getClientRects();
+            if (rects.length > 1) {
+                const cX = e.clientX;
+                const cY = e.clientY;
+                let minDistance = Infinity;
+                let closestRect = rects[0];
+
+                for (const r of rects) {
+                    const centerX = r.left + r.width / 2;
+                    const centerY = r.top + r.height / 2;
+                    const distance = Math.pow(cX - centerX, 2) + Math.pow(cY - centerY, 2);
+
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestRect = r;
+                    }
+                }
+                rect = closestRect;
+            }
+        }
+
+        const { left, top, width, height } = rect;
+
+        const targetX = left + width/2 - tW/2;
+        const targetY = top - tH - 8;
+        const isBelow = targetY < 0;
+        const newX = targetX < 0 ? 0 : targetX + tW > wW ? wW - tW - 8 : targetX;
+        const newY = isBelow ? top + height + 8 : targetY;
+        const offsetX = targetX - newX;
+
+        tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
+        if (isBelow) tooltip.setAttribute('tooltip-below', '');
+
+        // Animate new tooltip
+        tooltip.setAttribute('data-animation', 'in');
+        setTimeout(() => {
+            if (tooltip.offsetParent !== null && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
+        }, animationDuration);
+    };
+
+    const delay = e.altKey || options.fromFocus ? 0 : typeof options.delay === 'number' ? options.delay : Number(target.getAttribute('lilpipe-delay') ?? 400);
+    if (delay > 0 && Date.now() - prevLilpipeEvenetTime > 400) {
+        target.setAttribute('lilpipe-showed-delay', '');
+        prevLilpipeTimer = setTimeout(() => {
+            prevLilpipeTimer = null;
+            if (!document.body.contains(target) || !target.hasAttribute('lilpipe-showed-delay')) return;
+
+            target.removeAttribute('lilpipe-showed-delay');
+            render();
+        }, delay);
+    } else render();
+
+    const onpointerleave = () => {
         if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
         else prevLilpipeEvenetTime = Date.now();
 
@@ -5043,39 +5200,8 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
         setTimeout(() => tooltip.remove?.(), 100);
     };
 
-    const { left, top, width, height } = positionTarget.getBoundingClientRect();
-    const targetX = left + width/2 - tW/2;
-    const targetY = top - tH - 8;
-    const isBelow = targetY < 0;
-    const newX = targetX < 0 ? 0 : targetX + tW > wW ? wW - tW - 8 : targetX;
-    const newY = isBelow ? top + height + 8 : targetY;
-    const offsetX = targetX - newX;
-
-    const startAnimation = () => {
-        tooltip.setAttribute('data-animation', 'in');
-        setTimeout(() => {
-            if (tooltip.offsetParent !== null && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
-        }, animationDuration);
-    };
-
-    tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
-    if (isBelow) tooltip.setAttribute('tooltip-below', '');
-
-    if (delay && Date.now() - prevLilpipeEvenetTime > 400) {
-        tooltip.remove();
-        target.setAttribute('lilpipe-showed-delay', '');
-        prevLilpipeTimer = setTimeout(() => {
-            prevLilpipeTimer = null;
-            if (!document.body.contains(target)) return;
-
-            target.removeAttribute('lilpipe-showed-delay');
-            parent.appendChild(tooltip);
-            startAnimation();
-        }, delay);
-    } else startAnimation();
-
-    if (options.fromFocus) target.addEventListener('blur', onmouseleave, { once: true, capture: true });
-    else target.addEventListener('mouseleave', onmouseleave, { once: true });
+    if (options.fromFocus) target.addEventListener('blur', onpointerleave, { once: true, capture: true });
+    else target.addEventListener('pointerleave', onpointerleave, { once: true });
 }
 
 // =================================
@@ -5133,9 +5259,9 @@ function init() {
     // };
 
     document.body.addEventListener('click', onBodyClick);
-    document.body.addEventListener('pointerdown', onBodyMousedown, { passive: true });
+    document.body.addEventListener('pointerdown', onBodyPointerDown, { passive: true });
     document.body.addEventListener('focus', onBodyFocus, { capture: true, passive: true });
-    document.body.addEventListener('mouseover', onBodyMouseOver, { passive: true, passive: true });
+    document.body.addEventListener('pointerover', onBodyPointerOver, { passive: true });
     document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('canplay', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('dragover', onDragover);
@@ -5143,13 +5269,14 @@ function init() {
     document.body.addEventListener('dragenter', onDragenter);
     document.body.addEventListener('dragleave', onDragleave);
     document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });
-    document.addEventListener('scroll', onScroll, { passive: true });
     document.addEventListener('dragstart', onDragstart);
-    window.addEventListener('resize', onResize, { passive: true });
+    document.addEventListener('scroll', onScroll, { passive: true });
     // document.addEventListener('scroll', rAFcreateCallback('scroll', onScroll), { passive: true });
+    window.addEventListener('resize', onResize, { passive: true });
     // window.addEventListener('resize', rAFcreateCallback('resize', onResize), { passive: true });
     window.addEventListener('popstate', onPopState, { passive: true });
     document.getElementById('language-toggle')?.addEventListener('click', languageToggleClick, { passive: true });
+    navigator.serviceWorker.addEventListener('message', onMessage);
 }
 
 (function waitForBody() {
