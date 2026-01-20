@@ -33,6 +33,8 @@
         "hiddenImages": "Некоторые изображения были скрыты из-за выбранных настроек фильтрации ({count})",
         "language": "Язык",
         "sortOptions": {
+            "Most Bookmarks": "Больше закладок",
+            "Recently Updated": "Недавно обновлённые",
             "Highest Rated": "Высший рейтинг",
             "Most Downloaded": "Больше загрузок",
             "Most Liked": "Больше лайков",
@@ -126,6 +128,9 @@
                 "linkNotSupported": "Эта ссылка не поддерживается",
                 "wipPlaceholder": "[WIP] В разработке, пока что только конвертация ссылок и поиск по хэшу"
             },
+            "hideFurry": "Скрыть Фурри",
+            "hideExtreme": "Скрыть Странное/Экстрим",
+            "hideGay": "Скрыть Gay/Yaoi",
             "settingsDescription": "Настройки",
             "blackListTagsDescription": "Список тегов которые нужно скрывать (через запятую)",
             "blackListTagsNote": "Это работает только на список моделей, т.к. API изображений не возвращает список тегов.",

@@ -1,7 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 26,
+    version: 27,
+    extensionVertsion: 1,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -15,6 +16,8 @@ const CONFIG = {
     },
     langauges: [ 'en', 'ru', 'zh', 'uk' ],
     appearance_normal: {
+        appWidth: 1200,
+        appWidth_small: 800,
         descriptionMaxWidth: 800,
         imageCard: {
             width: 360,
@@ -33,6 +36,8 @@ const CONFIG = {
         blurHashSize: 32, // minimum size of blur preview
     },
     appearance_small: {
+        appWidth: 1200,
+        appWidth_small: 800,
         descriptionMaxWidth: 800,
         imageCard: {
             width: 360,
@@ -53,7 +58,29 @@ const CONFIG = {
     appearance: {},
     perRequestLimits: {
         models: 60,
-        images: 180
+        images: 180,
+        articles: 60,
+    },
+    filters: {
+        minPromptLength: 10,
+        tagBlacklistPresetKeys: [ 'hideFurry', 'hideExtreme', 'hideGay' ],
+        tagBlacklistPresets: {
+            hideFurry: [
+                "+5140" // furry
+            ],
+            hideExtreme: [
+                "+2637|5219|5510" // "huge ass" or "huge breasts" or "gigantic breasts" (aka inflation)
+            ],
+            hideGay: [
+                "+3822", // "yaoi"
+                "+114923+304|2013", // "male focus" and "nude" or "nudity"
+                // "+5262+308", // "solo" and "penis" ?
+                "+279" // "futanari"
+            ],
+            hideGay_nsfw: [ // Mature+
+                "+114923+5262|3852" // "male focus" and "solo"
+            ]
+        }
     },
     minDateForNewBadge: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days model "new" (Dates are in ISO format, so they can be compared as strings)
     timeOut: 20000, // 20 sec (ms)
@@ -70,24 +97,72 @@ const SETTINGS = {
     types: [ 'Checkpoint' ],
     sort: 'Highest Rated',
     sort_images: 'Newest',
+    sort_articles: 'Newest',
     period: 'Month',
     period_images: 'AllTime',
+    period_articles: 'AllTime',
     baseModels: [],
     blackListTags: [], // Doesn't work on images (pictures don't have tags)
+    blackListTagIds: [], // With the extension from the "apiProxyExtension" folder, you can filter images by tag ID
     nsfw: true,
     nsfwLevel: 'Mature',
     browsingLevel: 4,
     groupImagesByPost: true,
     showCurrentModelVersionStats: true,
+    hideFurry: false,
+    hideGay: false,
+    hideExtreme: false,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
     hideImagesWithoutResources: false,
     colorCorrection: true,
+    showLogs: true,
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     disableVirtualScroll: false,    // Completely disable virtual scroll
     assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
+    assumeListSameAsImage: true,    // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
 };
+
+// Some tagIds
+// TODO: List of tags in a JSON file?
+//  304: nude
+//  2013: nudity
+//  5262: solo
+//  3852: solo focus
+//  5231: male
+//  5133: woman
+//  114923: male focus
+//  308: penis
+//  3822: yaoi
+//  5140: furry
+//  1723: fat
+//  2636: plump
+//  122803: big belly
+//  2637: huge ass
+//  5219: huge breasts
+//  5510: gigantic breasts
+//  279: futanari
+//  882: bdsm
+//  511: bondage
+//
+// To get tags and tagIds from image
+//  https://civitai.com/api/trpc/tag.getVotableTags?input=%7B%22json%22%3A%7B%22id%22%3A{imageId}%2C%22type%22%3A%22image%22%2C%22authed%22%3Atrue%7D%7D
+
+
+const DEVMODE = Boolean(localStorage.getItem('civitai-lite-viewer--devmode'));
+const EXTENSION_INSTALLED = Boolean(window.proxyFetchCivAPI);
+
+// If the extension is installed, the content in the feed and when loaded separately are different, so they cannot be interchanged
+if (EXTENSION_INSTALLED) {
+    SETTINGS.assumeListSameAsImage = false;
+    SETTINGS.assumeListSameAsModel = false;
+    if (CONFIG.extensionVertsion !== window.extension_civitaiExtensionProxyAPI_vertsion) {
+        document.addEventListener('DOMContentLoaded', () => {
+            notify('Outdated version of the extension', 'warning');
+        }, { once: true });
+    }
+}
 
 Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
 
@@ -102,7 +177,7 @@ Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settin
 
 navigator.serviceWorker.register(`service_worker.js?v=${Number(CONFIG.version)}`, { scope: './' });
 
-class CivitaiAPI {
+class CivitaiPublicAPI {
     // https://github.com/civitai/civitai/tree/main/src/pages/api/v1
 
     constructor(baseURL = CONFIG.api_url) {
@@ -114,7 +189,6 @@ class CivitaiAPI {
             const headers = {
                 'Accept': 'application/json'
             };
-            // if (SETTINGS.api_key) headers['Authorization'] = `Bearer ${SETTINGS.api_key}`; // Need to check
 
             const data = await fetchJSON(url.toString(), { method: 'GET', headers });
             if (data.error) throw new Error(data.error);
@@ -163,8 +237,8 @@ class CivitaiAPI {
         if (favorites) url.searchParams.append('favorites', 'true');
         if (hidden) url.searchParams.append('hidden', 'true');
         if (nsfw) url.searchParams.append('nsfw', nsfw);
-        if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true'); // (see above)
-        if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // ERROR: (see above)
+        // if (primaryFileOnly) url.searchParams.append('primaryFileOnly', 'true'); // (see above)
+        // if (browsingLevel) url.searchParams.append('browsingLevel', browsingLevel); // ERROR: (see above)
         if (status) url.searchParams.append('status', status);
 
         const data = await this.#getJSON({ url, target: 'models' });
@@ -238,10 +312,336 @@ class CivitaiAPI {
     }
 }
 
+// WIP
+/**
+ * The original API class with modified requests via an iframe proxy
+ * (with responses converted to the original format)
+ */
+class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
+    constructor(baseURL) {
+        super(baseURL);
+        this.IMAGE_CDN_ROOT = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA";
+        console.log(`[API Bridge] Uses the civitai.com original API instead of the public one`);
+    }
+
+    async #getJSON({ route, params, target }) {
+        try {
+            const data = await window.proxyFetchCivAPI(route, params);
+            // console.log('[API Bridge] Raw Data', data);
+
+            if (data.error) throw new Error(data.error);
+
+            return data.response?.result?.data ?? data.response;
+        } catch (error) {
+            console.log(`Failed to fetch ${target ?? 'something'}:`, error?.message ?? error);
+            throw error;
+        }
+    }
+
+    // "1de4c2db-54a0-4fed-994f-45604bbdf0bc" --> url
+    #convertUrlIdToUrl({ urlId, itemId, width = 450 }) {
+        if (!urlId) return '';
+        if (urlId.startsWith('http')) return urlId;
+        return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}`;
+    }
+
+    #prepareUserBlock(user = {}) {
+        if (!user || typeof user !== 'object') return {};
+
+        if (user.deletedAt) {
+            return {
+                userId: user.id,
+                isModerator: user.isModerator || false,
+                deletedAt: user.deletedAt,
+                username: '[deleted]'
+            };
+        }
+
+        const urlId = user.profilePicture?.url || user.image;
+
+        return {
+            userId: user.id,
+            isModerator: user.isModerator || false,
+            username: user.username || '[username]',
+            image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
+            imageMeta: user.profilePicture ? {
+                hash: user.profilePicture.hash ?? null,
+                width: user.profilePicture.width ?? null,
+                height: user.profilePicture.height ?? null,
+            } : null,
+        };
+    }
+
+    #prepareStats(rawStats) {
+        if (!rawStats || typeof rawStats !== 'object') return {};
+
+        return Object.keys(rawStats).reduce((acc, key) => {
+            const normalizedKey = key.replace(/AllTime$/, '');
+            const value = rawStats[key];
+            if (typeof value === 'number' && !isNaN(value)) acc[normalizedKey] = value;
+            return acc;
+        }, {});
+    }
+
+    #prepareMedia(media) {
+        if (!media || typeof media !== 'object') return null;
+
+        return {
+            url: !media.url || media.url?.startsWith('https:') ? media.url : this.#convertUrlIdToUrl({ urlId: media.url, width: 450, itemId: media.id }),
+            hash: media.hash,
+            width: media.width,
+            height: media.height,
+            nsfwLevel: media.nsfwLevel,
+            id: media.id,
+            tags: [],
+            tagIds: media.tags,
+            type: media.type,
+            createdAt: media.createdAt
+        };
+    }
+
+    #convertContentToHtml(node) {
+        if (!node) return '';
+
+        // text
+        if (node.type === 'text') {
+            let text = node.text || '';
+            // (bold, italic, code, etc.)
+            if (node.marks) {
+                node.marks.forEach(mark => {
+                    if (mark.type === 'bold') text = `<strong>${text}</strong>`;
+                    if (mark.type === 'italic') text = `<em>${text}</em>`;
+                    if (mark.type === 'underline') text = `<u>${text}</u>`;
+                    if (mark.type === 'strike') text = `<del>${text}</del>`;
+                    if (mark.type === 'code') text = `<code>${text}</code>`;
+                    if (mark.type === 'highlight') text = `<mark>${text}</mark>`;
+                    if (mark.type === 'textStyle') {
+                        const attrs = mark.attrs || {};
+                        const styles = [];
+                        if (attrs.color) styles.push(`color: ${attrs.color}`);
+                        if (attrs.backgroundColor) styles.push(`background-color: ${attrs.backgroundColor}`);
+                        if (attrs.fontFamily) styles.push(`font-family: ${attrs.fontFamily}`);
+                        if (attrs.fontSize) styles.push(`font-size: ${attrs.fontSize}`);
+                        if (attrs.lineHeight) styles.push(`line-height: ${attrs.lineHeight}`);
+                        text = styles.length > 0 ? `<span style="${styles.join('; ')}">${text}</span>` : text;
+                    }
+                    if (mark.type === 'link') {
+                        const href = mark.attrs?.href || '#';
+                        text = `<a href="${href}" target="_blank" rel="nofollow noopener">${text}</a>`;
+                    }
+                });
+            }
+            return text;
+        }
+
+        // parse
+        const childrenHtml = node.content ? node.content.map(child => this.#convertContentToHtml(child)).join('') : '';
+
+        // blocks
+        switch (node.type) {
+            case 'doc':
+                return childrenHtml;
+                // return `<div>${childrenHtml}</div>`;
+            case 'paragraph':
+                return `<p>${childrenHtml}</p>`;
+            case 'heading':
+                const level = node.attrs?.level || 1;
+                return `<h${level}>${childrenHtml}</h${level}>`;
+            case 'bulletList':
+                return `<ul>${childrenHtml}</ul>`;
+            case 'orderedList':
+                return `<ol>${childrenHtml}</ol>`;
+            case 'listItem':
+                return `<li>${childrenHtml}</li>`;
+            case 'blockquote':
+                return `<blockquote>${childrenHtml}</blockquote>`;
+            case 'codeBlock':
+                return `<pre><code>${childrenHtml}</code></pre>`;
+            case 'horizontalRule':
+                return `<hr />`;
+            case 'hardBreak':
+                return `<br />`;
+            case 'media':
+                const type = node.attrs?.type || '';
+                const urlId = node.attrs?.url || '';
+                const filename = node.attrs?.filename || '';
+                const url = this.#convertUrlIdToUrl({ urlId, itemId: encodeURIComponent(filename), width: 525 });
+                if (type === 'image') return `<img src="${url}" alt="${filename}" style="max-width: 100%;" />`;
+                if (type === 'video') return `<video controls src="${url}" style="max-width: 100%;"></video>`;
+            case 'image':
+                const src = node.attrs?.src || '';
+                const alt = node.attrs?.alt || '';
+                return `<img src="${src}" alt="${alt}" style="max-width: 100%;" />`;
+            case 'video':
+                return `<video controls src="${node.attrs?.src}" style="max-width: 100%;"></video>`;
+            default:
+                console.log(node);
+                return childrenHtml;
+        }
+    }
+
+    async fetchImages(options = {}) {
+        const {
+            limit = 20, // 0 ... 100
+            cursor,
+            modelVersionId,
+            postId,
+            username = '',
+            browsingLevel,
+            sort = '',
+            period = '',
+        } = options;
+
+        const input = {
+            json: {
+                periodMode: 'published',
+                useIndex: true,
+                include: ["cosmetics", "meta"],
+                excludedTagIds: [],
+                // authed: true,
+                cursor
+            }
+        };
+
+        if (period) input.json.period = period;
+        if (sort) input.json.sort = sort;
+        // if (browsingLevel) input.json.browsingLevel = browsingLevel; // Error: Strict limitation: i.e. if you specify Mature, it will be ONLY Mature, instead of Soft + Mature
+        if (limit) input.json.limit = Math.min(limit, 100);
+        if (modelVersionId) input.json.modelVersionId = modelVersionId;
+        if (postId) input.json.postId = +postId;
+        if (username) input.json.username = username;
+
+        const data = (await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' })).json;
+
+        const items = data.items.map(item => {
+            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+            if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
+
+            return {
+                id: item.id,
+                hash: item.hash,
+                meta: item.hasMeta ? item.meta || {
+                    prompt: item.hasPositivePrompt ? `[Fake prompt, the API says there should be something here, but it didn't return anything]` : null,
+                    negativePrompt: `[Fake prompt, API returned nothing]`,
+                    civitaiResources: [ ...(item.modelVersionIds || []), ...(item.modelVersionIdsManual || []) ].map(id => ({ modelVersionId: id })),
+                } : null,
+                postId: item.postId,
+                userId: item.user?.id,
+                username: item.user?.username || '[username]',
+                tags: [],
+                tagIds: item.tagIds,
+                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, itemId: item.id, width: 450 }),
+                width: item.width,
+                height: item.height,
+                nsfwLevel: item.nsfwLevel,
+                browsingLevel: item.nsfwLevel,
+                type: item.type,
+                createdAt: item.createdAt,
+                publishedAt: item.publishedAt,
+                stats: this.#prepareStats(item.stats)
+            };
+        }).filter(Boolean);
+
+        return {
+            items,
+            metadata: {
+                nextCursor: data.nextCursor
+            }
+        };
+    }
+
+    async fetchArticles(options = {}) {
+        const {
+            limit = 20, // 0 ... 100
+            cursor,
+            username = '',
+            tags = [],
+            browsingLevel,
+            sort = '',
+            period = '',
+        } = options;
+
+        const input = {
+            json: {
+                periodMode: 'published',
+                include: ["cosmetics", "meta"],
+                excludedTagIds: [],
+                // authed: true,
+                cursor,
+            }
+        };
+
+        if (period) input.json.period = period;
+        if (sort) input.json.sort = sort;
+        // if (browsingLevel) json.browsingLevel = browsingLevel; // Error: Strict limitation: i.e. if you specify Mature, it will be ONLY Mature, instead of Soft + Mature
+        if (limit) input.json.limit = Math.min(limit, 100);
+        if (username) input.json.username = String(username);
+        if (tags.length > 0 && !tags.some(t => typeof t !== 'number' || isNaN(t))) input.json.tags = tags;
+
+        const data = (await this.#getJSON({ route: 'article.getInfinite', params: { input }, target: 'articles' })).json;
+
+        const items = data.items.map(item => {
+            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+            if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
+
+            return {
+                id: item.id,
+                title: item.title,
+                category: item.tags?.find(t => t.isCategory)?.name || 'misc',
+                availability: item.availability,
+                userId: item.user?.id,
+                coverImage: this.#prepareMedia(item.coverImage),
+                user: this.#prepareUserBlock(item.user),
+                tags: item.tags?.map(t => t.name) ?? [],
+                tagIds: item.tags?.map(t => t.id) ?? [],
+                nsfwLevel: item.nsfwLevel,
+                publishedAt: item.publishedAt,
+                stats: this.#prepareStats(item.stats)
+            };
+        }).filter(Boolean);
+
+        return {
+            items,
+            metadata: {
+                nextCursor: data.nextCursor
+            }
+        };
+    }
+
+    async fetchArticle(id) {
+        const input = {
+            json: {
+                // authed: true,
+                id: Number(id)
+            }
+        };
+
+        const article = (await this.#getJSON({ route: 'article.getById', params: { input }, target: `article (id: ${id})` })).json;
+
+        return {
+            id: article.id,
+            availability: article.availability,
+            title: article.title,
+            user: this.#prepareUserBlock(article.user),
+            content: article.contentJson ? this.#convertContentToHtml(article.contentJson) : article.content,
+            category: article.tags?.find(t => t.isCategory)?.name || 'misc',
+            attachments: article.attachments,
+            createdAt: article.createdAt,
+            publishedAt: article.publishedAt,
+            updatedAt: article.updatedAt,
+            nsfwLevel: article.nsfwLevel,
+            tags: article.tags?.map(t => t.name) ?? [],
+            tagIds: article.tags?.map(t => t.id) ?? [],
+            coverImage: this.#prepareMedia(article.coverImage),
+            stats: this.#prepareStats(article.stats)
+        };
+    }
+}
+
 // TODO: Normalize the management of the history, I don't like that inside #genImageFullPage the history are touched...
 // TODO: Prerender pages when pointerdown, and show on click
 class Controller {
-    static api = new CivitaiAPI(CONFIG.api_url);
+    static api = EXTENSION_INSTALLED ? new CivitaiExtensionProxyAPI(CONFIG.api_url) : new CivitaiPublicAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
     static #devicePixelRatio = +window.devicePixelRatio.toFixed(2);
     static #errorTimer = null;
@@ -252,6 +652,9 @@ class Controller {
     static #onResize = null;
     static #state = {};
 
+    static windowWidth = 0;
+    static windowHeight = 0;
+
     static #groups = new Map(); // key -> { list, timer }
     static #preClickResults = {};
     static #cachedUserImages = new Map(); // try to reuse user profile images
@@ -260,6 +663,7 @@ class Controller {
         images: new Map(),          // dummy cache for transferring information about images from the list to fullscreen mode
         posts: new Map(),           // dummy cache for transferring information about posts from the list to fullscreen mode
         models: new Map(),          // Cache for quickly obtaining information about models
+        articles: new Map(),        // Cache for quickly obtaining information about articles
         modelVersions: new Map(),   // Cache for quickly obtaining information about model versions
         history: new Map()          // History cache (for fast back and forth)
     };
@@ -273,6 +677,10 @@ class Controller {
             'Flux.1 Krea',
             'Flux.1 S',
             'Flux.2 D',
+            'Flux.2 Klein 9B',
+            'Flux.2 Klein 9B-base',
+            'Flux.2 Klein 4B',
+            'Flux.2 Klein 4B-base',
             'HiDream',
             'Hunyuan 1',
             'Hunyuan Video',
@@ -340,6 +748,8 @@ class Controller {
             'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V A14B',
             'Wan Video 2.2 T2V-A14B': 'Wan 2.2 T2V A14B',
             'Wan Video 2.2 TI2V-5B': 'Wan 2.2 TI2V 5B',
+            'Flux.2 Klein 9B-base': 'Flux.2 Klein 9B Base',
+            'Flux.2 Klein 4B-base': 'Flux.2 Klein 4B Base',
         },
         labels_short: {
             'SD 1.5 LCM': 'SD 1.5 LCM',
@@ -354,6 +764,10 @@ class Controller {
             'Flux.1 Krea': 'F1 Krea',
             'Flux.1 Kontext': 'F1 Ktxt',
             'Flux.2 D': 'F2',
+            'Flux.2 Klein 9B': 'F2 Klein 9B',
+            'Flux.2 Klein 9B-base': 'F2 Klein 9B',
+            'Flux.2 Klein 4B': 'F2 Klein 4B',
+            'Flux.2 Klein 4B-base': 'F2 Klein 4B',
             'Aura Flow': 'Aura',
             'SDXL 1.0': 'XL',
             'SDXL Turbo': 'XL T',
@@ -388,6 +802,10 @@ class Controller {
             'Flux.1 Krea': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'Flux.1 S': ['image', 'weights', 'black-forest-labs', 'multilingual', 'schnell'],
             'Flux.2 D': ['image', 'weights', 'black-forest-labs', 'multilingual', 'dev'],
+            'Flux.2 Klein 9B': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux.2 Klein 9B-base': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux.2 Klein 4B': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux.2 Klein 4B-base': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'HiDream': ['image', 'weights', 'chinese'],
             'Hunyuan 1': ['image', 'weights', 'tencent', 'multilingual'],
             'Hunyuan Video': ['video', 'weights', 'tencent', 'multilingual'],
@@ -474,6 +892,126 @@ class Controller {
             Controlnet: 'ControlNet'
         },
     };
+    static #listFilters = {
+        nsfwOptions: [ 'None', 'Soft', 'Mature', 'X', 'true' ],
+        periodOptions: [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ],
+        browsingLevels: {
+            'None': 1,
+            'Soft': 2,
+            'Mature': 4,
+            'X': 16,
+            'true': 32,
+        },
+        genLabels: (options, langPath, fallbackLabels = {}) => {
+            const lang = langPath ? window.languagePack?.text?.[langPath] ?? {} : {};
+            return Object.fromEntries(options.map(v => [ v, lang[v] ?? fallbackLabels[v] ?? v ]));
+        }
+    };
+
+    static #pages = [
+        { // #home
+            match: ({ pageId }) => pageId === '#home',
+            goto: ({ params }) => {
+                if (params.url) return this.openFromCivitUrl(params.url);
+                return this.gotoHome();
+            }
+        },
+        { // #models
+            match: ({ pageId }) => pageId === '#models',
+            goto: ({ params = {} }) => {
+                if (params.hash) return this.gotoModelByHash(params.hash);
+                if (params.model) return this.gotoModel(params.model, params.version);
+                return this.gotoModels({
+                    tag: params.tag,
+                    query: params.query,
+                    username: params.username || params.user
+                });
+            },
+            prepare: ({ params = {} }) => {
+                if (params.hash) {
+                    if (this.#cache.modelVersions.has(params.hash)) return { key: null, promise: null };
+                    return {
+                        key: params.hash,
+                        promise: this.api.fetchModelVersionInfo(params.hash, true)
+                    };
+                }
+
+                if (params.model) {
+                    if (this.#cache.models.has(`${params.model}`)) return { key: null, promise: null };
+                    return {
+                        key: params.model,
+                        promise: this.api.fetchModelInfo(params.model)
+                    };
+                }
+
+                const query = {
+                    limit: CONFIG.perRequestLimits.models,
+                    tag: params.tag ?? '',
+                    query: params.query,
+                    username: params.username || params.user,
+                    types: SETTINGS.types,
+                    sort: SETTINGS.sort,
+                    period: SETTINGS.period,
+                    checkpointType: SETTINGS.checkpointType,
+                    baseModels: SETTINGS.baseModels,
+                    browsingLevel: SETTINGS.browsingLevel,
+                    nsfw: SETTINGS.nsfw,
+                };
+
+                return {
+                    key: JSON.stringify(query),
+                    promise: this.api.fetchModels(query)
+                };
+            }
+        },
+        { // #articles
+            match: ({ pageId }) => pageId === '#articles',
+            goto: ({ params = {} }) => {
+                if (params.article) return this.gotoArticle(params.article);
+                return this.gotoArticles({
+                    tag: params.tag,
+                    username: params.username,
+                });
+            }
+        },
+        { // #images
+            match: ({ pageId }) => pageId === '#images',
+            goto: ({ params = {} }) => {
+                if (params.image) return this.gotoImage(params.image, params.nsfw);
+
+                if (
+                    params.model ||
+                    params.modelversion ||
+                    params.username ||
+                    params.userId ||
+                    params.user ||
+                    params.post
+                ) {
+                    return this.gotoImages({
+                        userId: params.userId,
+                        modelId: params.model,
+                        modelVersionId: params.modelversion,
+                        username: params.username || params.user,
+                        postId: params.post
+                    });
+                }
+
+                return this.gotoImages();
+            },
+            prepare: ({ params = {} }) => {
+                if (!params.image) return { key: null, promise: null };
+
+                if (!this.#cache.images.has(`${params.image}`)) {
+                    return {
+                        key: params.image,
+                        promise: this.api.fetchImageMeta(params.image, params.nsfw)
+                    };
+                }
+
+                return { key: null, promise: null };
+            }
+        }
+    ];
 
     static updateMainMenu() {
         const menu = document.querySelector('#main-menu .menu');
@@ -527,8 +1065,11 @@ class Controller {
             if (navigationState.id === this.#state.id) {
                 this.appElement.classList.remove('page-loading');
 
-                this.#onScroll?.({ scrollTop: navigationState.scrollTop || 0, scrollTopRelative: navigationState.scrollTopRelative ?? null });
+                this.#onScroll?.({ scrollTop: navigationState.scrollTop || 0, scrollTopRelative: navigationState.scrollTopRelative || 0 });
                 document.documentElement.scrollTo({ top: navigationState.scrollTop || 0, behavior: 'instant' });
+
+                // Clear promises or whatever might have been in the preflight
+                this.#preClickResults = {};
             }
         };
 
@@ -559,78 +1100,40 @@ class Controller {
         this.#errorTimer = setTimeout(showTimeOutError, CONFIG.timeOut);
 
         let promise;
-        if (pageId === '#home') {
-            if (paramString) {
-                try {
-                    const params = Object.fromEntries(new URLSearchParams(paramString));
-                    if (params.url) promise = this.openFromCivitUrl(params.url);
-                    else promise = this.gotoHome();
-                } catch(_) {
-                    promise = this.gotoHome();
-                }
-            } else promise = this.gotoHome();
-        } else if (pageId === '#models') {
-            const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (params.hash) promise = this.gotoModelByHash(params.hash);
-            else if (params.model) promise = this.gotoModel(params.model, params.version);
-            else promise = this.gotoModels({ tag: params.tag, query: params.query, username: params.username || params.user });
-        } else if (pageId === '#articles') promise = this.gotoArticles();
-        else if (pageId === '#images') {
-            const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (params.image) promise = this.gotoImage(params.image, params.nsfw);
-            else if (params.model || params.modelversion || params.username || params.userId || params.user || params.post) {
-                promise = this.gotoImages({ userId: params.userId, modelId: params.model, modelVersionId: params.modelversion, username: params.username || params.user, postId: params.post });
+        const params = parseParams(paramString) || {};
+        for (const page of this.#pages) {
+            if (page.match({ pageId, params })) {
+                promise = page.goto({ pageId, params });
+                break;
             }
-            else promise = this.gotoImages();
         }
 
         if (promise) promise.finally(finishPageLoading);
         else finishPageLoading();
-
-        // Clear promises or whatever might have been in the preflight
-        this.#preClickResults = {};
     }
 
-    // This implementation seems wrong... and problematic in terms of support, but let it be for now
     static preparePage(page) {
-        console.log(`Preload ${page}`);
         // Start downloading or retrieving from cache in advance,
         // because after pressing it is highly likely that a click will occur... 
         const [ pageId, paramString ] = page?.split('?') ?? [];
         this.#preClickResults = {};
 
-        // TODO
-        if (pageId === '#models') {
-            const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (params.hash) {
-                this.#preClickResults[params.hash] = this.api.fetchModelVersionInfo(params.hash, true);
-            } else if (params.model) {
-                if (!this.#cache.models.has(`${params.model}`)) {
-                    this.#preClickResults[params.model] = this.api.fetchModelInfo(params.model);
-                }
-            } else {
-                const query = {
-                    limit: CONFIG.perRequestLimits.models,
-                    tag: params.tag ?? '',
-                    query: params.query,
-                    username: params.username || params.user,
-                    types: SETTINGS.types,
-                    sort: SETTINGS.sort,
-                    period: SETTINGS.period,
-                    checkpointType: SETTINGS.checkpointType,
-                    baseModels: SETTINGS.baseModels,
-                    nsfw: SETTINGS.nsfw,
-                };
+        let key = null, promise = null;
+        const params = parseParams(paramString) || {};
+        for (const page of this.#pages) {
+            if (page.match({ pageId, params })) {
+                ({ key, promise } = page.prepare?.({ pageId, params }) ?? { key: null, promise: null });
+                break;
+            }
+        }
 
-                this.#preClickResults[JSON.stringify(query)] = this.api.fetchModels(query);
-            }
-        } else if (pageId === '#images') {
-            const params = Object.fromEntries(new URLSearchParams(paramString));
-            if (params.image) {
-                if (!this.#cache.images.has(`${params.image}`)) {
-                    this.#preClickResults[params.image] = this.api.fetchImageMeta(params.image, params.nsfw);
+        if (key !== null) {
+            this.#preClickResults[key] = promise;
+            promise.then(result => {
+                if (this.#preClickResults[key] === promise) {
+                    this.#preClickResults[`${key}-result`] = result;
                 }
-            }
+            });
         }
     }
 
@@ -689,37 +1192,33 @@ class Controller {
             try {
                 const url = new URL(q);
                 if (url.origin === CONFIG.civitai_url) {
-                    const redirectUrl = this.convertCivUrlToLocal(q);
+                    const { localUrl: redirectUrl, params } = this.parseCivUrl(url);
                     if (!redirectUrl) throw new Error('Unknown url');
                     let promise;
-                    const searchParams = Object.fromEntries(url.searchParams);
 
-                    if (url.pathname.indexOf('/models/') === 0) {
-                        const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
-                        if (!modelId) throw new Error('There is no model id in the link');
-                        if (searchParams.modelVersionId) {
-                            promise = this.api.fetchModelVersionInfo(searchParams.modelVersionId).then(version => {
+                    if (url.pathname.startsWith('/models/')) {
+                        if (!params.modelId) throw new Error('There is no model id in the link');
+                        if (params.modelVersionId) {
+                            promise = this.api.fetchModelVersionInfo(params.modelVersionId).then(version => {
                                 const previewMedia = version?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
                                 const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? redirectUrl;
                                 results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: version.model?.type ?? window.languagePack?.text?.model ?? 'Model' });
                             });
                         } else {
-                            promise = this.api.fetchModelInfo(modelId).then(model => {
+                            promise = this.api.fetchModelInfo(params.modelId).then(model => {
                                 const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
                                 const title = model.name ?? redirectUrl;
                                 results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
                             });
                         }
-                    } else if (url.pathname.indexOf('/images/') === 0) {
-                        const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
-                        if (!imageId) throw new Error('There is no image id in the link');
-                        promise = this.api.fetchImageMeta(imageId).then(media => {
+                    } else if (url.pathname.startsWith('/images/')) {
+                        if (!params.imageId) throw new Error('There is no image id in the link');
+                        promise = this.api.fetchImageMeta(params.imageId).then(media => {
                             const title = window.languagePack?.text?.image ?? 'Image';
                             results.push({ media, image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
                         });
-                    } else if (url.pathname.indexOf('/posts/') === 0) {
-                        const postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1];
-                        if (!postId) throw new Error('There is no post id in the link');
+                    } else if (url.pathname.startsWith('/posts/')) {
+                        if (!params.postId) throw new Error('There is no post id in the link');
                         const title = window.languagePack?.text?.post ?? 'Post';
                         results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
                     }
@@ -751,7 +1250,6 @@ class Controller {
                     const promise = this.api.fetchModelVersionInfo(q, true)
                     .then(processVersion)
                     .catch(() => {
-                        console.log(q);
                         if (q.length < 10) return;
                         const AutoV2 = q.substring(0, 10);
                         if (this.#cache.modelVersions.has(AutoV2)) {
@@ -838,6 +1336,50 @@ class Controller {
                 insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
             }
         };
+
+        // Blacklist tagIds and presets (only if extension installed)
+        if (EXTENSION_INSTALLED) {
+            try {
+                const container = createElement('div', { class: 'config-container' });
+                const hideByTagsToggles = insertElement('div', container, { class: 'config-boolean-list' });
+
+                CONFIG.filters.tagBlacklistPresetKeys.forEach(key => {
+                    const { element } = this.#genBoolean({
+                        onchange: ({ newValue }) => {
+                            SETTINGS[key] = newValue;
+                            savePageSettings();
+                        },
+                        value: SETTINGS[key],
+                        label: tempHome[key] ?? key
+                    });
+                    hideByTagsToggles.appendChild(element);
+                });
+
+                const descriptionContainer = insertElement('div', container, { class: 'config-description' });
+                insertElement('p', descriptionContainer, undefined, 'Images filter (WIP)');
+                // insertElement('blockquote', descriptionContainer, undefined, '...');
+                settingsContainer.appendChild(container);
+            } catch(_) {
+                console.error(_);
+                insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
+            }
+
+            // Blacklist tagIds
+            if (DEVMODE) {
+                addSetting({
+                    description: 'List of tagIds to hide (separated by commas) (WIP)',
+                    blockquote: 'A list of numeric ID tags, used to hide images with these tags (only works if the extension (located in the "apiProxyExtension" folder in the project repository) is installed to use the original API, since the public API does not return any tags)',
+                    toggleElement: this.#genStringInput({
+                        onchange: ({ newValue }) => {
+                            SETTINGS.blackListTagIds = newValue.split(',').map(tag => tag.trim()).filter(tag => tag) ?? [];
+                            savePageSettings();
+                        },
+                        value: SETTINGS.blackListTagIds.join(', '),
+                        placeholder: 'tagIds separated by commas'
+                    }).element
+                });
+            }
+        }
 
         // Blacklist tags
         addSetting({
@@ -929,22 +1471,284 @@ class Controller {
         this.appElement.appendChild(appContent);
     }
 
-    static gotoArticles() {
-        const appContent = createElement('div', { class: 'app-content' });
+    static gotoArticles(options = {}) {
+        if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
+            const appContent = createElement('div', { class: 'app-content' });
+            this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
+            const p = insertElement('p', appContent, { class: 'error-text' });
+            p.appendChild(getIcon('cross'));
+            insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
+            this.#clearAppElement();
+            this.appElement.appendChild(appContent);
+            return;
+        }
+
+        const { tag, username } = options;
+
+        const navigationState = {...this.#state};
+        const cache = this.#cache.history.get(navigationState.id) ?? {};
+        let query, hiddenArticles = 0;
+        const layoutConfig = {
+            gap: CONFIG.appearance.modelCard.gap,
+            itemWidth: CONFIG.appearance.modelCard.width,
+            itemHeight: CONFIG.appearance.modelCard.height,
+            generator: this.#genArticleCard.bind(this),
+            minOverscan: 1,
+            maxOverscan: 3,
+            passive: true,
+            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
+            onElementRemove: this.#onCardRemoved.bind(this)
+        };
+
+        const loadItems = ({ cursor } = {}) => {
+            if (cursor === undefined) {
+                query = {
+                    limit: CONFIG.perRequestLimits.articles,
+                    sort: SETTINGS.sort_articles,
+                    period: SETTINGS.period_articles,
+                    browsingLevel: SETTINGS.browsingLevel,
+                    nsfw: SETTINGS.nsfw,
+                    tags: tag ? [+tag] : [],
+                    username,
+                };
+                this.#state.filter = JSON.stringify(query);
+
+                hiddenArticles = 0;
+
+                if (cache.filter === this.#state.filter && cache.articles?.length) {
+                    this.#log('Loading articles (nav cache)');
+                    cursor = cache.nextCursor ?? null;
+                    return {
+                        items: cache.articles,
+                        cursor: cache.nextCursor
+                    };
+                } else {
+                    cache.articles = [];
+                    cache.nextCursor = null;
+                    cache.filter = null;
+                }
+            } else query.cursor = cursor;
+
+
+            const apiPromise = this.#preClickResults[JSON.stringify(query)] ?? this.api.fetchArticles(query);
+            return apiPromise.then(data => {
+                cursor = data.metadata?.nextCursor ?? null;
+
+                cache.nextCursor = cursor;
+                cache.filter = this.#state.filter;
+                cache.articles = cache.articles?.concat(data.items) ?? data.items;
+
+                return { cursor, items: data.items };
+            });
+        };
+        const prepareItems = articles => {
+            this.#log('Loaded articles:', articles);
+
+            const hiddenBefore = hiddenArticles;
+            if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
+                let blackListTagIds = [...SETTINGS.blackListTagIds];
+                if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
+                if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
+                if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
+                const countAll = articles.length;
+                const normalizedBlaclistTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
+
+                articles = filterItems(articles, [
+                    { key: 'tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
+                    { key: 'coverImage.tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
+                    SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 4 } : null,
+                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                ]);
+
+                if (countAll !== articles.length) {
+                    hiddenArticles += countAll - articles.length;
+                    this.#log(`Hidden ${hiddenArticles} article(s) with blacklist tags`);
+                }
+            }
+
+            const items = articles.map(data => ({ id: data.id, data }));
+
+            return { items, hidden: hiddenArticles - hiddenBefore };
+        };
+
+        const appContent = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+        const listWrap = insertElement('div', appContent, { id: 'articles-list' });
+        appContent.appendChild(this.#genScrollToTopButton());
         this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
-        const p = insertElement('p', appContent, { class: 'error-text' });
-        p.appendChild(getIcon('cross'));
-        insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
+
+        const infinityScroll = this.#genInfinityScroll({
+            layoutConfig, loadItems, prepareItems,
+            labels: {
+                hiddenItems: window.languagePack?.text?.hiddenModels ?? 'Due to the selected hide tags, {count} were hidden',
+                units: window.languagePack?.units?.element ?? ['element', 'elements', 'elements'],
+            }
+        });
+
+        listWrap.appendChild(infinityScroll.element);
+
+        const layout = this.#activeMasonryLayout = infinityScroll.layout;
+        const { onScroll, onResize } = layout.getCallbacks();
+        this.#onScroll = onScroll;
+        this.#onResize = onResize;
+
+        if (infinityScroll.promise instanceof Promise) {
+            const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
+            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
+        }
+
         this.#clearAppElement();
+        this.appElement.appendChild(this.#genArticlesListFilters(() => {
+            savePageSettings();
+            this.#pageNavigation = Date.now();
+            infinityScroll.reload();
+        }));
         this.appElement.appendChild(appContent);
+
+        return infinityScroll.promise;
+    }
+
+    static gotoArticle(articleId) {
+        if (!EXTENSION_INSTALLED || !this.api.fetchArticle) {
+            const appContent = createElement('div', { class: 'app-content' });
+            this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
+            const p = insertElement('p', appContent, { class: 'error-text' });
+            p.appendChild(getIcon('cross'));
+            insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
+            this.#clearAppElement();
+            this.appElement.appendChild(appContent);
+            return;
+        }
+
+        const pageNavigation = this.#pageNavigation;
+        const navigationState = {...this.#state};
+        const cache = this.#cache.history.get(navigationState.id) ?? {};
+        if (!cache.descriptionImages) cache.descriptionImages = new Map();
+
+        // to select the background color when correcting colors
+        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
+
+        const insertArticle = article => {
+            this.#setTitle(article.title);
+
+            const appContent = createElement('div', { class: 'app-content' });
+            const page = insertElement('div', appContent, { class: 'model-page article-page', 'data-article-id': article.id });
+
+            // Model name
+            const modelNameWrap = insertElement('div', page, { class: 'model-name article-name' });
+            const modelNameH1 = insertElement('h1', modelNameWrap, undefined, article.title);
+            const statsList = [
+                { icon: 'bookmark', value: article.stats.collectedCount, formatter: formatNumber, unit: 'bookmark' },
+                { icon: 'chat', value: article.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+                { icon: 'thunder', value: article.stats.tippedAmountCount, formatter: formatNumber, unit: 'buzz' },
+                { icon: 'eye', value: article.stats.viewCount, formatter: formatNumber, unit: 'view' },
+            ];
+            const statsFragment = this.#genStats(statsList);
+            modelNameH1.appendChild(statsFragment);
+
+            const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
+            const publishedAt = new Date(article.publishedAt);
+            insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+            const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
+            const updateTags = tags => {
+                modelTagsWrap.textContent = '';
+                let categoryLink;
+                tags.forEach((tag, i) => {
+                    const a = insertElement('a', modelTagsWrap, { href: `#articles?tag=${encodeURIComponent(article.tagIds[i])}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag)
+                    if (tag === article.category) categoryLink = a;
+                });
+                if (!categoryLink) categoryLink = createElement('div', { class: 'badge' }, article.category);
+                categoryLink.classList.add('model-category');
+                modelTagsWrap.prepend(categoryLink);
+            };
+            if (this.#state.article_tags || article.tags.length <= 12) updateTags(article.tags);
+            else {
+                updateTags(article.tags.slice(0, 12));
+                const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
+                showMore.appendChild(getIcon('arrow_down'));
+                insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${article.tags.length - 12}`);
+                showMore.addEventListener('click', () => {
+                    this.#state.article_tags = true;
+                    updateTags(article.tags);
+                }, { once: true });
+            }
+
+            // Download buttons
+            const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
+            article.attachments.forEach(file => {
+                const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
+                const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.url });
+                a.appendChild(getIcon('download'));
+                insertElement('span', a, undefined, file.name || 'Unnamed');
+                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
+                if (file.name) a.setAttribute('data-filename', file.name);
+            });
+
+            // Article cover
+            if (article.coverImage) {
+                const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
+                const mediaElement = this.#genMediaElement({ media: article.coverImage, width: Math.min(CONFIG.appearance.appWidth, this.windowWidth), taget: 'model-preview', allowAnimated: true });
+                modelPreviewWrap.appendChild(mediaElement);
+            }
+
+            const content = createElement('div', { class: 'model-description article-content' });
+
+            // Creator
+            if (article.user) {
+                const userInfo = {...article.user};
+                if (userInfo.username) userInfo.url = `#articles?username=${userInfo.username}`;
+                const userBLock = this.#genUserBlock(userInfo);
+                if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
+                content.appendChild(userBLock);
+                const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
+                userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', userInfo.username || 'user'));
+            }
+
+            // Content
+            const description = this.#analyzeModelDescriptionString(article.content);
+            const modelDescriptionFragment = safeParseHTML(description);
+            this.#analyzeModelDescription(modelDescriptionFragment, cache);
+            if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+            content.appendChild(modelDescriptionFragment);
+            page.appendChild(content);
+
+            // Open in CivitAI
+            insertElement('a', page, { href: `${CONFIG.civitai_url}/articles/${article.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
+            this.#clearAppElement();
+            appContent.appendChild(this.#genScrollToTopButton());
+            this.appElement.appendChild(appContent);
+        };
+
+        const cachedModel = this.#cache.articles.get(`${articleId}`) || this.#preClickResults[`${articleId}-result`];
+        if (cachedModel) {
+            this.#log('Loaded article (cache):', cachedModel);
+            return insertArticle(cachedModel);
+        }
+
+        const apiPromise = this.#preClickResults[articleId] ?? this.api.fetchArticle(Number(articleId));
+        return apiPromise
+        .then(data => {
+            if (data?.id) this.#cache.articles.set(`${data.id}`, data);
+            if (pageNavigation !== this.#pageNavigation) return;
+            this.#log('Loaded article:', data);
+            return insertArticle(data);
+        }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            console.error('Error:', error?.message ?? error);
+            const appContent = createElement('div', { class: 'app-content' });
+            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+            this.#clearAppElement();
+            this.appElement.appendChild(appContent);
+        });
     }
 
     static gotoImage(imageId, nsfwLevel) {
         const appContent = createElement('div', { class: 'app-content-wide full-image-page' });
 
-        const cachedMedia = this.#cache.images.get(`${imageId}`);
+        const cachedMedia = this.#cache.images.get(`${imageId}`) || this.#preClickResults[`${imageId}-result`];
         if (cachedMedia) {
-            console.log('Loaded image info (cache)', cachedMedia);
+            this.#log('Loaded image info (cache)', cachedMedia);
             appContent.appendChild(this.#genImageFullPage(cachedMedia));
             this.#clearAppElement();
             this.appElement.appendChild(appContent);
@@ -955,7 +1759,7 @@ class Controller {
         const apiPromise = this.#preClickResults[imageId] ?? this.api.fetchImageMeta(imageId, nsfwLevel);
         return apiPromise.then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.log('Loaded image info', media);
+            this.#log('Loaded image info', media);
             if (!media) throw new Error('No Meta');
 
             appContent.appendChild(this.#genImageFullPage(media));
@@ -993,21 +1797,24 @@ class Controller {
 
     static gotoModelByHash(hash) {
         const pageNavigation = this.#pageNavigation;
-        const apiPromise = this.#preClickResults[hash] ?? this.api.fetchModelVersionInfo(hash, true);
-        return apiPromise.then(model => {
+
+        const redirect = model => {
             if (pageNavigation !== this.#pageNavigation) return;
-            const { modelId, name: modelVersionName } = model ?? {};
-            if (modelId) return this.gotoModel(modelId, modelVersionName);
-            else {
-                console.log('There is no model id here...', model);
-                throw new Error(model?.error ?? `No models found with this hash (${hash})`);
+            if (!model || !model?.modelId) {
+                this.#log('There is no model id here...', model);
+                this.#clearAppElement();
+                this.appElement.appendChild(this.#genErrorPage(model?.error ?? `No models found with this hash (${hash})`));
+                return;
             }
-        }).catch(error => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error?.message ?? error);
-            this.#clearAppElement();
-            this.appElement.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-        });
+            const { modelId, name: modelVersionName } = model ?? {};
+            return this.gotoModel(modelId, modelVersionName);
+        };
+
+        const cached = this.#cache.modelVersions.get(hash) || this.#preClickResults[`${hash}-result`];
+        if (cached !== undefined) return redirect(cached);
+
+        const apiPromise = this.#preClickResults[hash] ?? this.api.fetchModelVersionInfo(hash, true);
+        return apiPromise.then(redirect).catch(redirect);
     }
 
     static gotoModel(id, version = null) {
@@ -1029,7 +1836,16 @@ class Controller {
             let promise = null;
             if (this.#state.imagesLoaded) {
                 const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId: model.id, opCreator: model.creator?.username, modelVersionId: modelVersion.id, state: navigationState });
-                promise = imagesListPromise;
+                if (imagesListPromise) {
+                    let timerWon = false;
+                    const timerPromise = new Promise(resolve =>
+                        setTimeout(() => {
+                            timerWon = true;
+                            resolve();
+                        }, 600)
+                    );
+                    promise = Promise.race([imagesListPromise, timerPromise]).then(() => timerWon ? imagesListPromise.then(() => this.#onScroll()) : null);
+                }
                 appContentWide.appendChild(imagesList);
                 appContentWide.appendChild(this.#genScrollToTopButton());
             } else {
@@ -1047,24 +1863,31 @@ class Controller {
                 });
             }
 
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
-            this.appElement.appendChild(appContentWide);
+            if (promise) promise.then(() => {
+                this.#clearAppElement();
+                this.appElement.appendChild(appContent);
+                this.appElement.appendChild(appContentWide);
+            });
+            else {
+                this.#clearAppElement();
+                this.appElement.appendChild(appContent);
+                this.appElement.appendChild(appContentWide);    
+            }
             return promise;
         };
 
-        const cachedModel = this.#cache.models.get(`${id}`);
+        const cachedModel = this.#cache.models.get(`${id}`) || this.#preClickResults[`${id}-result`];
         if (cachedModel) {
-            console.log('Loaded model (cache):', cachedModel);
+            this.#log('Loaded model (cache):', cachedModel);
             return insertModelPage(cachedModel);
         }
 
         const apiPromise = this.#preClickResults[id] ?? this.api.fetchModelInfo(id);
         return apiPromise
         .then(data => {
-            if (data.id) this.#cache.models.set(`${data.id}`, data);
+            if (data?.id) this.#cache.models.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
-            console.log('Loaded model:', data);
+            this.#log('Loaded model:', data);
             return insertModelPage(data);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
@@ -1080,15 +1903,14 @@ class Controller {
         const { tag = '', query: searchQuery, username: searchUsername } = options;
         const navigationState = {...this.#state};
         const cache = this.#cache.history.get(navigationState.id) ?? {};
-        let firstDraw = false;
         let query;
+        let modelById = new Map(), hiddenModels = 0;
         const appContent = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
         const listWrap = insertElement('div', appContent, { id: 'models-list' });
-        const listElement = insertElement('div', listWrap, { class: 'cards-list models-list' });
         appContent.appendChild(this.#genScrollToTopButton());
         this.#setTitle(window.languagePack?.text?.models ?? 'Models');
 
-        const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
+        const layoutConfig = {
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
@@ -1098,32 +1920,70 @@ class Controller {
             passive: true,
             disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
             onElementRemove: this.#onCardRemoved.bind(this)
-        });
+        };
 
-        let modelById = new Map(), hiddenModels = 0;
-        if (SETTINGS.assumeListSameAsModel) {
-            listElement.addEventListener('pointerdown', e => {
-                const a = e.target.closest('a[data-id]');
-                const id = Number(a?.getAttribute('data-id'));
-                if (!modelById.has(id)) return;
-                const model = modelById.get(id);
-                this.#cache.models.set(`${id}`, model);
-            }, { capture: true });
-        }
+        const onPointerDown = id => {
+            if (!SETTINGS.assumeListSameAsModel) return;
+            if (!modelById.has(id)) return;
+            const model = modelById.get(id);
+            this.#cache.models.set(`${id}`, model);
+        };
 
-        const { onScroll, onResize } = layout.getCallbacks();
-        this.#onScroll = onScroll;
-        this.#onResize = onResize;
+        const loadItems = ({ cursor } = {}) => {
+            if (cursor === undefined) {
+                query = {
+                    limit: CONFIG.perRequestLimits.models,
+                    tag,
+                    query: searchQuery,
+                    username: searchUsername,
+                    types: SETTINGS.types,
+                    sort: SETTINGS.sort,
+                    period: SETTINGS.period,
+                    checkpointType: SETTINGS.checkpointType,
+                    baseModels: SETTINGS.baseModels,
+                    browsingLevel: SETTINGS.browsingLevel,
+                    nsfw: SETTINGS.nsfw,
+                };
+                this.#state.filter = JSON.stringify(query);
 
-        const insertModels = models => {
-            const pageNavigation = this.#pageNavigation;
-            console.log('Loaded models:', models);
+                modelById = new Map();
+                hiddenModels = 0;
 
-            const modelsCountAll = models.length;
+                if (cache.filter === this.#state.filter && cache.models?.length) {
+                    this.#log('Loading models (nav cache)');
+                    cursor = cache.nextCursor ?? null;
+                    return {
+                        items: cache.models,
+                        cursor: cache.nextCursor
+                    };
+                } else {
+                    cache.models = [];
+                    cache.nextCursor = null;
+                    cache.filter = null;
+                }
+            } else query.cursor = cursor;
+
+
+            const apiPromise = this.#preClickResults[JSON.stringify(query)] ?? this.api.fetchModels(query);
+            return apiPromise.then(data => {
+                cursor = data.metadata?.nextCursor ?? null;
+
+                cache.nextCursor = cursor;
+                cache.filter = this.#state.filter;
+                cache.models = cache.models?.concat(data.items) ?? data.items;
+
+                return { cursor, items: data.items };
+            });
+        };
+        const prepareItems = models => {
+            this.#log('Loaded models:', models);
+
+            const hiddenBefore = hiddenModels;
+            const countAll = models.length;
             models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
-            if (models.length !== modelsCountAll) {
-                console.log(`Due to the selected tags for hiding, ${modelsCountAll - models.length} model(s) were hidden`);
-                hiddenModels += modelsCountAll - models.length;
+            if (models.length !== countAll) {
+                this.#log(`Due to the selected tags for hiding, ${countAll - models.length} model(s) were hidden`);
+                hiddenModels += countAll - models.length;
             }
 
             models.forEach(model => {
@@ -1131,127 +1991,46 @@ class Controller {
                 modelById.set(model.id, model);
             });
 
-            layout.addItems(models.map(data => ({ id: data.id, data })), firstDraw);
+            const items = models.map(data => ({ id: data.id, data }));
 
-            if (query.cursor) {
-                const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
-                insertElement('div', loadMoreTrigger, { class: 'media-loading-indicator' });
-                onTargetInViewport(loadMoreTrigger, () => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    loadMore().finally(() => loadMoreTrigger.remove());
-                });
-            } else {
-                const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
-                loadNoMore.appendChild(getIcon('ufo'));
-                insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
-                if (hiddenModels) {
-                    const hiddenTextBase = window.languagePack?.text?.hiddenModels ?? 'Due to the selected hide tags, {count} were hidden';
-                    const units = window.languagePack?.units?.element ?? ['element', 'elements', 'elements'];
-                    const text = hiddenTextBase.replace('{count}', `${hiddenModels} ${escapeHtml(pluralize(hiddenModels, units))}`);
-                    insertElement('span', loadNoMore, { class: 'darker-text' }, text);
-                }
+            return { items, hidden: hiddenModels - hiddenBefore };
+        };
+
+        const infinityScroll = this.#genInfinityScroll({
+            layoutConfig, onPointerDown, loadItems, prepareItems,
+            labels: {
+                hiddenItems: window.languagePack?.text?.hiddenModels ?? 'Due to the selected hide tags, {count} were hidden',
+                units: window.languagePack?.units?.element ?? ['element', 'elements', 'elements'],
             }
-        };
+        });
 
-        const loadMore = () => {
-            const pageNavigation = this.#pageNavigation;
-            if (!query.cursor) return;
-            return this.api.fetchModels(query).then(data => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                if (data.items?.length > 0) {
-                    query.cursor = data.metadata?.nextCursor ?? null;
-                    cache.nextModelsCursor = query.cursor;
-                    cache.models = cache.models.concat(data.items);
-                    insertModels(data.items);
-                } else {
-                    query.cursor = null;
-                    cache.nextModelsCursor = null;
-                    insertModels([]);
-                }
-            }).catch(error => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Failed to fetch models:', error?.message ?? error);
-                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            });
-        };
+        listWrap.appendChild(infinityScroll.element);
 
-        const loadModels = () => {
-            query = {
-                limit: CONFIG.perRequestLimits.models,
-                tag,
-                query: searchQuery,
-                username: searchUsername,
-                types: SETTINGS.types,
-                sort: SETTINGS.sort,
-                period: SETTINGS.period,
-                checkpointType: SETTINGS.checkpointType,
-                baseModels: SETTINGS.baseModels,
-                nsfw: SETTINGS.nsfw,
-            };
-            this.#state.modelsFilter = JSON.stringify(query);
+        const layout = this.#activeMasonryLayout = infinityScroll.layout;
+        const { onScroll, onResize } = layout.getCallbacks();
+        this.#onScroll = onScroll;
+        this.#onResize = onResize;
 
-            const pageNavigation = this.#pageNavigation;
-            modelById = new Map();
-            hiddenModels = 0;
-
-            if (cache.modelsFilter === this.#state.modelsFilter && cache.models) {
-                console.log('Loading models (nav cache)');
-                query.cursor = cache.nextModelsCursor ?? null;
-                layout.clear();
-                insertModels(cache.models);
-                return Promise.resolve();
-            }
-
-            listWrap.classList.add('cards-loading');
-            listWrap.setAttribute('inert', '');
-
-            const apiPromise = this.#preClickResults[JSON.stringify(query)] ?? this.api.fetchModels(query);
-            return apiPromise.then(data => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                query.cursor = data.metadata?.nextCursor ?? null;
-                cache.nextModelsCursor = query.cursor;
-                cache.modelsFilter = this.#state.modelsFilter;
-                cache.models = [...data.items];
-
-                layout.clear();
-                insertModels(data.items);
-            }).catch(error => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Error:', error?.message ?? error);
-                listWrap.textContent = '';
-                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            }).finally(() => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                listWrap.classList.remove('cards-loading');
-                listWrap.removeAttribute('inert');
-            });
-        };
-
-        const firstLoadingPlaceholder = insertElement('div', listWrap, { id: 'load-more' });
-        insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+        if (infinityScroll.promise instanceof Promise) {
+            const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
+            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
+        }
 
         this.#clearAppElement();
         this.appElement.appendChild(this.#genModelsListFilters(() => {
             savePageSettings();
             this.#pageNavigation = Date.now();
-            loadModels();
+            infinityScroll.reload();
         }));
         this.appElement.appendChild(appContent);
 
-        firstDraw = true;
-        return loadModels().finally(() => {
-            if (navigationState.id !== this.#state.id) return;
-            firstLoadingPlaceholder.remove();
-            firstDraw = false;
-        });
+        return infinityScroll.promise;
     }
 
     static openFromCivitUrl(href) {
-        try {
-            const redirectUrl = this.convertCivUrlToLocal(href);
-            if (!redirectUrl) throw new Error('Unsupported url');
-            gotoLocalLink(redirectUrl);
-        } catch(error) {
+        const { localUrl } = this.parseCivUrl(href);
+        if (!localUrl) {
             const appContent = createElement('div', { class: 'app-content' });
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Unsupported url'));
 
@@ -1259,34 +2038,66 @@ class Controller {
 
             this.#clearAppElement();
             this.appElement.appendChild(appContent);
+            return;
         }
+        gotoLocalLink(localUrl);
     }
 
-    static convertCivUrlToLocal(href) {
-        try {
-            const url = new URL(href);
-            if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
-            const searchParams = Object.fromEntries(url.searchParams);
-            let localUrl;
-            if (url.pathname.startsWith('/models/')) {
-                const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
-                if (!modelId) throw new Error('There is no model id in the link');
-                localUrl = `#models?model=${modelId}`;
-                if (searchParams.modelVersionId) localUrl += `&version=${searchParams.modelVersionId}`;
-            } else if (url.pathname.startsWith('/images/')) {
-                const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
-                if (!imageId) throw new Error('There is no image id in the link');
-                localUrl = `#images?image=${imageId}`;
-            } else if (url.pathname.startsWith('/posts/')) {
-                const postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1];
-                if (!postId) throw new Error('There is no post id in the link');
-                localUrl = `#images?post=${postId}`;
+    static parseCivUrl(url) {
+        let localUrl = null;
+        const rules = [
+            { // models
+                match: ({ url }) => url.pathname.startsWith('/models/'),
+                parse: ({ url, params }) => {
+                    params.modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1] ?? null;
+                },
+                toLocal: ({ url, params }) => {
+                    if (!params.modelId) return null;
+                    let localUrl = `#models?model=${params.modelId}`;
+                    if (params.modelVersionId) localUrl += `&version=${params.modelVersionId}`;
+                    return localUrl;
+                }
+            },
+            { // images
+                match: ({ url }) => url.pathname.startsWith('/images/'),
+                parse: ({ url, params }) => {
+                    params.imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1] ?? null;
+                },
+                toLocal: ({ url, params }) => params.imageId ? `#images?image=${params.imageId}` : null
+            },
+            { // posts
+                match: ({ url }) => url.pathname.startsWith('/posts/'),
+                parse: ({ url, params }) => {
+                    params.postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1] ?? null;
+                },
+                toLocal: ({ url, params }) => params.postId ? `#images?post=${params.postId}` : null
+            },
+            { // articles
+                match: ({ url }) => url.pathname.startsWith('/articles/'),
+                parse: ({ url, params }) => {
+                    params.articleId = url.pathname.match(/\/articles\/(\d+)/i)?.[1] ?? null;
+                },
+                toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
             }
-            if (!localUrl) throw new Error('Unsupported url');
-            return localUrl;
-        } catch(_) {
+        ];
+
+        try {
+            url = new URL(url);
+            if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
+
+            const params = Object.fromEntries(url.searchParams);
+            for (const rule of rules) {
+                if (rule.match({ url, params })) {
+                    rule.parse({ url, params });
+                    localUrl = rule.toLocal({ url, params });
+                    break;
+                }
+            }
+
+            return { localUrl, params };
+        } catch (_) {
             console.warn(_?.message ?? _);
-            return null;
+            return { localUrl: null, params: {} };
         }
     }
 
@@ -1299,44 +2110,65 @@ class Controller {
             }
         }
 
-        let imageId = null, modelId = null, modelVersionId = null;
+        let imageId = null, postId = null, modelId = null, articleId = null, modelVersionId = null;
 
         if (url.origin === CONFIG.civitai_url) {
-            if (url.pathname.startsWith('/images/')) {
-                imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
-            } else if (url.pathname.startsWith('/models/')) {
-                modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
-                const params = Object.fromEntries(url.searchParams);
-                modelVersionId = params.modelVersionId;
-            }
+            const { params } = this.parseCivUrl(url);
+            imageId = params.imageId;
+            modelId = params.modelId;
+            articleId = params.articleId;
+            postId = params.postId;
+            modelVersionId = params.modelVersionId;
         }
 
         if (url.origin === location.origin) {
             const [ pageId, paramString ] = url.hash.split('?') ?? [];
-            const params = Object.fromEntries(new URLSearchParams(paramString));
+            const params = parseParams(paramString);
             imageId = params.image;
+            postId = params.post;
             modelId = params.model;
+            articleId = params.article;
             modelVersionId = params.version;
         }
 
-        if (imageId) {
+        if (imageId || postId) {
             const showImage = media => {
+                let maxImg = media;
+                if (media instanceof Set) {
+                    const arr = [...media];
+                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                    maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
+
+                    const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
+                    media = newData;
+                }
                 if (!media) return this.#genErrorPage('No Meta');
                 const baseWidth = CONFIG.appearance.imageCard.width;
-                const aspectRatio = Math.min(media.width / media.height, 2);
+                const aspectRatio = Math.min(maxImg.width / maxImg.height, 2);
                 const itemWidth = aspectRatio > 1.38 ? Math.round(baseWidth * aspectRatio) : baseWidth;
                 const card = this.#genImageCard(media, { isVisible: true, firstDraw: true, itemWidth, forceAutoplay: true });
                 return card;
             };
-    
-            const cached = this.#cache.images.get(imageId);
+
+            const cache = postId ? this.#cache.posts : this.#cache.images;
+            const cached = cache.get(imageId || postId);
             if (cached) return showImage(cached);
 
+            if (postId) {
+                return this.api.fetchImages({ limit: 20, postId, period: 'AllTime' }).then(post => {
+                    const items = post?.items ? new Set(post.items) : null;
+                    if (items) cache.set(postId, items);
+                    return showImage(items);
+                }).catch(error => this.#genErrorPage(error?.message ?? 'Error'));
+            }
+
             return this.api.fetchImageMeta(imageId).then(media => {
-                if (media) this.#cache.images.set(imageId, media);
+                if (media) cache.set(imageId, media);
                 return showImage(media);
             }).catch(error => this.#genErrorPage(error?.message ?? 'Error'));
-        } else if (modelId) {
+        }
+
+        if (modelId) {
             const showModel = model => {
                 const card = this.#genModelCard(model, { isVisible: true, firstDraw: true, itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
                 return card;
@@ -1348,13 +2180,35 @@ class Controller {
                 else return this.#genErrorPage(`No model with id ${modelId}`);
             }
 
-
             return this.api.fetchModelInfo(modelId).then(model => {
                 if (model) this.#cache.models.set(modelId, model);
                 return showModel(model);
             }).catch(error => {
                 if (error?.message.startsWith('No model with id')) {
                     this.#cache.models.set(modelId, null); // Do not try to download again if there is no model with this ID
+                }
+                return this.#genErrorPage(error?.message ?? 'Error');
+            });
+        }
+
+        if (articleId && EXTENSION_INSTALLED) {
+            const showArticle = article => {
+                const card = this.#genArticleCard(article, { isVisible: true, firstDraw: true, itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true });
+                return card;
+            };
+
+            if (this.#cache.articles.has(articleId)) {
+                const cached = this.#cache.articles.get(articleId);
+                if (cached) return showArticle(cached);
+                else return this.#genErrorPage(`No article with id ${articleId}`);
+            }
+
+            return this.api.fetchArticle(articleId).then(article => {
+                if (article) this.#cache.articles.set(articleId, article);
+                return showArticle(article);
+            }).catch(error => {
+                if (error?.message.startsWith('No article with id')) {
+                    this.#cache.articles.set(articleId, null); // Do not try to download again if there is no article with this ID
                 }
                 return this.#genErrorPage(error?.message ?? 'Error');
             });
@@ -1399,15 +2253,18 @@ class Controller {
             const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-text': `<b>${escapeHtml(file.type)}</b><br><span style="word-break:break-word;">${escapeHtml(file.name)?.replace(fileTypeRegex, '<span style="color:var(--c-text-darker);">.$1</span>') || ''}</span>`, 'lilpipe-delay': 600 });
             a.appendChild(getIcon('download'));
             if (file.type === 'Model') {
-                const downloadTitle = `${download} ${file.metadata.fp ?? ''} (${fileSize})` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
+                const downloadTitle = `${download} ${file.metadata.fp ?? ''}` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
                 a.appendChild(document.createTextNode(` ${downloadTitle}`));
+                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
             } else if (file.type === 'Archive') {
-                const downloadTitle = `${download} (${fileSize})`;
-                a.appendChild(document.createTextNode(` ${downloadTitle}`));
+                const downloadTitle = download;
+                a.appendChild(document.createTextNode(` ${download}`));
+                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
                 a.appendChild(getIcon('file_zip'));
             } else {
-                const downloadTitle = `${download} (${fileSize})` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
+                const downloadTitle = download + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
                 a.appendChild(document.createTextNode(` ${downloadTitle}`));
+                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
                 a.appendChild(getIcon('file'));
             }
             if (file.virusScanResult !== 'Success') {
@@ -1425,11 +2282,17 @@ class Controller {
         const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
         const updateTags = tags => {
             modelTagsWrap.textContent = '';
-            tags.forEach(tag => insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag));
+            let categoryLink;
+            tags.forEach(tag => {
+                const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag);
+                if (tag === modelVersion.baseModel) categoryLink = a;
+            });
             
             if (modelVersion.baseModel) {
-                const baseModel = createElement('div', { class: 'badge' }, this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel);
-                modelTagsWrap.prepend(baseModel);
+                if (!categoryLink) categoryLink = createElement('div', { class: 'badge' });
+                categoryLink.textContent = this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel;
+                categoryLink.classList.add('model-category');
+                modelTagsWrap.prepend(categoryLink);
             }
         };
         if (this.#state.model_tags || model.tags.length <= 12) updateTags(model.tags);
@@ -1606,12 +2469,8 @@ class Controller {
             if (modelDescription.childNodes.length) page.appendChild(modelDescription);
         }
 
-
         // Open in CivitAI
         insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
-
-        // Comments
-        // ...
 
         return page;
     }
@@ -1663,8 +2522,9 @@ class Controller {
             const statsFragment = this.#genStats(statsList, true);
 
             // NSFW LEvel
-            if (media.nsfwLevel !== 'None') {
-                const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+            const nsfwLevel = typeof media.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(media.nsfwLevel) : media.nsfwLevel;
+            if (nsfwLevel !== 'None') {
+                const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
                 statsFragment.prepend(nsfwBadge);
             }
 
@@ -1725,157 +2585,68 @@ class Controller {
         return fragment;
     }
 
-    static #genImages(options) {
-        const { modelId, modelVersionId, postId, userId, username, opCreator = null, state: navigationState = {...this.#state} } = options; // Snippet_1 : modelId
-        const cache = this.#cache.history.get(navigationState.id) ?? {};
-        let firstDraw = false;
-        let query;
-        let groupingByPost = SETTINGS.groupImagesByPost && !postId;
-        const fragment = new DocumentFragment();
-        const listWrap = createElement('div', { id: 'images-list'});
-        const listElement = insertElement('div', listWrap, { class: 'cards-list images-list' });
+    static #genInfinityScroll(options) {
+        const { layoutConfig, loadItems, prepareItems, onPointerDown, labels = {} } = options;
+        let promise, cursor, firstDraw = false, hiddenItems = 0;
 
-        const layout = this.#activeMasonryLayout = new MasonryLayout(listElement, {
-            gap: CONFIG.appearance.imageCard.gap,
-            itemWidth: CONFIG.appearance.imageCard.width,
-            generator: this.#genImageCard.bind(this),
-            minOverscan: 1,
-            maxOverscan: 3,
-            passive: true,
-            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
-            onElementRemove: this.#onCardRemoved.bind(this)
-        });
+        const element = createElement('div', { class: 'cards-list' });
 
-        const { onScroll, onResize } = layout.getCallbacks();
-        this.#onScroll = onScroll;
-        this.#onResize = onResize;
+        if (onPointerDown) {
+            element.addEventListener('pointerdown', e => {
+                const a = e.target.closest('a[data-id]');
+                const id = Number(a?.getAttribute('data-id'));
+                onPointerDown(id);
+            }, { capture: true });
+        }
 
-        let imagesMetaById = new Map(), postsById = new Map(), hiddenImages = 0;
-        listElement.addEventListener('pointerdown', e => {
-            const a = e.target.closest('a[data-id]');
-            const id = Number(a?.getAttribute('data-id'));
-            if (!imagesMetaById.has(id)) return;
-            const imageMeta = imagesMetaById.get(id);
-            const postInfo = imageMeta.postId ? postsById.get(imageMeta.postId) : null;
-            this.#cache.images.set(`${id}`, imageMeta);
-            if (postInfo) this.#cache.posts.set(`${imageMeta.postId}`, postInfo);
-        }, { capture: true });
-
-        fragment.appendChild(this.#genImagesListFilters(() => {
-            savePageSettings();
-            this.#pageNavigation = Date.now();
-            loadImages();
-        }));
-
-        const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-        insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
-
-        fragment.appendChild(listWrap);
+        const layout = new MasonryLayout(element, layoutConfig);
 
         const loadMore = () => {
-            if (!query.cursor) return;
-            const pageNavigation = this.#pageNavigation;
-            return this.api.fetchImages(query).then(data => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                query.cursor = data.metadata?.nextCursor ?? null;
-                cache.nextImagesCursor = query.cursor;
-                cache.images = cache.images.concat(data.items);
-                insertImages(data.items);
-            }).catch(error => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Failed to fetch images:', error?.message ?? error);
-                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            });
+            if (!cursor) return;
+            const result = loadItems({ cursor });
+
+            if (result instanceof Promise) {
+                const pageNavigation = this.#pageNavigation;
+                return result.then(result => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    cursor = result.cursor;
+                    insertItems(result.items);
+                }).catch(error => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    console.error('Failed to fetch items:', error?.message ?? error);
+                    element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+                });
+            } else {
+                cursor = result.cursor;
+                insertItems(result.items);
+            }
         };
 
-        const insertImages = images => {
-            const pageNavigation = this.#pageNavigation;
-            console.log('Loaded images:', images);
-
-            if (SETTINGS.hideImagesWithoutPositivePrompt) {
-                const countAll = images.length;
-                images = images.filter(image => image.meta?.prompt || image.meta?.meta?.prompt); // For some reason the API started returning meta.meta...
-                if (images.length < countAll) {
-                    hiddenImages += countAll - images.length;
-                    console.log(`Hidden ${countAll - images.length} image(s) without positive prompt`);
-                }
-            }
-
-            if (SETTINGS.hideImagesWithoutNegativePrompt) {
-                const countAll = images.length;
-                images = images.filter(image => image.meta?.negativePrompt || image.meta?.meta?.negativePrompt); // For some reason the API started returning meta.meta...
-                if (images.length < countAll) {
-                    hiddenImages += countAll - images.length;
-                    console.log(`Hidden ${countAll - images.length} image(s) without negative prompt`);
-                }
-            }
-
-            if (SETTINGS.hideImagesWithoutResources) {
-                const countAll = images.length;
-                images = images.filter(image => {
-                    // For some reason the API started returning meta.meta...
-                    const meta = image.meta?.meta && Object.keys(image.meta).length < 4 ? image.meta?.meta : image.meta;
-                    return meta.civitaiResources?.length || meta.resources?.length || meta.additionalResources?.length || (meta.hashes && Object.keys(meta.hashes).length) || meta['Model hash'];
-                });
-                if (images.length < countAll) {
-                    hiddenImages += countAll - images.length;
-                    console.log(`Hidden ${countAll - images.length} image(s) without used resources`);
-                }
-            }
-
-            images.forEach(image => {
-                if (imagesMetaById.has(image.id)) return;
-                imagesMetaById.set(image.id, image);
-
-                // Mark user as model uploader
-                if (opCreator && image.username === opCreator) image.usergroup = 'OP';
-
-                if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
-                postsById.get(image.postId).add(image);
-            });
-
-            const postsInList = new Set();
-            const items = images.map(image => {
-                if (groupingByPost) {
-                    if (postsInList.has(image.postId)) return null;
-                    postsInList.add(image.postId);
-                }
-
-                const aspectRatio = image.width / image.height;
-                if (groupingByPost) return { id: image.postId, aspectRatio, data: postsById.get(image.postId) };
-                else return { id: image.id, aspectRatio, data: image }
-            }).filter(Boolean);
-
-            // Select image with the most reactions in each group
-            items.forEach(item => {
-                if (item.data instanceof Set && item.data.size > 1) {
-                    const arr = [...item.data];
-                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
-                    const maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
-
-                    const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
-                    item.data = newData;
-                    item.aspectRatio = maxImg.width / maxImg.height;
-                }
-            });
+        const insertItems = items => {
+            const result = prepareItems(items);
+            items = result.items;
+            hiddenItems += result.hidden;
 
             layout.addItems(items, firstDraw);
 
-            if (query.cursor) {
-                const loadMoreTrigger = insertElement('div', listElement, { id: 'load-more' });
+            if (cursor) {
+                const pageNavigation = this.#pageNavigation;
+                const loadMoreTrigger = insertElement('div', element, { id: 'load-more' });
                 insertElement('div', loadMoreTrigger, { class: 'media-loading-indicator' });
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
-                    loadMore().finally(() => loadMoreTrigger.remove());
+                    const promise = loadMore();
+                    if (promise instanceof Promise) promise.finally(() => loadMoreTrigger.remove());
+                    else loadMoreTrigger.remove();
                 });
             } else {
-                const loadNoMore = insertElement('div', listElement, { id: 'load-no-more' });
+                const loadNoMore = insertElement('div', element, { id: 'load-no-more' });
                 loadNoMore.appendChild(getIcon('ufo'));
                 insertElement('span', loadNoMore, undefined, window.languagePack?.text?.end ?? 'End');
-                if (hiddenImages) {
-                    const hiddenTextBase = window.languagePack?.text?.hiddenImages ?? 'Some images were hidden due to the selected filter settings ({count})';
-                    const units = window.languagePack?.units?.image ?? ['image', 'images', 'images'];
-                    const text = hiddenTextBase.replace('{count}', `${hiddenImages} ${escapeHtml(pluralize(hiddenImages, units))}`);
+                if (hiddenItems) {
+                    const hiddenTextBase = labels.hiddenItems ?? 'Some elements were hidden due to the selected filter settings ({count})';
+                    const units = labels.units ?? ["element", "elements", "elements"];
+                    const text = hiddenTextBase.replace('{count}', `${hiddenItems} ${escapeHtml(pluralize(hiddenItems, units))}`);
                     insertElement('span', loadNoMore, { class: 'darker-text' }, text);
                 }
             }
@@ -1899,17 +2670,17 @@ class Controller {
         };
 
         const animateLayoutChanges = changeCallback => {
-            if (!listElement.textContent) return changeCallback();
+            if (!element.textContent) return changeCallback();
 
             const cards = new Map();
-            listElement.querySelectorAll('.card[data-id]').forEach(card => {
+            element.querySelectorAll('.card[data-id]').forEach(card => {
                 const id = card.getAttribute('data-id');
                 cards.set(id, { from: { card } });
             });
             getCardPositions(cards);
 
             changeCallback();
-            listElement.querySelectorAll('.card[data-id]').forEach(card => {
+            element.querySelectorAll('.card[data-id]').forEach(card => {
                 const id = card.getAttribute('data-id');
                 if (!cards.has(id)) cards.set(id, { to: { card } });
                 else {
@@ -1921,10 +2692,10 @@ class Controller {
 
             if (!cards.values().some(item => item.animation)) return; // Skip if nothing to shift
 
-            listWrap.classList.remove('cards-loading');
+            element.classList.remove('cards-loading');
             cards.forEach(item => {
                 if (!item.from?.isVisible || item.to) return;
-                listElement.appendChild(item.from.card);
+                element.appendChild(item.from.card);
                 item.animation = 'remove';
             });
             getCardPositions(cards);
@@ -1968,83 +2739,279 @@ class Controller {
             .then(() => animations.forEach(item => item.removeAfter ? item.element.remove() : null));
         };
 
-        const loadImages = () => {
-            query = {
-                limit: CONFIG.perRequestLimits.images,
-                sort: SETTINGS.sort_images,
-                period: SETTINGS.period_images,
-                nsfw: SETTINGS.nsfwLevel,
-                modelVersionId,
-                modelId, // Snippet_1
-                userId,
-                username,
-                postId
-            };
-            groupingByPost = SETTINGS.groupImagesByPost && !postId;
-            this.#state.imagesFilter = JSON.stringify(query);
-
-            const pageNavigation = this.#pageNavigation;
-            imagesMetaById = new Map();
-            postsById = new Map();
-            hiddenImages = 0;
-
-            if (cache.imagesFilter === this.#state.imagesFilter && cache.images) {
-                console.log('Loading images (nav cache)');
-                query.cursor = cache.nextImagesCursor ?? null;
-                const animationsPromise = animateLayoutChanges(() => {
-                    layout.clear();
-                    insertImages(cache.images);
+        const reload = () => {
+            cursor = undefined;
+            hiddenItems = 0;
+            const result = loadItems();
+            if (result instanceof Promise) {
+                const parent = element.parentElement;
+                parent?.classList.add('cards-loading');
+                element.setAttribute('inert', '');
+                const pageNavigation = this.#pageNavigation;
+                promise = result.then(result => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    cursor = result.cursor;
+                    promise = animateLayoutChanges(() => {
+                        layout.clear();
+                        insertItems(result.items);
+                    });
+                    return promise;
+                }).catch(error => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    console.error('Failed to fetch items:', error?.message ?? error);
+                    element.textContent = '';
+                    element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+                }).finally(() => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    parent?.classList.remove('cards-loading');
+                    element.removeAttribute('inert');
                 });
-                return animationsPromise instanceof Promise ? animationsPromise : Promise.resolve();
+            } else {
+                cursor = result.cursor;
+                promise = animateLayoutChanges(() => {
+                    layout.clear();
+                    insertItems(result.items);
+                });
+                return promise;
             }
-
-            listWrap.classList.add('cards-loading');
-            listWrap.setAttribute('inert', '');
-
-            return this.api.fetchImages(query).then(data => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                query.cursor = data.metadata?.nextCursor ?? null;
-
-                // Delete the large comfy field (I don't break it down into additional meta information in the script),
-                // and if you need to copy it, it's often in the image and can be dragged onto comfy.
-                data.items.map(img => {
-                    if (img.meta?.comfy) img.meta.comfy = true;
-                    if (img.meta?.meta?.comfy) img.meta.meta.comfy = true;
-                });
-
-                cache.nextImagesCursor = query.cursor;
-                cache.imagesFilter = this.#state.imagesFilter;
-                cache.images = [...data.items];
-
-                return animateLayoutChanges(() => {
-                    layout.clear();
-                    insertImages(data.items);
-                });
-            }).catch(error => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                console.error('Error:', error?.message ?? error);
-                listWrap.textContent = '';
-                listWrap.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            }).finally(() => {
-                if (pageNavigation !== this.#pageNavigation) return;
-                listWrap.classList.remove('cards-loading');
-                listWrap.removeAttribute('inert');
-            });
         };
 
         firstDraw = true;
-        const promise = loadImages().finally(() => {
-            if (navigationState.id !== this.#state.id) return;
-            firstLoadingPlaceholder.remove();
-            firstDraw = false;
+        reload();
+        firstDraw = false;
+
+        return { element, promise, reload, layout };
+    }
+
+    static #genImages(options) {
+        const { modelId, modelVersionId, postId, userId, username, opCreator = null, state: navigationState = {...this.#state} } = options; // Snippet_1 : modelId
+        const cache = this.#cache.history.get(navigationState.id) ?? {};
+        let query;
+        let groupingByPost = SETTINGS.groupImagesByPost && !postId;
+        let imagesMetaById = new Map(), postsById = new Map(), hiddenImages = 0;
+
+        const fragment = new DocumentFragment();
+        const listWrap = createElement('div', { id: 'images-list'});
+
+        const layoutConfig = {
+            gap: CONFIG.appearance.imageCard.gap,
+            itemWidth: CONFIG.appearance.imageCard.width,
+            generator: this.#genImageCard.bind(this),
+            minOverscan: 1,
+            maxOverscan: 3,
+            passive: true,
+            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
+            onElementRemove: this.#onCardRemoved.bind(this)
+        };
+
+        const onPointerDown = id => {
+            if (!SETTINGS.assumeListSameAsImage) return;
+            if (!imagesMetaById.has(id)) return;
+            const imageMeta = imagesMetaById.get(id);
+            const postInfo = imageMeta.postId ? postsById.get(imageMeta.postId) : null;
+            this.#cache.images.set(`${id}`, imageMeta);
+            if (postInfo) this.#cache.posts.set(`${imageMeta.postId}`, postInfo);
+        };
+
+        const loadItems = ({ cursor } = {}) => {
+            if (cursor === undefined) {
+                query = {
+                    limit: CONFIG.perRequestLimits.images,
+                    sort: SETTINGS.sort_images,
+                    period: SETTINGS.period_images,
+                    browsingLevel: SETTINGS.browsingLevel,
+                    nsfw: SETTINGS.nsfwLevel,
+                    modelVersionId,
+                    modelId, // Snippet_1
+                    userId,
+                    username,
+                    postId
+                };
+                groupingByPost = SETTINGS.groupImagesByPost && !postId;
+                this.#state.filter = JSON.stringify(query);
+
+                imagesMetaById = new Map();
+                postsById = new Map();
+                hiddenImages = 0;
+
+                if (cache.filter === this.#state.filter && cache.images?.length) {
+                    this.#log('Loading images (nav cache)');
+    
+                    return {
+                        items: cache.images,
+                        cursor: cache.nextCursor ?? null
+                    };
+                } else {
+                    cache.images = [];
+                    cache.nextCursor = null;
+                    cache.filter = null;
+                }
+            } else query.cursor = cursor;
+
+
+            return this.api.fetchImages(query).then(data => {
+                cursor = data.metadata?.nextCursor ?? null;
+
+                // Delete the large comfy field (I don't break it down into additional meta information in the script),
+                // and if you need to copy it, it's often in the image and can be dragged onto comfy.
+                data.items.forEach(img => {
+                    if (img.meta?.comfy) img.meta.comfy = true;
+                    if (img.meta?.meta?.comfy) img.meta.meta.comfy = true;
+                    return img;
+                });
+
+                cache.nextCursor = cursor;
+                cache.filter = this.#state.filter;
+                cache.images = cache.images?.concat(data.items) ?? data.items;
+
+                return { cursor, items: data.items };
+            });
+        };
+        const prepareItems = images => {
+            this.#log('Loaded images:', images);
+
+            const countHidden = { noMeta: 0, noPositivePrompt: 0, noNegativePrompt: 0, noResources: 0, badTags: 0 };
+            const hiddenBefore = hiddenImages;
+            const countAll = images.length;
+            if (SETTINGS.hideImagesWithoutPositivePrompt || SETTINGS.hideImagesWithoutNegativePrompt || SETTINGS.hideImagesWithoutResources) {
+                images = images.filter(image => {
+                    // For some reason the API started returning meta.meta...
+                    const meta = image.meta?.meta && Object.keys(image.meta).length < 4 ? image.meta?.meta : image.meta;
+                    if (!meta) {
+                        countHidden.noMeta++;
+                        return false;
+                    }
+
+                    if (
+                        SETTINGS.hideImagesWithoutPositivePrompt
+                        && (!meta.prompt || meta.prompt.length < CONFIG.filters.minPromptLength)
+                    ) {
+                        countHidden.noPositivePrompt++;
+                        return false;
+                    }
+
+                    if (
+                        SETTINGS.hideImagesWithoutNegativePrompt
+                        && (!meta.negativePrompt || meta.negativePrompt.length < CONFIG.filters.minPromptLength)
+                    ) {
+                        countHidden.noNegativePrompt++;
+                        return false;
+                    }
+
+                    if (
+                        SETTINGS.hideImagesWithoutResources
+                        && !(meta.civitaiResources?.length || meta.resources?.length || meta.additionalResources?.length || (meta.hashes && Object.keys(meta.hashes).length) || meta['Model hash']) // Filter out some images before parsing
+                        && !this.#parseMeta(meta).resources.length
+                    ) {
+                        countHidden.noResources++;
+                        return false;
+                    }
+
+                    return true;
+                });
+            }
+
+            if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
+                let blackListTagIds = [...SETTINGS.blackListTagIds];
+                if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
+                if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
+                if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
+
+                const countBefore = images.length;
+                images = filterItems(images, [
+                    { key: 'tagIds', conditions: blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`), type: 'number' },
+                    SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 4 } : null,
+                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                ])
+
+                if (countBefore !== images.length) countHidden.badTags = countBefore - images.length;
+            }
+
+            if (images.length < countAll) {
+                hiddenImages += countAll - images.length;
+                const hiddenCountMessages = [];
+                if (countHidden.noMeta) hiddenCountMessages.push(`${countHidden.noMeta} without meta`);
+                if (countHidden.noPositivePrompt) hiddenCountMessages.push(`${countHidden.noPositivePrompt} without positive prompt`);
+                if (countHidden.noNegativePrompt) hiddenCountMessages.push(`${countHidden.noNegativePrompt} without negative prompt`);
+                if (countHidden.noResources) hiddenCountMessages.push(`${countHidden.noResources} without used resources`);
+                if (countHidden.badTags) hiddenCountMessages.push(`${countHidden.badTags} with blacklist tags`);
+                this.#log(`Hidden ${hiddenImages - hiddenBefore} image(s):\n  ${hiddenCountMessages.join('\n  ')}`);
+            }
+
+            images.forEach(image => {
+                if (imagesMetaById.has(image.id)) return;
+                imagesMetaById.set(image.id, image);
+
+                // Mark user as model uploader
+                if (opCreator && image.username === opCreator) image.usergroup = 'OP';
+
+                if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
+                postsById.get(image.postId).add(image);
+            });
+
+            const postsInList = new Set();
+            const items = images.map(image => {
+                if (groupingByPost) {
+                    if (postsInList.has(image.postId)) return null;
+                    postsInList.add(image.postId);
+                }
+
+                const aspectRatio = image.width / image.height;
+                if (groupingByPost) return { id: image.postId, aspectRatio, data: postsById.get(image.postId) };
+                else return { id: image.id, aspectRatio, data: image }
+            }).filter(Boolean);
+
+            // Select image with the most reactions in each group
+            items.forEach(item => {
+                if (item.data instanceof Set && item.data.size > 1) {
+                    const arr = [...item.data];
+                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                    const maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
+
+                    const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
+                    item.data = newData;
+                    item.aspectRatio = maxImg.width / maxImg.height;
+                }
+            });
+
+            return { items, hidden: hiddenImages - hiddenBefore };
+        };
+
+        const infinityScroll = this.#genInfinityScroll({
+            layoutConfig, onPointerDown, loadItems, prepareItems,
+            labels: {
+                hiddenItems: window.languagePack?.text?.hiddenImages ?? 'Some images were hidden due to the selected filter settings ({count})',
+                units: window.languagePack?.units?.image ?? ['image', 'images', 'images'],
+            }
         });
 
-        return { element: fragment, promise };
+        listWrap.appendChild(infinityScroll.element);
+
+        const layout = this.#activeMasonryLayout = infinityScroll.layout;
+        const { onScroll, onResize } = layout.getCallbacks();
+        this.#onScroll = onScroll;
+        this.#onResize = onResize;
+
+        fragment.appendChild(this.#genImagesListFilters(() => {
+            savePageSettings();
+            this.#pageNavigation = Date.now();
+            infinityScroll.reload();
+        }));
+
+        if (infinityScroll.promise instanceof Promise) {
+            const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
+            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
+        }
+
+        fragment.appendChild(listWrap);
+
+        return { element: fragment, promise: infinityScroll.promise };
     }
 
     static #genStats(stats, hideEmpty = false) {
         const statsWrap = createElement('div', { class: 'badges' });
-        stats.forEach(({ icon, iconString, value, formatter, unit, type }) => {
+        stats.forEach(({ icon, iconString, value = 0, formatter, unit, type }) => {
             if (hideEmpty && !value) return;
             const statWrap = insertElement('div', statsWrap, { class: 'badge', 'data-value': value });
             if (!value) statWrap.setAttribute('inert', '');
@@ -2172,13 +3139,19 @@ class Controller {
                 img.style.height = `${item.offsetHeight}px`;
                 if (srcset) img.setAttribute('srcset', srcset);
             } else {
+                img.classList.add('loading');
                 img.addEventListener('load', () => {
+                    img.classList.remove('loading');
                     if (!img.naturalHeight) return;
                     const item = {
                         ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
                         offsetHeight: img.offsetHeight
                     };
                     cacheDescriptionImages.set(src, item);
+                }, { once: true });
+                img.addEventListener('error', () => {
+                    img.classList.remove('loading');
+                    img.classList.add('error');
                 }, { once: true });
 
                 if (srcset) img.setAttribute('data-srcset', srcset);
@@ -2275,15 +3248,12 @@ class Controller {
 
             // Add link preview and check url syntax
             try {
-                const url = new URL(href);
+                const url = href.startsWith('/') ? new URL(href, CONFIG.civitai_url) : new URL(href);
                 if (url.origin === CONFIG.civitai_url) {
-                    if (url.pathname.startsWith('/images/')) {
-                        const imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1];
-                        if (imageId) setLinkPreview(a);
-                    } else if (url.pathname.startsWith('/models/')) {
-                        const modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1];
-                        if (modelId) setLinkPreview(a);
-                    } else {
+                    if (href.startsWith('/')) a.setAttribute('href', url.toString());
+                    const { params } = this.parseCivUrl(url);
+                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && params.articleId)) setLinkPreview(a);
+                    else {
                         // a.prepend(getIcon('civitai'));
                         // a.classList.add('link-with-favicon');
                     }
@@ -2494,7 +3464,11 @@ class Controller {
                 // insertElement('span', span, { class: 'lora-weight' }, value.substring(indexEnd + 1, value.length - 1));
                 // span.appendChild(document.createTextNode('>'));
             } else if (type === 'link') {
-                if (isURL(value)) insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
+                if (isURL(value)) {
+                    const a = insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
+                    const { params } = this.parseCivUrl(value);
+                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && params.articleId)) a.setAttribute('data-link-preview', '');
+                }
                 else insertElement('span', weightContainer, { class: 'link' }, value);
             } else if (type === 'bracket') {
                 if (value === '(') {
@@ -2729,7 +3703,7 @@ class Controller {
             const remixContainer = insertElement('a', container, { class: 'meta-remixOfId badge' });
 
             const inertRemixImage = media => {
-                console.log('Remix of', media);
+                this.#log('Remix of', media);
 
                 if (!media) {
                     // remixContainer.remove();
@@ -2874,31 +3848,48 @@ class Controller {
             const mainKey = Object.keys(meta).find(k => k.indexOf(prefix) === 0 && (k.includes('model') || k.includes('upscaler')));
             if (!mainKey) return;
 
-            const related = Object.keys(meta).filter(k => k.startsWith(prefix));
-            const tooltip = related.map(k => {
+            const groups = {};
+            const relatedKeys = Object.keys(meta).filter(k => k.startsWith(prefix));
+
+            relatedKeys.forEach(k => {
                 const cleanK = k.replace(prefix, '').trim();
-                let valueString, valueType;
-                if (typeof meta[k] === 'object') {
-                    valueString = JSON.stringify(meta[k], null, '  ');
-                    valueType = 'json';
-                } else {
-                    valueString = String(meta[k]);
-                    valueType = 'string';
+                // Look for the passage indication: "2nd", "3rd", "4th", etc. at the end or middle of the key
+                const passMatch = cleanK.match(/(\d+(st|nd|rd|th))/i);
+                const passName = passMatch ? passMatch[0].toLowerCase() : 'main';
+
+                if (!groups[passName]) groups[passName] = { items: [] };
+
+                const finalKey = cleanK.replace(passMatch ? passMatch[0] : '', '').trim() || 'model';
+                groups[passName].items.push({ key: finalKey, value: meta[k] });
+
+                if (finalKey === 'model' || finalKey === 'upscaler') groups[passName].mainKey = k;
+                if (finalKey === 'upscale') groups[passName].scaleKey = k;
+            });
+
+            Object.entries(groups).forEach(([pass, group]) => {
+                const items = group.items;
+                if (items.length === 0) return '';
+
+                const rows = items.map(item => {
+                    let valueString = typeof item.value === 'object' ? JSON.stringify(item.value, null, '  ')  : String(item.value);
+                    const valueType = typeof item.value === 'object' ? 'json' : 'string';
+                    const valueKey = escapeHtml(item.key);
+                    return `<tr><td class="key-${valueKey}">${valueKey}</td><td class="value-${valueType}">${escapeHtml(valueString)}</td></tr>`;
+                }).join('');
+
+                const tooltipHtml = `<thead class="tooltip-pass-header"><tr><th colspan="2">${pass} Pass</th></tr></thead><tbody>${rows}</tbody>`;
+
+                const item = renderItem(pass !== 'main' ? `${label} (${pass})` : label, meta[group.mainKey] || 'unknown');
+
+                if (group.scaleKey) insertElement('i', item, undefined, ` x${meta[group.scaleKey]}`);
+
+                if (tooltipHtml) {
+                    item.setAttribute('lilpipe-text', `<table class='tooltip-table-only'>${tooltipHtml}</table>`);
+                    item.setAttribute('lilpipe-type', 'table-grouped');
                 }
-                return `<tr><td>${escapeHtml(cleanK)}</td><td class="value-${valueType}">${escapeHtml(valueString)}</td></tr>`;
-            }).join('');
+            });
 
-            const item = renderItem(label, meta[mainKey]);
-
-            const scaleKey = prefix + ' upscale';
-            if (meta[scaleKey]) insertElement('i', item, undefined, ` x${meta[scaleKey]}`);
-
-            if (tooltip) {
-                item.setAttribute('lilpipe-text', `<table class='tooltip-table-only'>${tooltip}</table>`);
-                item.setAttribute('lilpipe-type', 'meta-adetailer');
-            }
-
-            related.forEach(k => usedKeys.add(k));
+            relatedKeys.forEach(k => usedKeys.add(k));
         };
 
         renderSpecialBlock('Hires', 'Hires');
@@ -2913,23 +3904,7 @@ class Controller {
         }
 
         // Resources
-        const resourceHashes = new Set();
-        const resources = [];
-        const hashSizes = [ 8, 10, 12, 64 ];
-        const addResourceToList = resource => {
-            if (resource.name?.startsWith('urn:') && !resource.modelVersionId) resource.modelVersionId = +resource.name.substring(resource.name.lastIndexOf('@') + 1);
-            const key = resource.hash && hashSizes.some(n => resource.hash.length === n) ? resource.hash : resource.modelVersionId;
-            if (!key || resourceHashes.has(key)) return;
-            resourceHashes.add(key);
-            resources.push({ ...resource });
-        };
-        meta.civitaiResources?.forEach(addResourceToList);
-        meta.resources?.forEach(addResourceToList);
-        meta.additionalResources?.forEach(addResourceToList);
-        if (meta.hashes) Object.keys(meta.hashes).forEach(key => addResourceToList({ hash: meta.hashes[key], name: key }));
-        // if (meta['TI hashes']) Object.keys(meta['TI hashes'])?.forEach(key => addResourceToList({ hash: meta['TI hashes'][key], name: key })); // There always seem to be no models for these hashes on CivitAI // The image where this key was seen: 82695882
-        if (meta['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
-
+        const { resources } = this.#parseMeta(meta);
         if (resources.length) {
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
             const resourcesTitle = insertElement('h3', resourcesContainer);
@@ -2958,7 +3933,7 @@ class Controller {
                 insertElement('span', titleElement, { class: 'model-name' }, title);
                 titleElement.appendChild(document.createTextNode(' '));
                 if(version) insertElement('strong', titleElement, { class: 'model-version-name' }, version);
-                if (weight !== 1) {
+                if (type?.toLowerCase() === 'lora' && href) { // Checking href to avoid displaying weight on errors
                     const weightRounded = +weight.toFixed(4);
                     const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, weightRounded);
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', escapeHtml(weight));
@@ -2997,7 +3972,7 @@ class Controller {
                 items = items.filter(Boolean);
                 const trainedWords = new Set();
                 const triggerResources = {};
-                console.log('Loaded resources', items);
+                this.#log('Loaded resources', items);
 
                 items.forEach(item => {
                     const type = item?.model?.type;
@@ -3092,6 +4067,7 @@ class Controller {
 
             const loadedResources = new Set();
             const resourcesFromCache = [];
+            const loraWeights = meta['Lora weights'] ?? {}; // Fooocus thingy
             resources.forEach(item => {
                 const modelKey = String(item.modelVersionId || item.hash || '').toUpperCase();
                 let modelInfo = undefined;
@@ -3099,10 +4075,12 @@ class Controller {
                     modelInfo = this.#cache.modelVersions.get(modelKey);
                 }
 
+                if (item.weight === undefined && loraWeights[item.name] !== undefined) item.weight = Number(loraWeights[item.name]);
+
                 const el = createResourceRowContent({
                     title: modelInfo?.model?.name || item.name || (item.modelVersionId ? `VersionId: ${item.modelVersionId}` : undefined) || (item.hash ? `Hash: ${item.hash}` : undefined) || 'Unknown',
                     version: modelInfo?.name || item.modelVersionName,
-                    weight: item.weight,
+                    weight: item.weight !== undefined ? Number(item.weight) : undefined,
                     type: modelInfo?.model?.type ?? item.type ?? 'Unknown',
                     baseModel: modelInfo?.baseModel ?? 'Unknown base model',
                     href: modelInfo?.modelId && modelInfo?.name ? `#models?model=${modelInfo.modelId}&version=${modelInfo.name}` : undefined
@@ -3167,6 +4145,40 @@ class Controller {
         return container;
     }
 
+    static #parseMeta(meta) {
+        // Used resources
+        const resourceHashes = new Set();
+        const resources = [];
+        const HASH_SIZES = new Set([8, 10, 12, 64]);
+        const HEX_RE = /^[0-9a-f]+$/i;
+        const isValidHash = hash => typeof hash === 'string' && HASH_SIZES.has(hash.length) && HEX_RE.test(hash);
+        const addResourceToList = resource => {
+            if (!resource || typeof resource !== 'object') return;
+
+            // extracting modelVersionId from urn
+            if (resource.name?.startsWith('urn:') && !resource.modelVersionId) {
+                const id = resource.name.substring(resource.name.lastIndexOf('@') + 1);
+                const num = Number(id);
+                if (Number.isInteger(num)) resource.modelVersionId = num;
+            }
+
+            const key = isValidHash(resource.hash) ? resource.hash.toUpperCase() : resource.modelVersionId;
+            if (!key || resourceHashes.has(key)) return;
+
+            resourceHashes.add(key);
+            resources.push({ key, ...resource });
+        };
+
+        meta?.civitaiResources?.forEach(addResourceToList);
+        meta?.resources?.forEach(addResourceToList);
+        meta?.additionalResources?.forEach(addResourceToList);
+        if (meta?.hashes) Object.entries(meta.hashes).forEach(([name, hash]) => addResourceToList({ hash, name }));
+        // if (meta['TI hashes']) Object.keys(meta['TI hashes'])?.forEach(key => addResourceToList({ hash: meta['TI hashes'][key], name: key })); // There always seem to be no models for these hashes on CivitAI // The image where this key was seen: 82695882
+        if (meta?.['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
+
+        return { resources };
+    }
+
     static #formatModelVersionName(modelVersionName) {
         const fragment = document.createDocumentFragment();
         let matched = false;
@@ -3220,6 +4232,62 @@ class Controller {
         return matched ? fragment : document.createTextNode(modelVersionName);
     }
 
+    static #genArticleCard(article, options) {
+        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false } = options ?? {};
+        const card = createElement('a', { class: 'card model-card', 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+        
+        // Image
+        const previewMedia = article.coverImage;
+        if (previewMedia) {
+            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
+            mediaElement.classList.add('card-background');
+            if (!SETTINGS.autoplay) {
+                if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
+                else if (previewMedia?.type === 'video') {
+                    mediaElement.classList.remove('video-hover-play');
+                    card.classList.add('video-hover-play');
+                }
+                card.classList.add('image-hover-play');
+            }
+            card.appendChild(mediaElement);
+        } else {
+            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+            const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
+            noMedia.appendChild(getIcon('image'));
+            insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
+        }
+
+        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
+        const cardContentBottom = insertElement('div', cardContentWrap);
+
+        // Article category
+        const modelTypeBadges = insertElement('div', cardContentTop, { class: 'badges model-type-badges' });
+        if (article.category) insertElement('div', modelTypeBadges, { class: 'badge model-type' }, article.category);
+
+        // Creator
+        if (article.user) cardContentBottom.appendChild(this.#genUserBlock(article.user));
+
+        // publishedAt
+        const publishedAt = new Date(article.publishedAt);
+        insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+
+        // Article Name
+        insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
+
+        // Stats
+        const statsSource = article.stats;
+        const statsContainer = this.#genStats([
+            { icon: 'bookmark', value: statsSource.collectedCount, formatter: formatNumber, unit: 'bookmark' },
+            { icon: 'chat', value: statsSource.commentCount, formatter: formatNumber, unit: 'comment' },
+            { icon: 'thunder', value: statsSource.tippedAmountCount, formatter: formatNumber, unit: 'buzz' },
+            { icon: 'eye', value: statsSource.viewCount, formatter: formatNumber, unit: 'view' },
+        ]);
+        cardContentBottom.appendChild(statsContainer);
+
+        return card;
+    }
+
     static #genModelCard(model, options) {
         // Note: Adds a "modelUpdatedRecently" field to the model object
         const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false, version = null } = options ?? {};
@@ -3229,7 +4297,7 @@ class Controller {
         // Image
         const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
+            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
             mediaElement.classList.add('card-background');
             if (!SETTINGS.autoplay) {
                 if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
@@ -3341,7 +4409,8 @@ class Controller {
 
         // Badges (NSFW Level and Has Meta)
         const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
-        if (image.nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': image.nsfwLevel }, image.nsfwLevel);
+        const nsfwLevel = typeof image.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(image.nsfwLevel) : image.nsfwLevel;
+        if (nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
         if (postSize > 1) {
             const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, postSize);
             metaIconContainer.appendChild(getIcon('image'));
@@ -3367,6 +4436,9 @@ class Controller {
 
     static #genUserBlock(userInfo) {
         const container = createElement('div', { class: 'user-info' });
+
+        if (userInfo.deletedAt) container.classList.add('user-deleted');
+        if (userInfo.isModerator) container.classList.add('user-moderator');
 
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
@@ -3451,15 +4523,18 @@ class Controller {
     }
 
     static #finishLoading(mediaContainer, options) {
-        const { media, width, height = undefined, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true } = options;
+        const { media, width, height = undefined, allowResize = false, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true } = options;
         const ratio = media.width / media.height;
         const widthNeededForWidth = width || 0;
         const widthNeededForHeight = height ? (height * ratio) : 0;
         const targetWidth = Math.round(Math.max(widthNeededForWidth, widthNeededForHeight) * this.#devicePixelRatio);
         const size = `width=${this.#getNearestServerSize(targetWidth)}`;
-        const paramString = target ? (`?target=${target}`) : '';
+        let paramString = target ? (`?target=${target}`) : '';
+        if (allowResize && width && height && targetWidth > width * 1.35) {
+            paramString = `${paramString}${paramString ? '&' : '?'}width=${width}&height=${height}&fit=crop`;
+        }
         const widthString = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
-        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : replace(/\/width=\d+\//, widthString);
+        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(/\/width=\d+\//, widthString);
         const url = `${urlBase}${paramString}`;
         const mediaElement = createElement('img', { class: 'media-element',  alt: ' ', crossorigin: 'anonymous' });
         let src;
@@ -3577,238 +4652,202 @@ class Controller {
         waitForReady();
     }
 
+    static #genArticlesListFilters(onAnyChange) {
+        const sortOptions = [ 'Most Bookmarks', 'Most Reactions', 'Most Comments', 'Most Collected', 'Newest', 'Recently Updated' ];
+
+        const list = [
+            { type: 'list',
+                key: 'sort_articles',
+                label: window.languagePack?.text?.sort ?? 'Sort',
+                options: sortOptions,
+                labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
+            },
+            { type: 'list',
+                key: 'period_articles',
+                label: window.languagePack?.text?.period ?? 'Pediod',
+                options: this.#listFilters.periodOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
+            },
+            { type: 'list',
+                key: 'nsfwLevel',
+                label: window.languagePack?.text?.nsfw ?? 'NSFW',
+                options: this.#listFilters.nsfwOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.nsfwOptions, 'nsfwOptions'),
+                setValue: newValue => {
+                    SETTINGS.nsfwLevel = newValue;
+                    SETTINGS.browsingLevel = this.#listFilters.browsingLevels[newValue] ?? 4;
+                    SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
+                }
+            }
+        ];
+
+        return this.#genFilters(list, onAnyChange);
+    }
+
     static #genImagesListFilters(onAnyChange) {
-        const filterWrap = createElement('div', { class: 'list-filters' });
-
-        // Metadata filters
-        const { container: metadataContiner } = this.#genDropdownFilter(filterWrap);
-
-        // Group posts
-        const groupImagesByPost = this.#genBoolean({
-            onchange: ({ newValue }) => {
-                SETTINGS.groupImagesByPost = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.groupImagesByPost,
-            label: window.languagePack?.text?.group_posts ?? 'Group posts'
-        });
-        groupImagesByPost.element.classList.add('list-filter');
-        metadataContiner.appendChild(groupImagesByPost.element);
-
-        // Hide without positive prompt
-        const requiredPositivePrompt = this.#genBoolean({
-            onchange: ({ newValue }) => {
-                SETTINGS.hideImagesWithoutPositivePrompt = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.hideImagesWithoutPositivePrompt,
-            label: window.languagePack?.text?.hideWithoutPositivePrompt ?? 'Hide without positive prompt'
-        });
-        requiredPositivePrompt.element.classList.add('list-filter');
-        metadataContiner.appendChild(requiredPositivePrompt.element);
-
-        // Hide without negative prompt
-        const requiredNegativePrompt = this.#genBoolean({
-            onchange: ({ newValue }) => {
-                SETTINGS.hideImagesWithoutNegativePrompt = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.hideImagesWithoutNegativePrompt,
-            label: window.languagePack?.text?.hideWithoutNegativePrompt ?? 'Hide without negative prompt'
-        });
-        requiredNegativePrompt.element.classList.add('list-filter');
-        metadataContiner.appendChild(requiredNegativePrompt.element);
-
-        // Hide without negative prompt
-        const requiredResources = this.#genBoolean({
-            onchange: ({ newValue }) => {
-                SETTINGS.hideImagesWithoutResources = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.hideImagesWithoutResources,
-            label: window.languagePack?.text?.hideImagesWithoutResources ?? 'Hide without resources'
-        });
-        requiredResources.element.classList.add('list-filter');
-        metadataContiner.appendChild(requiredResources.element);
-
-
-        // Sort list
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
-        const sortList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.sort_images = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.sort_images,
-            options: sortOptions,
-            label: window.languagePack?.text?.sort ?? 'Sort',
-            labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ]))
-        });
-        sortList.element.classList.add('list-filter');
-        filterWrap.appendChild(sortList.element);
 
-        // Period list
-        const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
-        const periodList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.period_images = newValue;
-                onAnyChange?.();
+        const list = [
+            { type: 'dropdown',
+                items: [
+                    { type: 'boolean',
+                        key: 'groupImagesByPost',
+                        label: window.languagePack?.text?.group_posts ?? 'Group posts'
+                    },
+                    { type: 'boolean',
+                        key: 'hideImagesWithoutPositivePrompt',
+                        label: window.languagePack?.text?.hideWithoutPositivePrompt ?? 'Hide without positive prompt'
+                    },
+                    { type: 'boolean',
+                        key: 'hideImagesWithoutNegativePrompt',
+                        label: window.languagePack?.text?.hideWithoutNegativePrompt ?? 'Hide without negative prompt'
+                    },
+                    { type: 'boolean',
+                        key: 'hideImagesWithoutResources',
+                        label: window.languagePack?.text?.hideImagesWithoutResources ?? 'Hide without resources'
+                    }
+                ]
             },
-            value: SETTINGS.period_images,
-            options: periodOptions,
-            label: window.languagePack?.text?.period ?? 'Pediod',
-            labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ]))
-        });
-        periodList.element.classList.add('list-filter');
-        filterWrap.appendChild(periodList.element);
-
-        // NSFW list
-        const browsingLevels = {
-            'None': 1,
-            'Soft': 2,
-            'Mature': 4,
-            'X': 16,
-            'true': 32,
-        };
-        const nsfwOptions = [ 'None', 'Soft', 'Mature', 'X', 'true' ];
-        const nsfwList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.nsfwLevel = newValue;
-                SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
-                SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
-                onAnyChange?.();
+            { type: 'list',
+                key: 'sort_images',
+                label: window.languagePack?.text?.sort ?? 'Sort',
+                options: sortOptions,
+                labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
             },
-            value: SETTINGS.nsfwLevel,
-            options: nsfwOptions,
-            label: window.languagePack?.text?.nsfw ?? 'NSFW',
-            labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ]))
-        });
-        nsfwList.element.classList.add('list-filter');
-        filterWrap.appendChild(nsfwList.element);
+            { type: 'list',
+                key: 'period_images',
+                label: window.languagePack?.text?.period ?? 'Pediod',
+                options: this.#listFilters.periodOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
+            },
+            { type: 'list',
+                key: 'nsfwLevel',
+                label: window.languagePack?.text?.nsfw ?? 'NSFW',
+                options: this.#listFilters.nsfwOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.nsfwOptions, 'nsfwOptions'),
+                setValue: newValue => {
+                    SETTINGS.nsfwLevel = newValue;
+                    SETTINGS.browsingLevel = this.#listFilters.browsingLevels[newValue] ?? 4;
+                    SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
+                }
+            }
+        ];
 
-        return filterWrap;
+        return this.#genFilters(list, onAnyChange);
     }
 
     static #genModelsListFilters(onAnyChange) {
+        const modelsOptions = [ "All", ...this.#models.options ];
+        const typeOptions = [ "All", ...this.#types.options];
+        const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
+        const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
+
+        const list = [
+            { type: 'dropdown',
+                items: [
+                    { type: 'boolean',
+                        key: 'showCurrentModelVersionStats',
+                        label: window.languagePack?.text?.stats_from_version ?? 'Statistics for this version'
+                    }
+                ]
+            },
+            { type: 'list',
+                key: 'baseModels',
+                label: window.languagePack?.text?.model ?? 'Model',
+                options: modelsOptions,
+                labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
+                tags: this.#models.tags,
+                setValue: newValue => SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ],
+                getValue: () => SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All'
+            },
+            { type: 'list',
+                key: 'types',
+                label: window.languagePack?.text?.type ?? 'Type',
+                options: typeOptions,
+                labels: this.#listFilters.genLabels(typeOptions, 'typeOptions', this.#types.labels),
+                setValue: newValue => SETTINGS.types = newValue === 'All' ? [] : [ newValue ],
+                getValue: () => SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All'
+            },
+            { type: 'list',
+                key: 'checkpointType',
+                label: window.languagePack?.text?.origin ?? 'Origin',
+                options: trainedOrMergedOptions,
+                labels: this.#listFilters.genLabels(trainedOrMergedOptions, 'checkpointTypeOptions')
+            },
+            { type: 'list',
+                key: 'sort',
+                label: window.languagePack?.text?.sort ?? 'Sort',
+                options: sortOptions,
+                labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
+            },
+            { type: 'list',
+                key: 'period',
+                label: window.languagePack?.text?.period ?? 'Pediod',
+                options: this.#listFilters.periodOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
+            },
+            { type: 'list',
+                key: 'nsfwLevel',
+                label: window.languagePack?.text?.nsfw ?? 'NSFW',
+                options: this.#listFilters.nsfwOptions,
+                labels: this.#listFilters.genLabels(this.#listFilters.nsfwOptions, 'nsfwOptions'),
+                setValue: newValue => {
+                    SETTINGS.nsfwLevel = newValue;
+                    SETTINGS.browsingLevel = this.#listFilters.browsingLevels[newValue] ?? 4;
+                    SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
+                }
+            }
+        ];
+        return this.#genFilters(list, onAnyChange);
+    }
+
+    static #genFilters(list, onAnyChange) {
         const filterWrap = createElement('div', { class: 'list-filters' });
 
-        // Appearance filters
-        const { container: appearanceContiner } = this.#genDropdownFilter(filterWrap);
+        for (const rule of list) {
 
-        // Use statistics from the current version of the model
-        const showCurrentModelVersionStats = this.#genBoolean({
-            onchange: ({ newValue }) => {
-                SETTINGS.showCurrentModelVersionStats = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.showCurrentModelVersionStats,
-            label: window.languagePack?.text?.stats_from_version ?? 'Statistics for this version'
-        });
-        showCurrentModelVersionStats.element.classList.add('list-filter');
-        appearanceContiner.appendChild(showCurrentModelVersionStats.element);
+        if (rule.type === 'dropdown') {
+            const { container } = this.#genDropdownFilter(filterWrap);
 
-        // Models list
-        const modelsOptions = [ "All", ...this.#models.options ];
-        const modelLabels = Object.fromEntries(modelsOptions.map(value => [ value, window.languagePack?.text?.modelLabels?.[value] ?? this.#models.labels[value]  ?? value ]));
-        const modelsList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ];
-                onAnyChange?.();
-            },
-            value: SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All',
-            options: modelsOptions,
-            label: window.languagePack?.text?.model ?? 'Model',
-            tags: this.#models.tags,
-            labels: modelLabels
-        });
-        modelsList.element.classList.add('list-filter');
-        filterWrap.appendChild(modelsList.element);
+            for (const item of rule.items ?? []) {
+                if (item.type !== 'boolean') continue;
 
-        // Types list
-        const typeOptions = [ "All", ...this.#types.options];
-        const typeLabels = Object.fromEntries(typeOptions.map(value => [ value, window.languagePack?.text?.typeOptions?.[value] ?? this.#types.labels[value] ?? value ]));
-        const typesList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.types = newValue === 'All' ? [] : [ newValue ];
-                onAnyChange?.();
-            },
-            value: SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All',
-            options: typeOptions,
-            label: window.languagePack?.text?.type ?? 'Type',
-            labels: typeLabels
-        });
-        typesList.element.classList.add('list-filter');
-        filterWrap.appendChild(typesList.element);
+                const boolean = this.#genBoolean({
+                    value: SETTINGS[item.key],
+                    label: item.label,
+                    onchange: ({ newValue }) => {
+                        SETTINGS[item.key] = newValue;
+                        onAnyChange?.();
+                    }
+                });
 
-        // Trained or merged
-        const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
-        const trainedOrMergedLabels = Object.fromEntries(trainedOrMergedOptions.map(value => [ value, window.languagePack?.text?.checkpointTypeOptions?.[value] ?? value ]));
-        const trainedOrMergedList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.checkpointType = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.checkpointType,
-            options: trainedOrMergedOptions,
-            label: window.languagePack?.text?.origin ?? 'Origin',
-            labels: trainedOrMergedLabels
-        });
-        trainedOrMergedList.element.classList.add('list-filter');
-        filterWrap.appendChild(trainedOrMergedList.element);
+                boolean.element.classList.add('list-filter');
+                container.appendChild(boolean.element);
+            }
 
-        // Sort list
-        const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
-        const sortList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.sort = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.sort,
-            options: sortOptions,
-            label: window.languagePack?.text?.sort ?? 'Sort',
-            labels: Object.fromEntries(sortOptions.map(value => [ value, window.languagePack?.text?.sortOptions?.[value] ?? value ]))
-        });
-        sortList.element.classList.add('list-filter');
-        filterWrap.appendChild(sortList.element);
+            continue;
+        }
 
-        // Period list
-        const periodOptions = [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ];
-        const periodList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.period = newValue;
-                onAnyChange?.();
-            },
-            value: SETTINGS.period,
-            options: periodOptions,
-            label: window.languagePack?.text?.period ?? 'Pediod',
-            labels: Object.fromEntries(periodOptions.map(value => [ value, window.languagePack?.text?.periodOptions?.[value] ?? value ]))
-        });
-        periodList.element.classList.add('list-filter');
-        filterWrap.appendChild(periodList.element);
+        if (rule.type === 'list') {
+            const value = rule.getValue ? rule.getValue() : SETTINGS[rule.key];
 
-        // NSFW list
-        const browsingLevels = {
-            'None': 1,
-            'Soft': 2,
-            'Mature': 4,
-            'X': 16,
-            'true': 32,
-        };
-        const nsfwOptions = [ 'None', 'Soft', 'Mature', 'X', 'true' ];
-        const nsfwList = this.#genList({
-            onchange: ({ newValue }) => {
-                SETTINGS.nsfwLevel = newValue;
-                SETTINGS.browsingLevel = browsingLevels[newValue] ?? 4;
-                SETTINGS.nsfw = SETTINGS.browsingLevel >= 4;
-                onAnyChange?.();
-            },
-            value: SETTINGS.nsfwLevel,
-            options: nsfwOptions,
-            label: window.languagePack?.text?.nsfw ?? 'NSFW',
-            labels: Object.fromEntries(nsfwOptions.map(value => [ value, window.languagePack?.text?.nsfwOptions?.[value] ?? value ]))
-        });
-        nsfwList.element.classList.add('list-filter');
-        filterWrap.appendChild(nsfwList.element);
+            const listEl = this.#genList({
+                label: rule.label,
+                options: rule.options,
+                labels: rule.labels,
+                tags: rule.tags,
+                value,
+                onchange: ({ newValue }) => {
+                    if (rule.setValue) rule.setValue(newValue);
+                    else SETTINGS[rule.key] = newValue;
+                    onAnyChange?.();
+                }
+            });
+
+            listEl.element.classList.add('list-filter');
+            filterWrap.appendChild(listEl.element);
+        }
+    }
 
         return filterWrap;
     }
@@ -4242,14 +5281,19 @@ class Controller {
         document.title = mainContent ? `${mainContent} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
     }
 
+    static #log(...args) {
+        if (SETTINGS.showLogs) console.log(...args);
+    }
+
     static onScroll(scrollTop) {
         this.#state.scrollTop = scrollTop;
         this.#state.scrollTopRelative = this.#onScroll?.({ scrollTop }) ?? null;
     }
 
     static onResize() {
-        const windowWidth = window.innerWidth;
-        if (windowWidth < 950) CONFIG.appearance = CONFIG.appearance_small;
+        this.windowWidth = window.innerWidth;
+        this.windowHeight = window.innerHeight;
+        if (this.windowWidth < 950) CONFIG.appearance = CONFIG.appearance_small;
         else CONFIG.appearance = CONFIG.appearance_normal;
         this.#onResize?.();
     }
@@ -4397,6 +5441,87 @@ function getIcon(name, original = false) {
     return iconsCache.get(iconName)?.cloneNode(true) ?? addIconToCache(name, original);
 }
 
+
+/**
+ * RULE FORMAT
+ *
+ * +tag        → tag must exist
+ * -tag        → tag must NOT exist
+ * +tag1|tag2  → tag1 OR tag2 must exist
+ *
+ * Notes:
+ * - AND is implicit between blocks
+ * - Only '|' is allowed inside a block
+ */
+function filterItems(items, rules) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    if (!Array.isArray(rules) || rules.length === 0) return items;
+
+    const getValueByPath = (obj, path) => {
+        let cur = obj;
+        for (let i = 0; i < path.length && cur != null; i++) {
+            cur = cur[path[i]];
+        }
+        return cur;
+    };
+
+    const compiledRules = rules.map(rule => {
+        if (!rule || !Array.isArray(rule.conditions)) return null;
+
+        const parseTag = rule.type === 'number' ? v => Number(v) : v => String(v);
+
+        const conditionMatchers = rule.conditions.map(conditionStr => {
+            const blocks = conditionStr.match(/[+\-][^+\-]+/g);
+            if (!blocks) return null;
+
+            const blockMatchers = blocks.map(block => {
+                const prefix = block[0];
+                const content = block.slice(1).toLowerCase();
+                if (!content) return null;
+
+                const tags = content.split('|').filter(Boolean).map(parseTag);
+                if (tags.length === 0) return null;
+
+                if (tags.length === 1) {
+                    const tag = tags[0];
+                    if (prefix === '+') return itemTags => itemTags.includes(tag);
+                    if (prefix === '-') return itemTags => !itemTags.includes(tag);
+                } else {
+                    if (prefix === '+') return itemTags => tags.some(tag => itemTags.includes(tag));
+                    if (prefix === '-') return itemTags => !tags.some(tag => itemTags.includes(tag));
+                }
+            }).filter(Boolean);
+
+            if (blockMatchers.length === 1) return blockMatchers[0];
+
+            // AND between blocks
+            return itemTags => blockMatchers.every(fn => fn(itemTags));
+        });
+
+        return {
+            key: rule.key,
+            path: rule.key.includes('.') ? rule.key.split('.') : null,
+            conditionMatchers,
+            shouldApply: typeof rule.shouldApply === 'function' ? rule.shouldApply : () => true
+        };
+    }).filter(Boolean);
+
+    return items.filter(item => {
+        const isFilteredOut = compiledRules.some(rule => {
+            if (!rule.shouldApply(item)) return false;
+
+            const rawTags = rule.path ? getValueByPath(item, rule.path) : item[rule.key];
+            const tags = Array.isArray(rawTags) ? rawTags : rawTags != null ? [rawTags] : [];
+
+            // OR between condition strings
+            return rule.conditionMatchers.some(match => match(tags));
+        });
+
+        return !isFilteredOut;
+    });
+}
+
+
 // PLACEHOLDER
 // TODO: notifications
 function notify(text, icon) {
@@ -4510,7 +5635,7 @@ function onBodyClick(e) {
     if (e.altKey) {
         const href = e.target.closest('a[href]')?.getAttribute('href');
         if (href) {
-            const localUrl = Controller.convertCivUrlToLocal(href);
+            const { localUrl } = Controller.parseCivUrl(href);
             if (localUrl) {
                 e.preventDefault();
                 gotoLocalLink(localUrl);
@@ -4550,7 +5675,7 @@ function onBodyPointerDown(e) {
     touchTimer = setTimeout(() => {
         Controller.preparePage(href);
         touchTimer = null;
-    }, 100);
+    }, 150);
 
     link.addEventListener('pointermove', cleanup, { once: true });
     link.addEventListener('pointerup', cleanup, { once: true });
@@ -4568,7 +5693,7 @@ function onBodyPointerOver(e) {
 
     // link previews
     if (e.altKey) {
-        const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed])');
+        const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
         if (preview) {
             e.eventTarget = preview;
             return startLinkPreviewEvent(e);
@@ -4594,7 +5719,7 @@ function onBodyFocus(e) {
     }
 
     // link previews
-    // const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed])');
+    // const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     // if (preview) {
     //     e.eventTarget = preview;
     //     return startLinkPreviewEvent(e, { fromFocus: true });
@@ -4874,9 +5999,8 @@ function onDrop(e) {
 
     const dt = e.dataTransfer;
     const href = dt.getData('text/uri-list');
-    const redirectUrl = Controller.convertCivUrlToLocal(href);
-    if (redirectUrl) gotoLocalLink(redirectUrl);
-    else {
+    const { localUrl } = Controller.parseCivUrl(href);
+    if (!localUrl) {
         try {
             const url = new URL(href);
             if (url.origin !== location.origin) throw new Error('Unsupported url');
@@ -4884,7 +6008,10 @@ function onDrop(e) {
         } catch (_) {
             notify('Unsupported url');
         }
+        return;
     }
+
+    gotoLocalLink(localUrl);
 }
 
 function onDragenter(e) {
@@ -5092,7 +6219,7 @@ function startLinkPreviewEvent(e, options = { fromFocus: false }) {
 
     if (result instanceof Promise) {
         result.then(element => {
-            if (!document.body.contains(previewElement)) return;
+            if (!document.body.contains(previewElement) || !target.hasAttribute('lilpipe-showed')) return;
             showPreview(element);
             startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget }); // update position
         });
@@ -5133,6 +6260,7 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
         const tH = Math.ceil(tooltip.offsetHeight);
         const tW = Math.ceil(tooltip.offsetWidth);
         const wW = window.innerWidth;
+        const wH = window.innerHeight;
 
         let rect = positionTarget.getBoundingClientRect();
         const style = window.getComputedStyle(positionTarget);
@@ -5159,13 +6287,11 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
             }
         }
 
-        const { left, top, width, height } = rect;
-
-        const targetX = left + width/2 - tW/2;
-        const targetY = top - tH - 8;
-        const isBelow = targetY < 0;
+        const targetX = rect.left + rect.width/2 - tW/2;
+        const targetY = rect.top - tH - 8;
+        const isBelow = targetY < 0 && rect.top < wH - rect.bottom;
         const newX = targetX < 0 ? 0 : targetX + tW > wW ? wW - tW - 8 : targetX;
-        const newY = isBelow ? top + height + 8 : targetY;
+        const newY = isBelow ? rect.top + rect.height + 8 : targetY;
         const offsetX = targetX - newX;
 
         tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
@@ -5190,19 +6316,31 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
         }, delay);
     } else render();
 
-    const onpointerleave = () => {
+    const onpointerleave = e => {
         if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
         else prevLilpipeEvenetTime = Date.now();
 
-        tooltip.setAttribute('data-animation', 'out');
+        target.removeEventListener('blur', onpointerleave);
+        target.removeEventListener('pointerleave', onpointerleave);
+        window.removeEventListener('scroll', onpointerleave);
+
         target.removeAttribute('lilpipe-showed');
         if (delay) target.removeAttribute('lilpipe-showed-delay');
+        if (e.type === 'scroll') {
+            tooltip.remove?.();
+            return;
+        }
+        tooltip.setAttribute('data-animation', 'out');
         setTimeout(() => tooltip.remove?.(), 100);
     };
 
-    if (options.fromFocus) target.addEventListener('blur', onpointerleave, { once: true, capture: true });
-    else target.addEventListener('pointerleave', onpointerleave, { once: true });
+    if (options.fromFocus) target.addEventListener('blur', onpointerleave, { passive: true,  once: true, capture: true });
+    else target.addEventListener('pointerleave', onpointerleave, { passive: true,  once: true });
+    window.addEventListener('scroll', onpointerleave, { passive: true, once: true });
 }
+
+// Start loading what will be needed for display before the body is ready
+if (navigator.serviceWorker.controller !== null) Controller.preparePage(location.hash || '#home');
 
 // =================================
 // init not in defer and not at the end of the document,
@@ -5288,7 +6426,7 @@ function init() {
             new Promise(resolve => {
                 navigator.serviceWorker.addEventListener('controllerchange', () => resolve(true), { once: true });
             }),
-            new Promise(resolve => setTimeout(() => resolve(false), 200))
+            new Promise(resolve => setTimeout(() => resolve(false), 250))
         ]).then(init);
     };
     if (document.body && document.getElementById('svg-symbols')) return bodyIsReady();

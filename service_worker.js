@@ -513,7 +513,7 @@ function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
 
 class CacheManager {
     static #cacheMap = new Map(); // stores open Cache objects
-    static #hotCaches = [ SW_CONFIG.cache.blurhash ]; // cacheName
+    static #hotCaches = [ SW_CONFIG.cache.blurhash, SW_CONFIG.cache.static ]; // cacheName
     static #hotCache = new Map(); // RAM cache (only for blurhash)
 
     // Get cache by name, open if not already open

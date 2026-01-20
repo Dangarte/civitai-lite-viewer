@@ -33,6 +33,8 @@
         "hiddenImages": "Some images were hidden due to the selected filter settings ({count})",
         "language": "Language",
         "sortOptions": {
+            "Most Bookmarks": "Most Bookmarks",
+            "Recently Updated": "Recently Updated",
             "Highest Rated": "Highest Rated",
             "Most Downloaded": "Most Downloaded",
             "Most Liked": "Most Liked",
@@ -126,6 +128,9 @@
                 "linkNotSupported": "This link is not supported",
                 "wipPlaceholder": "[WIP] In development, currently only link conversion and hash search"
             },
+            "hideFurry": "Hide Furry",
+            "hideExtreme": "Hide Extreme/Fetish",
+            "hideGay": "Hide Gay/Yaoi",
             "settingsDescription": "Settings",
             "blackListTagsDescription": "List of tags to hide (separated by commas)",
             "blackListTagsNote": "This works only on the model list, since the image API does not return a list of tags.",

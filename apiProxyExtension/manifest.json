@@ -1,0 +1,44 @@
+{
+    "manifest_version": 3,
+    "name": "CivitAI API Bridge Extension",
+    "version": "1.0",
+    "permissions": [
+        "declarativeNetRequest",
+        "webRequestBlocking"
+    ],
+    "host_permissions": [
+        "https://*civitai.com/*"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "https://dangarte.github.io/civitai-lite-viewer/*"
+            ],
+            "world": "MAIN",
+            "run_at": "document_start",
+            "js": [
+                "content_main.js"
+            ],
+            "all_frames": false
+        },
+        {
+            "matches": [
+                "https://civitai.com/?bridge=true"
+            ],
+            "run_at": "document_start",
+            "js": [
+                "content_iframe.js"
+            ],
+            "all_frames": true
+        }
+    ],
+    "declarative_net_request": {
+        "rule_resources": [
+            {
+                "id": "ruleset_1",
+                "enabled": true,
+                "path": "rules.json"
+            }
+        ]
+    }
+}

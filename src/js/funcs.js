@@ -94,66 +94,6 @@ function formatTime(seconds) {
     return hours > 0 ? `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}` : `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
-function isEquals(obj1, obj2, options = {strict: true}) {
-    let type1 = typeof(obj1),
-        type2 = typeof(obj2);
-
-    if(type1 === 'object') {
-        if(Array.isArray(obj1)) type1 = 'array';
-        if(Array.isArray(obj2)) type2 = 'array';
-    }
-
-    if(type1 !== type2) return false;
-
-    switch(type1) {
-        case 'boolean':
-        case 'symbol':
-        case 'number':
-        case 'string': {
-            return Boolean(obj1 === obj2);
-        }
-        case 'object': {
-            if(obj1 === null || obj2 === null) return Boolean(obj1 === obj2);
-
-            const keys1 = Object.keys(obj1);
-            const keys2 = Object.keys(obj2);
-            if(keys1.length !== keys2.length) return false;
-
-            for(let i = 0; i < keys1.length; i++) {
-                if(isEquals(obj1[keys1[i]], obj2[keys1[i]], options) === false) return false;
-            }
-            break;
-        }
-        case 'array': {
-            if(obj1.length !== obj2.length) return false;
-
-            if(options.strict === true) {
-                for(let i = 0; i < obj1.length; i++) {
-                    if(isEquals(obj1[i], obj2[i], options) === false) return false;
-                }
-            }
-            else {
-                for(let i = 0; i < obj1.length; i++) {
-                    for(let j = 0; j < obj2.length; j++) {
-                        if(isEquals(obj1[i], obj2[j], options) === false) return false;
-                        delete obj2[j];
-                    }
-                }
-            }
-            break;
-        }
-        case 'undefined': {
-            return false;
-        }
-        case 'function':
-        default: {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 function isURL(string) {
     try {
         const url = new URL(string);
@@ -184,6 +124,15 @@ async function fetchJSON(url, options = {}) {
     } catch (err) {
         console.warn('fetchJSON error:', err?.message ?? err);
         return { error: err?.message ?? err };
+    }
+}
+
+function parseParams(paramString) {
+    if (!paramString) return null;
+    try {
+        return Object.fromEntries(new URLSearchParams(paramString));
+    } catch {
+        return null;
     }
 }
 
@@ -559,7 +508,8 @@ class MasonryLayout {
         this.#init();
     }
 
-    resize(animate = false) {
+    // if "passive: true" - do not trigger style recalculations (do not scroll the page, do not stop animations if any)
+    resize({ animate = false, passive = false } = {}) {
         const options = this.#options;
         this.#columns = [];
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
@@ -578,7 +528,7 @@ class MasonryLayout {
 
         // Calc current positions
         const startPositions = new Map();
-        const startOffsetLeft = this.#container.offsetLeft;
+        const startOffsetLeft = animate ? this.#container.offsetLeft : 0;
         if (animate) {
             const startScrollTop = this.#lastScrollTop;
             this.#inViewport.forEach(item => {
@@ -601,7 +551,6 @@ class MasonryLayout {
 
             if (lastFocusedItem) {
                 const focusedItem = this.#itemsById.get(lastFocusedItem.id);
-                let scrollToElement = null;
                 if (focusedItem) {
                     const targetScrollOffset = this.#lastScrollTop - lastFocusedItem.boundTop;
                     const targetScroll = focusedItem.boundTop + targetScrollOffset;
@@ -611,8 +560,7 @@ class MasonryLayout {
                         this.#focusedItem = focusedItem;
                         this.#focusedItem?.element?.setAttribute('tabIndex', 0);
                     }
-                    scrollToElement = focusedItem.element ?? null;
-                    document.documentElement.scrollTo({ top: this.#lastScrollTop + this.#container.offsetTop, behavior: 'instant' });
+                    if (!passive) document.documentElement.scrollTo({ top: this.#lastScrollTop + this.#container.offsetTop, behavior: 'instant' });
                 } else {
                     this.#handleScroll({ scrollTopRelative: this.#lastScrollTop || 0 });
                 }
@@ -622,7 +570,7 @@ class MasonryLayout {
                 const gridItem = this.#itemsById.get(item.id);
                 if (!item.inDOM) return;
                 if (this.#inViewport.has(gridItem)) {
-                    gridItem.element.getAnimations().forEach(a => a.cancel());
+                    if (!passive) gridItem.element.getAnimations().forEach(a => a.cancel());
                 } else {
                     gridItem.element.remove();
                     this.#onElementRemove?.(gridItem.element, gridItem.data);
@@ -665,9 +613,13 @@ class MasonryLayout {
     addItems(items, dryAdd = false) {
         const options = this.#options;
         const itemsToUpdate = new Map();
+        let resized = false;
         items.forEach(item => {
             if (this.#itemsById.has(item.id)) {
                 if (!itemsToUpdate.has(item.id)) itemsToUpdate.set(item.id, item.data);
+                const gridItem = this.#itemsById.get(item.id);
+                const cardHeight = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
+                if (gridItem.aspectRatio !== item.aspectRatio || gridItem.boundHeight !== cardHeight) resized = true;
                 return;
             }
 
@@ -712,8 +664,19 @@ class MasonryLayout {
             });
         }
 
+        // If any of the cards have changed size, then update the position of all cards
+        if (resized) {
+            console.time('resize');
+            this.resize({ animate: false, passive: true });
+            console.timeEnd('resize');
+
+            const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
+            this.#container.style.height = largestColumn.height > options.gap ? `${largestColumn.height - options.gap}px` : '0px';
+            return;
+        }
+
         if (!this.#options.disableVirtualScroll) {
-            if (!dryAdd) this.#handleScroll();
+            if (!dryAdd) this.#handleScroll({ firstDraw: true });
         }
         else {
             const now = performance.now();
@@ -906,7 +869,7 @@ class MasonryLayout {
     #overscanCooldown = 0; // timer before overscan collapse
     #currentOverscan = 0; // smooth overscan that we will use
     #handleScroll(e) {
-        const firstDraw = !this.#inViewport.size; // Mark this as the first rendering (the generator can render everything at once, without delays)
+        const firstDraw = e?.firstDraw || !this.#inViewport.size; // Mark this as the first rendering (the generator can render everything at once, without delays)
         const now = performance.now();
         // scrollTopRelative - used to restore elements when moving through nav history, without causing a recalculation of styles
         const currentScrollTop = typeof e?.scrollTopRelative === 'number'
@@ -1050,7 +1013,7 @@ class MasonryLayout {
     #handleResize() {
         const options = this.#options;
         const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
-        if (columnsCount !== this.#columns.length) this.resize(true);
+        if (columnsCount !== this.#columns.length) this.resize({ animate: true });
     }
 
     #lerp(a, b, t) {
