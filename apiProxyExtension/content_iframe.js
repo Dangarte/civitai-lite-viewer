@@ -4,7 +4,7 @@ document.documentElement.innerHTML = '<!DOCTYPE html><html><head><title>Proxy Br
 
 // Bridge thingy
 const ORIGINS = [
-    "https://dangarte.github.io/civitai-lite-viewer"
+    "https://dangarte.github.io"
 ];
 const CIVITAI_ORIGIN = "https://civitai.com";
 const CIVITAI_TRPC = "/api/trpc/";
@@ -16,7 +16,10 @@ const CIVITAI_TRPC_ROUTES = [
 ];
 
 window.addEventListener('message', async e => {
-    if (!ORIGINS.includes(e.origin)) return;
+    if (!ORIGINS.includes(e.origin)) {
+        console.log(`[API Bridge] Unknown origin "${e.origin}"`);
+        return;
+    }
     const { id, type, route, params } = e.data;
 
     if (!CIVITAI_TRPC_ROUTES.includes(route)) {
