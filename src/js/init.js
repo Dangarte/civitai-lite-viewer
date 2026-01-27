@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 27,
+    version: 28,
     extensionVertsion: 1,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -33,7 +33,7 @@ const CONFIG = {
             carouselItemsCount: 2,
             carouselGap: 16
         },
-        blurHashSize: 32, // minimum size of blur preview
+        blurHashSize: 30, // minimum size of blur preview
     },
     appearance_small: {
         appWidth: 1200,
@@ -53,7 +53,7 @@ const CONFIG = {
             carouselItemsCount: 1,
             carouselGap: 10
         },
-        blurHashSize: 32, // minimum size of blur preview
+        blurHashSize: 30, // minimum size of blur preview
     },
     appearance: {},
     perRequestLimits: {
@@ -69,16 +69,18 @@ const CONFIG = {
                 "+5140" // furry
             ],
             hideExtreme: [
-                "+2637|5219|5510" // "huge ass" or "huge breasts" or "gigantic breasts" (aka inflation)
+                "+2637|5219|5510", // "huge ass" or "huge breasts" or "gigantic breasts" (aka inflation)
+                "+2561" // "vore"
             ],
             hideGay: [
                 "+3822", // "yaoi"
                 "+114923+304|2013", // "male focus" and "nude" or "nudity"
-                // "+5262+308", // "solo" and "penis" ?
-                "+279" // "futanari"
+                "+279", // "futanari"
+                "+3485" // "femboy"
             ],
-            hideGay_nsfw: [ // Mature+
-                "+114923+5262|3852" // "male focus" and "solo"
+            hideGay_nsfw: [ // Soft+ (Mature+ doesn't work because the tags aren't always accurate, and the "futanari" tag might not be in the list at all, and you need to filter it somehow even if the level is only "soft")
+                "+114923+5262|3852", // "male focus" and "solo"
+                "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
             ]
         }
     },
@@ -102,6 +104,7 @@ const SETTINGS = {
     period_images: 'AllTime',
     period_articles: 'AllTime',
     baseModels: [],
+    baseModels_images: [],
     blackListTags: [], // Doesn't work on images (pictures don't have tags)
     blackListTagIds: [], // With the extension from the "apiProxyExtension" folder, you can filter images by tag ID
     nsfw: true,
@@ -119,7 +122,6 @@ const SETTINGS = {
     showLogs: true,
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
-    disableVirtualScroll: false,    // Completely disable virtual scroll
     assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
     assumeListSameAsImage: true,    // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
 };
@@ -131,6 +133,7 @@ const SETTINGS = {
 //  5262: solo
 //  3852: solo focus
 //  5231: male
+//  5232: man
 //  5133: woman
 //  114923: male focus
 //  308: penis
@@ -145,6 +148,11 @@ const SETTINGS = {
 //  279: futanari
 //  882: bdsm
 //  511: bondage
+//  2561: vore
+//  122803: big belly
+//  3485: femboy
+//  112481: graphic male nudity
+//  112683: graphic female nudity
 //
 // To get tags and tagIds from image
 //  https://civitai.com/api/trpc/tag.getVotableTags?input=%7B%22json%22%3A%7B%22id%22%3A{imageId}%2C%22type%22%3A%22image%22%2C%22authed%22%3Atrue%7D%7D
@@ -376,7 +384,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (!rawStats || typeof rawStats !== 'object') return {};
 
         return Object.keys(rawStats).reduce((acc, key) => {
-            const normalizedKey = key.replace(/AllTime$/, '');
+            const normalizedKey = key.endsWith('AllTime') ? key.substring(0, key.length - 7) : key; // 'AllTime'.length = 7
             const value = rawStats[key];
             if (typeof value === 'number' && !isNaN(value)) acc[normalizedKey] = value;
             return acc;
@@ -400,36 +408,65 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         };
     }
 
+    #MARK_RULES = {
+        bold: t => `<strong>${t}</strong>`,
+        italic: t => `<em>${t}</em>`,
+        underline: t => `<u>${t}</u>`,
+        strike: t => `<del>${t}</del>`,
+        code: t => `<code>${t}</code>`,
+        highlight: t => `<mark>${t}</mark>`,
+        textStyle: (t, attrs) => {
+            const styles = [];
+            if (attrs.color) styles.push(`color: ${attrs.color}`);
+            if (attrs.backgroundColor) styles.push(`background-color: ${attrs.backgroundColor}`);
+            if (attrs.fontFamily) styles.push(`font-family: ${attrs.fontFamily}`);
+            if (attrs.fontSize) styles.push(`font-size: ${attrs.fontSize}`);
+            if (attrs.lineHeight) styles.push(`line-height: ${attrs.lineHeight}`);
+            return styles.length > 0 ? `<span style="${styles.join('; ')}">${t}</span>` : t;
+        },
+        link: (t, attrs) => {
+            const href = attrs.href || '#';
+            const safeHref = href.startsWith('javascript:') ? '#' : escapeHtml(href);
+            return `<a href="${safeHref}" target="_blank" rel="nofollow noopener">${t}</a>`;
+        }
+    };
+    #BLOCK_RULES = {
+        doc: ctx => ctx.children,
+        paragraph: ctx => `<p>${ctx.children}</p>`,
+        heading: ctx => {
+            const level = Math.min(Math.max(ctx.node.attrs?.level || 1, 1), 6);
+            return `<h${level}>${ctx.children}</h${level}>`;
+        },
+        bulletList: ctx => `<ul>${ctx.children}</ul>`,
+        orderedList: ctx => `<ol>${ctx.children}</ol>`,
+        listItem: ctx => `<li>${ctx.children}</li>`,
+        blockquote: ctx => `<blockquote>${ctx.children}</blockquote>`,
+        codeBlock: ctx => `<pre><code>${ctx.children}</code></pre>`,
+        horizontalRule: () => `<hr />`,
+        hardBreak: () => `<br />`,
+        image: ctx => {
+            const { src, alt } = ctx.node.attrs || {};
+            return `<img src="${escapeHtml(src || '')}" alt="${escapeHtml(alt || '')}" style="max-width: 100%;" />`;
+        },
+        video: ctx => `<video controls src="${escapeHtml(ctx.node.attrs?.src || '')}" style="max-width: 100%;"></video>`,
+        media: ctx => {
+            const { type, url: urlId, filename } = ctx.node.attrs || {};
+            const url = this.#convertUrlIdToUrl({ urlId, itemId: encodeURIComponent(filename || ''), width: 525 });
+            if (type === 'video') return `<video controls src="${escapeHtml(url)}" style="max-width: 100%;"></video>`;
+            return `<img src="${escapeHtml(url)}" alt="${escapeHtml(filename || '')}" style="max-width: 100%;" />`; // if (type === 'image')
+        }
+    };
     #convertContentToHtml(node) {
         if (!node) return '';
 
         // text
         if (node.type === 'text') {
-            let text = node.text || '';
-            // (bold, italic, code, etc.)
+            let text = escapeHtml(node.text || '');
             if (node.marks) {
-                node.marks.forEach(mark => {
-                    if (mark.type === 'bold') text = `<strong>${text}</strong>`;
-                    if (mark.type === 'italic') text = `<em>${text}</em>`;
-                    if (mark.type === 'underline') text = `<u>${text}</u>`;
-                    if (mark.type === 'strike') text = `<del>${text}</del>`;
-                    if (mark.type === 'code') text = `<code>${text}</code>`;
-                    if (mark.type === 'highlight') text = `<mark>${text}</mark>`;
-                    if (mark.type === 'textStyle') {
-                        const attrs = mark.attrs || {};
-                        const styles = [];
-                        if (attrs.color) styles.push(`color: ${attrs.color}`);
-                        if (attrs.backgroundColor) styles.push(`background-color: ${attrs.backgroundColor}`);
-                        if (attrs.fontFamily) styles.push(`font-family: ${attrs.fontFamily}`);
-                        if (attrs.fontSize) styles.push(`font-size: ${attrs.fontSize}`);
-                        if (attrs.lineHeight) styles.push(`line-height: ${attrs.lineHeight}`);
-                        text = styles.length > 0 ? `<span style="${styles.join('; ')}">${text}</span>` : text;
-                    }
-                    if (mark.type === 'link') {
-                        const href = mark.attrs?.href || '#';
-                        text = `<a href="${href}" target="_blank" rel="nofollow noopener">${text}</a>`;
-                    }
-                });
+                for (const mark of node.marks) {
+                    const rule = this.#MARK_RULES[mark.type];
+                    if (rule) text = rule(text, mark.attrs || {});
+                }
             }
             return text;
         }
@@ -438,46 +475,11 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         const childrenHtml = node.content ? node.content.map(child => this.#convertContentToHtml(child)).join('') : '';
 
         // blocks
-        switch (node.type) {
-            case 'doc':
-                return childrenHtml;
-                // return `<div>${childrenHtml}</div>`;
-            case 'paragraph':
-                return `<p>${childrenHtml}</p>`;
-            case 'heading':
-                const level = node.attrs?.level || 1;
-                return `<h${level}>${childrenHtml}</h${level}>`;
-            case 'bulletList':
-                return `<ul>${childrenHtml}</ul>`;
-            case 'orderedList':
-                return `<ol>${childrenHtml}</ol>`;
-            case 'listItem':
-                return `<li>${childrenHtml}</li>`;
-            case 'blockquote':
-                return `<blockquote>${childrenHtml}</blockquote>`;
-            case 'codeBlock':
-                return `<pre><code>${childrenHtml}</code></pre>`;
-            case 'horizontalRule':
-                return `<hr />`;
-            case 'hardBreak':
-                return `<br />`;
-            case 'media':
-                const type = node.attrs?.type || '';
-                const urlId = node.attrs?.url || '';
-                const filename = node.attrs?.filename || '';
-                const url = this.#convertUrlIdToUrl({ urlId, itemId: encodeURIComponent(filename), width: 525 });
-                if (type === 'image') return `<img src="${url}" alt="${filename}" style="max-width: 100%;" />`;
-                if (type === 'video') return `<video controls src="${url}" style="max-width: 100%;"></video>`;
-            case 'image':
-                const src = node.attrs?.src || '';
-                const alt = node.attrs?.alt || '';
-                return `<img src="${src}" alt="${alt}" style="max-width: 100%;" />`;
-            case 'video':
-                return `<video controls src="${node.attrs?.src}" style="max-width: 100%;"></video>`;
-            default:
-                console.log(node);
-                return childrenHtml;
-        }
+        const renderer = this.#BLOCK_RULES[node.type];
+        if (renderer) return renderer({ children: childrenHtml, node });
+
+        console.warn('Unknown node type:', node.type);
+        return childrenHtml;
     }
 
     async fetchImages(options = {}) {
@@ -487,6 +489,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             modelVersionId,
             postId,
             username = '',
+            baseModels = [],
             browsingLevel,
             sort = '',
             period = '',
@@ -510,6 +513,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (modelVersionId) input.json.modelVersionId = modelVersionId;
         if (postId) input.json.postId = +postId;
         if (username) input.json.username = username;
+        if (baseModels?.length > 0) input.json.baseModels = baseModels;
 
         const data = (await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' })).json;
 
@@ -647,9 +651,9 @@ class Controller {
     static #errorTimer = null;
     static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
     static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
-    static #activeMasonryLayout = null;
     static #onScroll = null;
     static #onResize = null;
+    static #activeVirtualScroll = [];
     static #state = {};
 
     static windowWidth = 0;
@@ -892,6 +896,24 @@ class Controller {
             Controlnet: 'ControlNet'
         },
     };
+    static #nsfwLevels = {
+        sort: [
+            { minLevel: 32, string: 'Blocked' },
+            { minLevel: 16, string: 'X' },
+            { minLevel: 8, string: 'X' },
+            { minLevel: 4, string: 'Mature' },
+            { minLevel: 2, string: 'Soft' },
+            { minLevel: 0, string: 'None' }
+        ],
+        string: {
+            32: 'Blocked',
+            16: 'X',
+            8: 'X',
+            4: 'Mature',
+            2: 'Soft',
+            0: 'None'
+        }
+    };
     static #listFilters = {
         nsfwOptions: [ 'None', 'Soft', 'Mature', 'X', 'true' ],
         periodOptions: [ 'AllTime', 'Year', 'Month', 'Week', 'Day' ],
@@ -900,12 +922,21 @@ class Controller {
             'Soft': 2,
             'Mature': 4,
             'X': 16,
-            'true': 32,
+            'true': 32
         },
         genLabels: (options, langPath, fallbackLabels = {}) => {
             const lang = langPath ? window.languagePack?.text?.[langPath] ?? {} : {};
             return Object.fromEntries(options.map(v => [ v, lang[v] ?? fallbackLabels[v] ?? v ]));
         }
+    };
+
+    static #regex = {
+        urlModels: /\/models\/(\d+)/i,          // get model id from civ url
+        urlImages: /\/images\/(\d+)/i,          // get image id from civ url
+        urlPosts: /\/posts\/(\d+)/i,            // get post id from civ url
+        urlArticles: /\/articles\/(\d+)/i,      // get article id from civ url
+        urlParamWidth: /\/width=\d+\//,         // /width=NUMBER/
+        urlParamAnimFalse: /anim=false,?/,      // anim=false, or anim=false
     };
 
     static #pages = [
@@ -1012,6 +1043,41 @@ class Controller {
             }
         }
     ];
+    static #civUrlRules = [
+        { // models
+            match: ({ url }) => url.pathname.startsWith('/models/'),
+            parse: ({ url, params }) => {
+                params.modelId = url.pathname.match(this.#regex.urlModels)?.[1] ?? null;
+            },
+            toLocal: ({ url, params }) => {
+                if (!params.modelId) return null;
+                let localUrl = `#models?model=${params.modelId}`;
+                if (params.modelVersionId) localUrl += `&version=${params.modelVersionId}`;
+                return localUrl;
+            }
+        },
+        { // images
+            match: ({ url }) => url.pathname.startsWith('/images/'),
+            parse: ({ url, params }) => {
+                params.imageId = url.pathname.match(this.#regex.urlImages)?.[1] ?? null;
+            },
+            toLocal: ({ url, params }) => params.imageId ? `#images?image=${params.imageId}` : null
+        },
+        { // posts
+            match: ({ url }) => url.pathname.startsWith('/posts/'),
+            parse: ({ url, params }) => {
+                params.postId = url.pathname.match(this.#regex.urlPosts)?.[1] ?? null;
+            },
+            toLocal: ({ url, params }) => params.postId ? `#images?post=${params.postId}` : null
+        },
+        { // articles
+            match: ({ url }) => url.pathname.startsWith('/articles/'),
+            parse: ({ url, params }) => {
+                params.articleId = url.pathname.match(this.#regex.urlArticles)?.[1] ?? null;
+            },
+            toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
+        }
+    ];
 
     static updateMainMenu() {
         const menu = document.querySelector('#main-menu .menu');
@@ -1041,10 +1107,8 @@ class Controller {
 
         const navigationState = {...this.#state};
 
-        this.#activeMasonryLayout?.destroy({ preventRemoveItemsFromDOM: true });
-        this.#activeMasonryLayout = null;
-        this.#onScroll = null;
-        this.#onResize = null;
+        this.#clearVirtualScroll();
+        this.#cachedUserImages = new Map(); // Clear the avatar pool during navigation (it is only needed when scrolling through the list of models)
         this.#pageNavigation = Date.now();
         this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
 
@@ -1052,25 +1116,38 @@ class Controller {
         this.appElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
         this.appElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
         document.getElementById('tooltip')?.remove();
+        document.getElementById('page-loading-bar')?.remove();
         this.appElement.classList.add('page-loading');
+        insertElement('div', document.body, { id: 'page-loading-bar' });
         this.appElement.setAttribute('data-page', pageId);
         if (paramString) this.appElement.setAttribute('data-params', paramString);
         else this.appElement.removeAttribute('data-params');
         document.querySelector('#main-menu .menu a.active')?.classList.remove('active');
         if (pageId) document.querySelector(`#main-menu .menu a[href="${pageId}"]`)?.classList.add('active');
 
-        const finishPageLoading = () => {
-            cleanupDetachedObservers();
-            hideTimeError();
-            if (navigationState.id === this.#state.id) {
-                this.appElement.classList.remove('page-loading');
-
-                this.#onScroll?.({ scrollTop: navigationState.scrollTop || 0, scrollTopRelative: navigationState.scrollTopRelative || 0 });
-                document.documentElement.scrollTo({ top: navigationState.scrollTop || 0, behavior: 'instant' });
-
-                // Clear promises or whatever might have been in the preflight
-                this.#preClickResults = {};
+        // TODO: add animation
+        const processNavigation = (result, loaded = false) => {
+            if (result.element) {
+                this.appElement.textContent = '';
+                this.appElement.appendChild(result.element);
             }
+            if (result.title !== undefined) this.#setTitle(result.title);
+
+            if (loaded) {
+                hideTimeError();
+                cleanupDetachedObservers();
+                document.getElementById('page-loading-bar')?.remove();
+                this.appElement.classList.remove('page-loading');
+                this.onScrollFromNavigation(navigationState);
+                document.documentElement.scrollTo({ top: navigationState.scrollTop || 0, behavior: 'instant' });
+            }
+        };
+
+        const finishPageLoading = (result = {}) => {
+            if (navigationState.id === this.#state.id) {
+                processNavigation(result, true);
+                this.#preClickResults = {};
+            } else hideTimeError();
         };
 
         // Clear all errors and prepare new timer
@@ -1099,17 +1176,21 @@ class Controller {
 
         this.#errorTimer = setTimeout(showTimeOutError, CONFIG.timeOut);
 
-        let promise;
+        let result;
         const params = parseParams(paramString) || {};
         for (const page of this.#pages) {
             if (page.match({ pageId, params })) {
-                promise = page.goto({ pageId, params });
+                result = page.goto({ pageId, params });
                 break;
             }
         }
 
-        if (promise) promise.finally(finishPageLoading);
-        else finishPageLoading();
+        if (!result) return finishPageLoading();
+
+        if (result.promise instanceof Promise) {
+            processNavigation(result);
+            result.promise.then(finishPageLoading);
+        } else finishPageLoading(result);
     }
 
     static preparePage(page) {
@@ -1137,11 +1218,36 @@ class Controller {
         }
     }
 
-    static gotoHome() {
-        this.#setTitle(window.languagePack?.text?.home ?? 'Home');
+    static #gotoError(error, fallbackMessage = 'Error') {
+        console.error('Error:', error?.message ?? error);
+        const appContent = createElement('div', { class: 'app-content' });
+        appContent.appendChild(this.#genErrorPage(error?.message ?? fallbackMessage));
+        return { element: appContent, title: window.languagePack?.errors?.error ?? 'Error' };
+    }
 
+    static #addVirtualScroll(virtualScroll) {
+        const { onScroll = null, onResize = null, readScroll = null, readResize = null } = virtualScroll.getCallbacks();
+        this.#activeVirtualScroll.push({
+            id: virtualScroll.id,
+            virtualScroll,
+            readScroll,
+            readResize,
+            onScroll,
+            onResize
+        });
+    }
+
+    static #clearVirtualScroll() {
+        this.#activeVirtualScroll.forEach(item => {
+            item.virtualScroll.destroy({ preventRemoveItemsFromDOM: true });
+        });
+        this.#activeVirtualScroll = [];
+    }
+
+    static gotoHome() {
+        const fragment = new DocumentFragment();
         const searchLang = window.languagePack?.temp?.home?.search ?? {};
-        const searchWrap = createElement('div', { class: 'app-content main-search-container' });
+        const searchWrap = insertElement('div', fragment, { class: 'app-content main-search-container' });
         const searchContainer = insertElement('div', searchWrap, { class: 'main-search' });
         const searchInput = insertElement('input', searchContainer, { id: 'main-search-input', type: 'text', placeholder: searchLang.placeholder ?? 'Search using CivitAI API...', role: 'search', autocomplete: 'off' });
         const searchButton = insertElement('button', searchContainer, { class: 'search-button' });
@@ -1291,7 +1397,7 @@ class Controller {
 
 
         // This is a temporary description, so whatever
-        const appContent = createElement('div', { class: 'app-content' });
+        const appContent = insertElement('div', fragment, { class: 'app-content' });
         const tempHome =  window.languagePack?.temp?.home ?? {};
         insertElement('h1', appContent, undefined, window.languagePack?.text?.home);
         insertElement('p', appContent, undefined, tempHome.p1?.description);
@@ -1466,37 +1572,36 @@ class Controller {
             }
         });
 
-        this.#clearAppElement();
-        this.appElement.appendChild(searchWrap);
-        this.appElement.appendChild(appContent);
+        return {
+            element: fragment,
+            title: window.languagePack?.text?.home ?? 'Home'
+        };
     }
 
     static gotoArticles(options = {}) {
         if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
             const appContent = createElement('div', { class: 'app-content' });
-            this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
             const p = insertElement('p', appContent, { class: 'error-text' });
             p.appendChild(getIcon('cross'));
             insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
-            return;
+            return {
+                element: appContent,
+                title: window.languagePack?.text?.articles ?? 'Articles'
+            };
         }
 
         const { tag, username } = options;
-
+        const fragment = new DocumentFragment();
         const navigationState = {...this.#state};
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         let query, hiddenArticles = 0;
         const layoutConfig = {
+            id: 'articles',
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
             generator: this.#genArticleCard.bind(this),
-            minOverscan: 1,
-            maxOverscan: 3,
             passive: true,
-            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
@@ -1556,7 +1661,7 @@ class Controller {
                 articles = filterItems(articles, [
                     { key: 'tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
                     { key: 'coverImage.tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
-                    SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 4 } : null,
+                    SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
                     // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
                 ]);
 
@@ -1571,10 +1676,17 @@ class Controller {
             return { items, hidden: hiddenArticles - hiddenBefore };
         };
 
-        const appContent = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+        const filter = this.#genArticlesListFilters(() => {
+            savePageSettings();
+            this.#pageNavigation = Date.now();
+            infinityScroll.reload();
+        });
+        fragment.appendChild(filter);
+
+
+        const appContent = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
         const listWrap = insertElement('div', appContent, { id: 'articles-list' });
         appContent.appendChild(this.#genScrollToTopButton());
-        this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
 
         const infinityScroll = this.#genInfinityScroll({
             layoutConfig, loadItems, prepareItems,
@@ -1586,38 +1698,31 @@ class Controller {
 
         listWrap.appendChild(infinityScroll.element);
 
-        const layout = this.#activeMasonryLayout = infinityScroll.layout;
-        const { onScroll, onResize } = layout.getCallbacks();
-        this.#onScroll = onScroll;
-        this.#onResize = onResize;
+        this.#addVirtualScroll(infinityScroll.layout);
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
         }
 
-        this.#clearAppElement();
-        this.appElement.appendChild(this.#genArticlesListFilters(() => {
-            savePageSettings();
-            this.#pageNavigation = Date.now();
-            infinityScroll.reload();
-        }));
-        this.appElement.appendChild(appContent);
-
-        return infinityScroll.promise;
+        return { 
+            element: fragment,
+            title: window.languagePack?.text?.articles ?? 'Articles',
+            promise: infinityScroll.promise
+        };
     }
 
     static gotoArticle(articleId) {
         if (!EXTENSION_INSTALLED || !this.api.fetchArticle) {
             const appContent = createElement('div', { class: 'app-content' });
-            this.#setTitle(window.languagePack?.text?.articles ?? 'Articles');
             const p = insertElement('p', appContent, { class: 'error-text' });
             p.appendChild(getIcon('cross'));
             insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
-            return;
+            return {
+                element: appContent,
+                title: window.languagePack?.text?.articles ?? 'Articles'
+            };
         }
 
         const pageNavigation = this.#pageNavigation;
@@ -1629,19 +1734,18 @@ class Controller {
         const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
 
         const insertArticle = article => {
-            this.#setTitle(article.title);
-
-            const appContent = createElement('div', { class: 'app-content' });
+            const fragment = new DocumentFragment();
+            const appContent = insertElement('div', fragment, { class: 'app-content' });
             const page = insertElement('div', appContent, { class: 'model-page article-page', 'data-article-id': article.id });
 
             // Model name
             const modelNameWrap = insertElement('div', page, { class: 'model-name article-name' });
             const modelNameH1 = insertElement('h1', modelNameWrap, undefined, article.title);
             const statsList = [
-                { icon: 'bookmark', value: article.stats.collectedCount, formatter: formatNumber, unit: 'bookmark' },
-                { icon: 'chat', value: article.stats.commentCount, formatter: formatNumber, unit: 'comment' },
-                { icon: 'thunder', value: article.stats.tippedAmountCount, formatter: formatNumber, unit: 'buzz' },
-                { icon: 'eye', value: article.stats.viewCount, formatter: formatNumber, unit: 'view' },
+                { icon: 'bookmark', value: article.stats.collectedCount, unit: 'bookmark' },
+                { icon: 'chat', value: article.stats.commentCount, unit: 'comment' },
+                { icon: 'thunder', value: article.stats.tippedAmountCount, unit: 'buzz' },
+                { icon: 'eye', value: article.stats.viewCount, unit: 'view' },
             ];
             const statsFragment = this.#genStats(statsList);
             modelNameH1.appendChild(statsFragment);
@@ -1677,7 +1781,8 @@ class Controller {
             const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
             article.attachments.forEach(file => {
                 const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
-                const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.url });
+                const downloadUrl = `${CONFIG.civitai_url}/api/download/attachments/${file.id}`; // file.url - required auth
+                const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: downloadUrl });
                 a.appendChild(getIcon('download'));
                 insertElement('span', a, undefined, file.name || 'Unnamed');
                 insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
@@ -1686,9 +1791,10 @@ class Controller {
 
             // Article cover
             if (article.coverImage) {
-                const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
+                const modelPreviewWrap = insertElement('div', page, { class: 'model-preview article-preview' });
                 const mediaElement = this.#genMediaElement({ media: article.coverImage, width: Math.min(CONFIG.appearance.appWidth, this.windowWidth), taget: 'model-preview', allowAnimated: true });
                 modelPreviewWrap.appendChild(mediaElement);
+                this.#genMediaPreviewFromPrevPage(mediaElement, article.coverImage.id);
             }
 
             const content = createElement('div', { class: 'model-description article-content' });
@@ -1712,12 +1818,22 @@ class Controller {
             content.appendChild(modelDescriptionFragment);
             page.appendChild(content);
 
+            // Adding virtual scrolling if there are many elements (For example an article with id = 3733)
+            if (content.children.length > 300) {
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    if (!this.appElement.contains(content)) return;
+
+                    const virtualScroll = this.#genFakeVirtualScroll(`article-${article.id}`, content);
+                    this.#addVirtualScroll(virtualScroll);
+                }));
+            }
+
             // Open in CivitAI
             insertElement('a', page, { href: `${CONFIG.civitai_url}/articles/${article.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
-            this.#clearAppElement();
-            appContent.appendChild(this.#genScrollToTopButton());
-            this.appElement.appendChild(appContent);
+            fragment.appendChild(this.#genScrollToTopButton());
+
+            return { element: fragment, title: article.title };
         };
 
         const cachedModel = this.#cache.articles.get(`${articleId}`) || this.#preClickResults[`${articleId}-result`];
@@ -1727,7 +1843,7 @@ class Controller {
         }
 
         const apiPromise = this.#preClickResults[articleId] ?? this.api.fetchArticle(Number(articleId));
-        return apiPromise
+        const promise = apiPromise
         .then(data => {
             if (data?.id) this.#cache.articles.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
@@ -1735,12 +1851,10 @@ class Controller {
             return insertArticle(data);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error?.message ?? error);
-            const appContent = createElement('div', { class: 'app-content' });
-            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
+            return this.#gotoError(error);
         });
+
+        return { promise };
     }
 
     static gotoImage(imageId, nsfwLevel) {
@@ -1749,20 +1863,21 @@ class Controller {
         const cachedMedia = this.#cache.images.get(`${imageId}`) || this.#preClickResults[`${imageId}-result`];
         if (cachedMedia) {
             this.#log('Loaded image info (cache)', cachedMedia);
+            if (!this.#cache.images.has(`${imageId}`)) this.#cache.images.set(`${imageId}`, cachedMedia);
             appContent.appendChild(this.#genImageFullPage(cachedMedia));
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
-            return;
+            return { element: appContent };
         }
 
         const pageNavigation = this.#pageNavigation;
         const apiPromise = this.#preClickResults[imageId] ?? this.api.fetchImageMeta(imageId, nsfwLevel);
-        return apiPromise.then(media => {
+        const promise = apiPromise.then(media => {
             if (pageNavigation !== this.#pageNavigation) return;
             this.#log('Loaded image info', media);
+            this.#cache.images.set(`${imageId}`, media);
             if (!media) throw new Error('No Meta');
 
             appContent.appendChild(this.#genImageFullPage(media));
+            return { element: appContent };
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
@@ -1773,26 +1888,25 @@ class Controller {
                 insertElement('p', appContent, { class: 'error-text' }, 'Some images cannot be retrieved via API, you can try opening this image on the original site');
                 insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
             }
-        }).finally(() => {
-            if (pageNavigation !== this.#pageNavigation) return;
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
+            return { element: appContent };
         });
+
+        return { promise };
     }
 
     static gotoImages(options = {}) {
         const { modelId, username, userId, modelVersionId, postId } = options;
-
-        this.#setTitle(window.languagePack?.text?.images ?? 'Images');
 
         const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
         const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, username, userId, postId });
         appContentWide.appendChild(imagesList);
         appContentWide.appendChild(this.#genScrollToTopButton());
 
-        this.#clearAppElement();
-        this.appElement.appendChild(appContentWide);
-        return imagesListPromise;
+        return {
+            element: appContentWide,
+            title: window.languagePack?.text?.images ?? 'Images',
+            promise: imagesListPromise
+        };
     }
 
     static gotoModelByHash(hash) {
@@ -1802,9 +1916,8 @@ class Controller {
             if (pageNavigation !== this.#pageNavigation) return;
             if (!model || !model?.modelId) {
                 this.#log('There is no model id here...', model);
-                this.#clearAppElement();
-                this.appElement.appendChild(this.#genErrorPage(model?.error ?? `No models found with this hash (${hash})`));
-                return;
+                const errorPage = this.#genErrorPage(model?.error ?? `No models found with this hash (${hash})`);
+                return { element: errorPage };
             }
             const { modelId, name: modelVersionName } = model ?? {};
             return this.gotoModel(modelId, modelVersionName);
@@ -1814,7 +1927,8 @@ class Controller {
         if (cached !== undefined) return redirect(cached);
 
         const apiPromise = this.#preClickResults[hash] ?? this.api.fetchModelVersionInfo(hash, true);
-        return apiPromise.then(redirect).catch(redirect);
+        const promise = apiPromise.then(redirect).catch(redirect);
+        return { promise };
     }
 
     static gotoModel(id, version = null) {
@@ -1823,13 +1937,14 @@ class Controller {
 
         const insertModelPage = model => {
             const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
-            this.#setTitle([model.name, modelVersion.name, modelVersion.baseModel, model.type]);
+            const title = [model.name, modelVersion.name, modelVersion.baseModel, model.type];
 
-            const appContent = createElement('div', { class: 'app-content' });
+            const fragment = new DocumentFragment();
+            const appContent = insertElement('div', fragment, { class: 'app-content' });
             appContent.appendChild(this.#genModelPage({ model, version, state: navigationState }));
 
             // Images
-            const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
             const imagesTitle = insertElement('h2', appContentWide, { style: 'justify-content: center;' });
             const imagesTitle_link = insertElement('a', imagesTitle, { href: `#images?model=${model.id}&modelversion=${modelVersion.id}` }, window.languagePack?.text?.images ?? 'Images');
             imagesTitle_link.prepend(getIcon('image'));
@@ -1844,7 +1959,7 @@ class Controller {
                             resolve();
                         }, 600)
                     );
-                    promise = Promise.race([imagesListPromise, timerPromise]).then(() => timerWon ? imagesListPromise.then(() => this.#onScroll()) : null);
+                    promise = Promise.race([imagesListPromise, timerPromise]).then(() => timerWon ? imagesListPromise.then(() => this.onScroll()) : null);
                 }
                 appContentWide.appendChild(imagesList);
                 appContentWide.appendChild(this.#genScrollToTopButton());
@@ -1854,26 +1969,19 @@ class Controller {
                     imagesListTrigger.remove();
                     this.#state.imagesLoaded = true;
                     const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId: model.id, opCreator: model.creator?.username, modelVersionId: modelVersion.id, state: navigationState });
-                    imagesListPromise.then(() => {
+                    imagesListPromise?.then(() => {
                         if (pageNavigation !== this.#pageNavigation) return;
-                        this.#onScroll();
+                        this.onScroll();
                     });
                     appContentWide.appendChild(imagesList);
                     appContentWide.appendChild(this.#genScrollToTopButton());
                 });
             }
 
-            if (promise) promise.then(() => {
-                this.#clearAppElement();
-                this.appElement.appendChild(appContent);
-                this.appElement.appendChild(appContentWide);
-            });
-            else {
-                this.#clearAppElement();
-                this.appElement.appendChild(appContent);
-                this.appElement.appendChild(appContentWide);    
-            }
-            return promise;
+            if (promise instanceof Promise) {
+                promise = promise.then(() => ({ element: fragment, title }));
+                return { promise };
+            } else return { element: fragment, title };
         };
 
         const cachedModel = this.#cache.models.get(`${id}`) || this.#preClickResults[`${id}-result`];
@@ -1883,7 +1991,7 @@ class Controller {
         }
 
         const apiPromise = this.#preClickResults[id] ?? this.api.fetchModelInfo(id);
-        return apiPromise
+        const promise = apiPromise
         .then(data => {
             if (data?.id) this.#cache.models.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
@@ -1891,12 +1999,10 @@ class Controller {
             return insertModelPage(data);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
-            console.error('Error:', error?.message ?? error);
-            const appContent = createElement('div', { class: 'app-content' });
-            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
+            return this.#gotoError(error);
         });
+
+        return { promise };
     }
 
     static gotoModels(options = {}) {
@@ -1905,20 +2011,26 @@ class Controller {
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         let query;
         let modelById = new Map(), hiddenModels = 0;
-        const appContent = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
+        const fragment = new DocumentFragment();
+
+        const filter = this.#genModelsListFilters(() => {
+            savePageSettings();
+            this.#pageNavigation = Date.now();
+            infinityScroll.reload();
+        });
+        fragment.appendChild(filter);
+
+        const appContent = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
         const listWrap = insertElement('div', appContent, { id: 'models-list' });
         appContent.appendChild(this.#genScrollToTopButton());
-        this.#setTitle(window.languagePack?.text?.models ?? 'Models');
 
         const layoutConfig = {
+            id: 'models',
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
             generator: this.#genModelCard.bind(this),
-            minOverscan: 1,
-            maxOverscan: 3,
             passive: true,
-            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
@@ -2006,87 +2118,36 @@ class Controller {
 
         listWrap.appendChild(infinityScroll.element);
 
-        const layout = this.#activeMasonryLayout = infinityScroll.layout;
-        const { onScroll, onResize } = layout.getCallbacks();
-        this.#onScroll = onScroll;
-        this.#onResize = onResize;
+        this.#addVirtualScroll(infinityScroll.layout);
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
         }
 
-        this.#clearAppElement();
-        this.appElement.appendChild(this.#genModelsListFilters(() => {
-            savePageSettings();
-            this.#pageNavigation = Date.now();
-            infinityScroll.reload();
-        }));
-        this.appElement.appendChild(appContent);
-
-        return infinityScroll.promise;
+        return {
+            element: fragment,
+            title: window.languagePack?.text?.models ?? 'Models',
+            promise: infinityScroll.promise
+        }
     }
 
     static openFromCivitUrl(href) {
         const { localUrl } = this.parseCivUrl(href);
-        if (!localUrl) {
-            const appContent = createElement('div', { class: 'app-content' });
-            appContent.appendChild(this.#genErrorPage(error?.message ?? 'Unsupported url'));
-
-            this.#setTitle();
-
-            this.#clearAppElement();
-            this.appElement.appendChild(appContent);
-            return;
-        }
+        if (!localUrl) return this.#gotoError(error, 'Unsupported url');
         gotoLocalLink(localUrl);
     }
 
     static parseCivUrl(url) {
         let localUrl = null;
-        const rules = [
-            { // models
-                match: ({ url }) => url.pathname.startsWith('/models/'),
-                parse: ({ url, params }) => {
-                    params.modelId = url.pathname.match(/\/models\/(\d+)/i)?.[1] ?? null;
-                },
-                toLocal: ({ url, params }) => {
-                    if (!params.modelId) return null;
-                    let localUrl = `#models?model=${params.modelId}`;
-                    if (params.modelVersionId) localUrl += `&version=${params.modelVersionId}`;
-                    return localUrl;
-                }
-            },
-            { // images
-                match: ({ url }) => url.pathname.startsWith('/images/'),
-                parse: ({ url, params }) => {
-                    params.imageId = url.pathname.match(/\/images\/(\d+)/i)?.[1] ?? null;
-                },
-                toLocal: ({ url, params }) => params.imageId ? `#images?image=${params.imageId}` : null
-            },
-            { // posts
-                match: ({ url }) => url.pathname.startsWith('/posts/'),
-                parse: ({ url, params }) => {
-                    params.postId = url.pathname.match(/\/posts\/(\d+)/i)?.[1] ?? null;
-                },
-                toLocal: ({ url, params }) => params.postId ? `#images?post=${params.postId}` : null
-            },
-            { // articles
-                match: ({ url }) => url.pathname.startsWith('/articles/'),
-                parse: ({ url, params }) => {
-                    params.articleId = url.pathname.match(/\/articles\/(\d+)/i)?.[1] ?? null;
-                },
-                toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
-            }
-        ];
 
         try {
-            url = new URL(url);
+            url = (url instanceof URL) ? url : new URL(url);
             if (url.origin !== CONFIG.civitai_url) throw new Error(`Unknown url origin, must be ${CONFIG.civitai_url}`);
 
             const params = Object.fromEntries(url.searchParams);
-            for (const rule of rules) {
+            for (const rule of this.#civUrlRules) {
                 if (rule.match({ url, params })) {
                     rule.parse({ url, params });
                     localUrl = rule.toLocal({ url, params });
@@ -2227,10 +2288,10 @@ class Controller {
         const modelNameWrap = insertElement('div', page, { class: 'model-name' });
         const modelNameH1 = insertElement('h1', modelNameWrap, undefined, model.name);
         const statsList = [
-            { icon: 'like', value: model.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
-            { icon: 'download', value: model.stats.downloadCount, formatter: formatNumber, unit: 'download' },
-            // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
-            { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+            { icon: 'like', value: model.stats.thumbsUpCount, unit: 'like' },
+            { icon: 'download', value: model.stats.downloadCount, unit: 'download' },
+            // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
+            { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
         ];
         const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
         const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
@@ -2362,14 +2423,18 @@ class Controller {
             const previewList = previewImages.map((media, index) => {
                 const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
                 if (!media.id && id) media.id = id;
-                const element = index <= 2 ? generateMediaPreview(media) : null;
+                const element = index < CONFIG.appearance.modelPage.carouselItemsCount ? generateMediaPreview(media) : null;
                 const isWide = media.width/media.height >= isWideMinRatio && CONFIG.appearance.modelPage.carouselItemsCount > 1;
                 return { id: media.id, data: media, element, width: media.width, height: media.height, isWide };
             });
 
             // Try to insert a picture from the previous page, if available
-            if (previewList[0]) this.#genMediaPreviewFromPrevPage(previewList[0].element, previewList[0].id);
-            if (previewList[1]) this.#genMediaPreviewFromPrevPage(previewList[1].element, previewList[1].id);
+            for (let i = 0; i < CONFIG.appearance.modelPage.carouselItemsCount; i++) {
+                const item = previewList[i];
+                if (!item?.element) break;
+                this.#genMediaPreviewFromPrevPage(item.element, item.id);
+            }
+
 
             const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
             const carouselWrap = new InfiniteCarousel(previewList, {
@@ -2385,7 +2450,10 @@ class Controller {
         }
 
         const hideLongDescription = (descriptionId, el) => {
-            if (this.#state[`long_description_${descriptionId}`]) return;
+            if (this.#state[`long_description_${descriptionId}`] || el.children.length < 40) {
+                if (el.children.length > 400) fixDescriptionXL(descriptionId, el);
+                return;
+            }
             el.classList.add('hide-long-description');
             const showMore = createElement('button', { class: 'show-more' });
             showMore.appendChild(getIcon('arrow_down'));
@@ -2394,7 +2462,16 @@ class Controller {
                 this.#state[`long_description_${descriptionId}`] = true;
                 el.classList.remove('hide-long-description');
                 showMore.remove();
+                if (el.children.length > 400) fixDescriptionXL(descriptionId, el);
             }, { once: true });
+        };
+        const fixDescriptionXL = (id, description) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (!this.appElement.contains(description)) return;
+
+                const virtualScroll = this.#genFakeVirtualScroll(id, description);
+                this.#addVirtualScroll(virtualScroll);
+            }));
         };
 
         // Model version description block
@@ -2403,8 +2480,8 @@ class Controller {
         const modelVersionNameWrapSpan = insertElement('span', modelVersionNameWrap);
         modelVersionNameWrapSpan.appendChild(this.#formatModelVersionName(modelVersion.name));
         const versionStatsList = [
-            { icon: 'like', value: modelVersion.stats.thumbsUpCount, formatter: formatNumber, unit: 'like' },
-            { icon: 'download', value: modelVersion.stats.downloadCount, formatter: formatNumber, unit: 'download' },
+            { icon: 'like', value: modelVersion.stats.thumbsUpCount, unit: 'like' },
+            { icon: 'download', value: modelVersion.stats.downloadCount, unit: 'download' },
         ];
         modelVersionNameWrap.appendChild(this.#genStats(versionStatsList));
 
@@ -2454,7 +2531,7 @@ class Controller {
             this.#analyzeModelDescription(modelVersionFragment, cache);
             if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
             modelVersionDescription.appendChild(modelVersionFragment);
-            if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('modelVersion', modelVersionDescription);
+            hideLongDescription('modelVersion', modelVersionDescription);
         }
 
         // Model descrition
@@ -2465,7 +2542,7 @@ class Controller {
             this.#analyzeModelDescription(modelDescriptionFragment, cache);
             if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
             modelDescription.appendChild(modelDescriptionFragment);
-            if (calcCharsInString(description, '<p>', 40) >= 40) hideLongDescription('model', modelDescription);
+            hideLongDescription('model', modelDescription);
             if (modelDescription.childNodes.length) page.appendChild(modelDescription);
         }
 
@@ -2486,9 +2563,8 @@ class Controller {
         let mediaGenerator;
         if (postInfo.size > 1) {
             mediaGenerator = item => {
-                const mediaElement = this.#genMediaElement({ media: item, width: item.width, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager', playsinline: false });
+                const mediaElement = this.#genMediaElement({ media: item, className: 'media-full-preview', width: item.width, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager', playsinline: false });
                 mediaElement.style.width = `${item.width}px`;
-                mediaElement.classList.add('media-full-preview');
                 return mediaElement;
             }
             postInfo.forEach(item => {
@@ -2511,13 +2587,14 @@ class Controller {
             container.appendChild(creator);
 
             // Stats
+            const stats = media.stats;
             const statsList = [
-                { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
-                { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-                { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber, unit: 'cry' },
-                { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber, unit: 'heart' },
-                { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
-                { icon: 'chat', value: media.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+                { iconString: '👍', value: stats.likeCount, unit: 'like' },
+                { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
+                { iconString: '😭', value: stats.cryCount, unit: 'cry' },
+                { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
+                { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
+                { icon: 'chat', value: stats.commentCount, unit: 'comment' },
             ];
             const statsFragment = this.#genStats(statsList, true);
 
@@ -2556,6 +2633,72 @@ class Controller {
         // Try to insert a picture from the previous page, if available
         this.#genMediaPreviewFromPrevPage(mediaElement, media.id);
 
+        const volumeKey = 'civitai-lite-viewer--video-volume';
+        const mutedKey = 'civitai-lite-viewer--video-muted';
+        let volume = parseFloat(localStorage.getItem(volumeKey)) ?? 0;
+        let muted = localStorage.getItem(mutedKey) === 'true';
+        const setVolume = (video, targetVolume, isMuted, fade = true) => {
+            if (!video) return;
+            if (video._fadeTimer) clearInterval(video._fadeTimer);
+
+            if (isMuted) {
+                video.muted = true;
+                return;
+            }
+
+            video.muted = false;
+            
+            if (!fade) {
+                video.volume = targetVolume;
+                return;
+            }
+
+            video.volume = 0;
+            const duration = 1000;
+            const step = 0.05;
+            const interval = duration / (targetVolume / step);
+
+            video._fadeTimer = setInterval(() => {
+                if (video.volume < targetVolume) {
+                    video.volume = Math.min(video.volume + step, targetVolume);
+                } else {
+                    clearInterval(video._fadeTimer);
+                    video._fadeTimer = null;
+                }
+            }, interval);
+        };
+        const addVideoListeners = video => {
+            if (video._hasListeners) return;
+
+            video.addEventListener('volumechange', () => {
+                if (video._fadeTimer) return;
+
+                volume = video.volume;
+                muted = video.muted;
+                localStorage.setItem(volumeKey, volume);
+                localStorage.setItem(mutedKey, muted);
+            });
+
+            video._hasListeners = true;
+        };
+        const waitVideoCreation = mediaElement => {
+            return new Promise(resolve => {
+                if (!mediaElement.classList.contains('media-video')) return resolve(null);
+                const poster = mediaElement.querySelector('.media-element');
+                const observer = new MutationObserver(() => {
+                    if (!mediaElement.contains(poster)) {
+                        observer.disconnect();
+                        const video = mediaElement.querySelector('video');
+                        if (video) addVideoListeners(video);
+                        resolve(video || null);
+                    }
+                });
+    
+                observer.observe(mediaElement, { childList: true, subtree: false });
+            });
+        };
+        // if (media.type === 'video') waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, true));
+
         if (carouselItems.length > 1) {
             const item = carouselItems.find(item => item.id === media.id);
             const itemWidth = Math.min(carouselItems.reduce((w, it) => it.width < w ? it.width : w, carouselItems[0].width), 800);
@@ -2571,6 +2714,10 @@ class Controller {
                     metaContainer.textContent = '';
                     const media = mediaById.get(id);
                     insertMeta(media, metaContainer);
+                    // if (media.type === 'video') {
+                    //     const mediaElement = document.querySelector('.media-full-preview');
+                    //     waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, false));
+                    // }
                     history.replaceState(Controller.state, '', `#images?image=${id}&nsfw=${media.nsfwLevel}`);
                 }
             });
@@ -2607,6 +2754,11 @@ class Controller {
 
             if (result instanceof Promise) {
                 const pageNavigation = this.#pageNavigation;
+                const hasLoadingBar = Boolean(document.getElementById('page-loading-bar'));
+                if (!hasLoadingBar) {
+                    const bar = insertElement('div', document.body, { id: 'page-loading-bar' });
+                    result.finally(() => bar.remove());
+                }
                 return result.then(result => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     cursor = result.cursor;
@@ -2614,6 +2766,7 @@ class Controller {
                 }).catch(error => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     console.error('Failed to fetch items:', error?.message ?? error);
+                    element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
                 });
             } else {
@@ -2632,7 +2785,7 @@ class Controller {
             if (cursor) {
                 const pageNavigation = this.#pageNavigation;
                 const loadMoreTrigger = insertElement('div', element, { id: 'load-more' });
-                insertElement('div', loadMoreTrigger, { class: 'media-loading-indicator' });
+                loadMoreTrigger.appendChild(Controller.genLoadingIndecator());
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     const promise = loadMore();
@@ -2735,8 +2888,12 @@ class Controller {
             });
 
             const easing = 'cubic-bezier(0.33, 1, 0.68, 1)', duration = 300, fill = 'forwards';
+            element.classList.add('cards-animating');
             return Promise.allSettled(animations.map(({ element, keyframes }) => animateElement(element, { keyframes, easing, duration, fill })))
-            .then(() => animations.forEach(item => item.removeAfter ? item.element.remove() : null));
+            .then(() => {
+                element.classList.remove('cards-animating');
+                animations.forEach(item => item.removeAfter ? item.element.remove() : null);
+            });
         };
 
         const reload = () => {
@@ -2747,7 +2904,15 @@ class Controller {
                 const parent = element.parentElement;
                 parent?.classList.add('cards-loading');
                 element.setAttribute('inert', '');
+                element.classList.remove('error');
                 const pageNavigation = this.#pageNavigation;
+
+                const hasLoadingBar = Boolean(document.getElementById('page-loading-bar'));
+                if (!hasLoadingBar) {
+                    const bar = insertElement('div', document.body, { id: 'page-loading-bar' });
+                    result.finally(() => bar.remove());
+                }
+
                 promise = result.then(result => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     cursor = result.cursor;
@@ -2755,11 +2920,13 @@ class Controller {
                         layout.clear();
                         insertItems(result.items);
                     });
+                    parent?.classList.remove('cards-loading'); // Remove loading class immediately after animation starts
                     return promise;
                 }).catch(error => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     console.error('Failed to fetch items:', error?.message ?? error);
                     element.textContent = '';
+                    element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
                 }).finally(() => {
                     if (pageNavigation !== this.#pageNavigation) return;
@@ -2785,6 +2952,7 @@ class Controller {
 
     static #genImages(options) {
         const { modelId, modelVersionId, postId, userId, username, opCreator = null, state: navigationState = {...this.#state} } = options; // Snippet_1 : modelId
+        const isSpecific = modelVersionId || modelId || userId || username || postId;
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         let query;
         let groupingByPost = SETTINGS.groupImagesByPost && !postId;
@@ -2794,13 +2962,11 @@ class Controller {
         const listWrap = createElement('div', { id: 'images-list'});
 
         const layoutConfig = {
+            id: 'images',
             gap: CONFIG.appearance.imageCard.gap,
             itemWidth: CONFIG.appearance.imageCard.width,
             generator: this.#genImageCard.bind(this),
-            minOverscan: 1,
-            maxOverscan: 3,
             passive: true,
-            disableVirtualScroll: SETTINGS.disableVirtualScroll ?? false,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
@@ -2815,12 +2981,14 @@ class Controller {
 
         const loadItems = ({ cursor } = {}) => {
             if (cursor === undefined) {
+                const baseModels = !EXTENSION_INSTALLED || isSpecific ? [] : SETTINGS.baseModels_images;
                 query = {
                     limit: CONFIG.perRequestLimits.images,
                     sort: SETTINGS.sort_images,
                     period: SETTINGS.period_images,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfwLevel,
+                    baseModels,
                     modelVersionId,
                     modelId, // Snippet_1
                     userId,
@@ -2920,7 +3088,7 @@ class Controller {
                 const countBefore = images.length;
                 images = filterItems(images, [
                     { key: 'tagIds', conditions: blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`), type: 'number' },
-                    SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 4 } : null,
+                    SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
                     // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
                 ])
 
@@ -2987,20 +3155,20 @@ class Controller {
 
         listWrap.appendChild(infinityScroll.element);
 
-        const layout = this.#activeMasonryLayout = infinityScroll.layout;
-        const { onScroll, onResize } = layout.getCallbacks();
-        this.#onScroll = onScroll;
-        this.#onResize = onResize;
+        this.#addVirtualScroll(infinityScroll.layout);
 
         fragment.appendChild(this.#genImagesListFilters(() => {
             savePageSettings();
             this.#pageNavigation = Date.now();
             infinityScroll.reload();
+        }, {
+            baseModels_images: !isSpecific,
+            groupImagesByPost: !postId
         }));
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            insertElement('div', firstLoadingPlaceholder, { class: 'media-loading-indicator' });
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
         }
 
@@ -3010,22 +3178,54 @@ class Controller {
     }
 
     static #genStats(stats, hideEmpty = false) {
-        const statsWrap = createElement('div', { class: 'badges' });
-        stats.forEach(({ icon, iconString, value = 0, formatter, unit, type }) => {
+        const badges = createElement('div', { class: 'badges' });
+        stats.forEach(({ icon, iconString, value = 0, unit }) => {
             if (hideEmpty && !value) return;
-            const statWrap = insertElement('div', statsWrap, { class: 'badge', 'data-value': value });
-            if (!value) statWrap.setAttribute('inert', '');
-            const lilpipeValue = typeof value === 'number' && value > 999 ? formatNumberIntl(value) : escapeHtml(value);
+            const badge = document.createElement('div');
+            badge.textContent = iconString ? `${iconString} ${value > 999 ? formatNumber(value) : value}` : value > 999 ? formatNumber(value) : value;
+            let className = 'badge';
+            if (!value) {
+                badge.setAttribute('inert', '');
+                className += ' badge-empty';
+            }
+            const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
             if (unit) {
                 const units = window.languagePack?.units?.[unit];
-                statWrap.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
-            } else if (!type) statWrap.setAttribute('lilpipe-text', lilpipeValue);
-            if (type) statWrap.setAttribute('data-badge', type);
-            if (icon) statWrap.appendChild(getIcon(icon));
-            // if (iconString) statWrap.appendChild(document.createTextNode(iconString));
-            statWrap.appendChild(document.createTextNode(`${iconString || ''} ${formatter?.(value) ?? value}`));
+                badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+            } else badge.setAttribute('lilpipe-text', lilpipeValue);
+            if (icon) badge.prepend(getIcon(icon));
+            else className += ' badge-textonly';
+            badge.className = className;
+            badges.appendChild(badge);
         });
-        return statsWrap;
+        return badges;
+    }
+
+    static #genFakeVirtualScroll(id, container) {
+        const readScroll = e => e;
+        const onScroll = e => e;
+        const readResize = (e = {}) => {
+            e.items = Array.from(container.children).map(element => ({ element, bounds: element.getBoundingClientRect() }));    
+            return e;
+        };
+        const onResize = (e = {}) => {
+            if (!e.items) readResize(e);
+            e.items.forEach(item => {
+                const { element, bounds } = item;
+                element.style.width = `${bounds.width}px`;
+                element.style.height = `${bounds.height}px`;
+                element.style.containIntrinsicSize = `${bounds.width}px ${bounds.height}px`;
+                element.classList.add('description-xl-item');
+            });
+        };
+        const destroy = () => null;
+        const getCallbacks = () => ({ readScroll, readResize, onScroll, onResize });
+
+
+        onResize();
+        container.classList.add('description-xl');
+
+        return { id, destroy, getCallbacks };
     }
 
     static #analyzeModelDescriptionString(description) {
@@ -3062,8 +3262,13 @@ class Controller {
         const cacheDescriptionImages = cache?.descriptionImages ?? new Map();
 
         // Remove garbage (empty elements, duplicates and all unnecessary things)
-        description.querySelectorAll('p:empty, h3:empty, hr + hr').forEach(el => el.remove());
-        description.querySelectorAll('p, h3').forEach(el => !el.children.length && !el.textContent.trim() ? el.remove() : null);
+        description.querySelectorAll('p, h3, hr + hr').forEach(el => {
+            if (el.tagName === 'HR') {
+                el.remove();
+                return;
+            }
+            if (!el.children.length && !el.textContent.trim()) el.remove();
+        });
 
         if (!description.children.length) {
             const text = description.textContent;
@@ -3071,6 +3276,11 @@ class Controller {
             if (text) insertElement('p', description, undefined, text);
             return;
         }
+
+        // Remove extra nesting (paragraph in list item is extra)
+        // description.querySelectorAll('li>p:only-child').forEach(p => {
+        //     p.replaceWith(...p.children);
+        // });
 
         const headers = description.querySelectorAll('h1, h2, h3');
 
@@ -3103,6 +3313,7 @@ class Controller {
         }
 
         // Add loading lazy, decoding async and srcset
+        const regexUrlWidth = /width=(\d+)/;
         description.querySelectorAll('img').forEach(img => {
             let src = img.getAttribute('src');
             img.setAttribute('decoding', 'async');
@@ -3111,7 +3322,7 @@ class Controller {
             try { url = new URL(src); } catch (_) {}
 
             if (url && url.origin === CONFIG.images_url && !src.includes('original=true')) {
-                const urlWidth = Number(src.match(/width=(\d+)/)?.[1] || 0);
+                const urlWidth = Number(src.match(regexUrlWidth)?.[1] || 0);
                 const baseWidth = this.#getNearestServerSize(Math.min(CONFIG.appearance.descriptionMaxWidth, urlWidth));
                 const sizes = [1, 2, 3];
                 const srcSetParts = [];
@@ -3120,15 +3331,15 @@ class Controller {
                     const targetWidth = baseWidth * ratio;
                     let currentSrc;
 
-                    if (targetWidth > 2200) currentSrc = src.replace(/width=\d+/, 'original=true');
-                    else currentSrc = src.replace(/width=\d+/, `width=${this.#getNearestServerSize(targetWidth)}`);
+                    if (targetWidth > 2200) currentSrc = src.replace(regexUrlWidth, 'original=true');
+                    else currentSrc = src.replace(regexUrlWidth, `width=${this.#getNearestServerSize(targetWidth)}`);
 
                     srcSetParts.push(`${currentSrc} ${ratio}x`);
                 });
 
                 srcset = srcSetParts.join(', ');
                 if (urlWidth !== baseWidth) {
-                    src = src.replace(/width=\d+/, `width=${baseWidth}`);
+                    src = src.replace(regexUrlWidth, `width=${baseWidth}`);
                     img.setAttribute('src', src);
                 }
             }
@@ -3136,23 +3347,51 @@ class Controller {
             if (cacheDescriptionImages.has(src)) {
                 const item = cacheDescriptionImages.get(src);
                 img.style.aspectRatio = item.ratio;
-                img.style.height = `${item.offsetHeight}px`;
+                img.style.height = `${item.height}px`;
                 if (srcset) img.setAttribute('srcset', srcset);
             } else {
+                const onload = e => {
+                    img.removeEventListener('load', onload);
+                    img.removeEventListener('error', onload);
+
+                    // Error
+                    if (e.type !== 'load' || !img.naturalHeight) {
+                        img.classList.remove('loading');
+                        img.classList.add('error');
+                        return;
+                    }
+
+                    // Success
+                    img.classList.remove('loading');
+                    const xlItem = img.closest('.description-xl-item');
+                    if (xlItem) {
+                        xlItem.style.width = '';
+                        xlItem.style.height = '';
+                        xlItem.style.containIntrinsicSize = '';
+                        xlItem.classList.remove('description-xl-item');
+                    }
+                    requestAnimationFrame(() => {
+                        const bounds = img.getBoundingClientRect();
+                        const item = {
+                            ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
+                            height: bounds.height
+                        };
+                        cacheDescriptionImages.set(src, item);
+
+                        // Update size description-xl-item if exist
+                        if (xlItem) {
+                            const bounds = xlItem.getBoundingClientRect();
+                            xlItem.style.width = `${bounds.width}px`;
+                            xlItem.style.height = `${bounds.height}px`;
+                            xlItem.style.containIntrinsicSize = `${bounds.width}px ${bounds.height}px`;
+                            xlItem.classList.add('description-xl-item');
+                        }
+                    });
+                };
+
                 img.classList.add('loading');
-                img.addEventListener('load', () => {
-                    img.classList.remove('loading');
-                    if (!img.naturalHeight) return;
-                    const item = {
-                        ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
-                        offsetHeight: img.offsetHeight
-                    };
-                    cacheDescriptionImages.set(src, item);
-                }, { once: true });
-                img.addEventListener('error', () => {
-                    img.classList.remove('loading');
-                    img.classList.add('error');
-                }, { once: true });
+                img.addEventListener('load', onload, { once: true });
+                img.addEventListener('error', onload, { once: true });
 
                 if (srcset) img.setAttribute('data-srcset', srcset);
                 img.setAttribute('data-src', src);
@@ -3172,69 +3411,108 @@ class Controller {
 
         });
 
+        const findFirstNonEmptyTextNode = root => {
+            let node = root.firstChild;
+            while (node) {
+                if (node.nodeType === 3) { // Node.TEXT_NODE
+                    if (node.textContent?.trim()) return node;
+                } else if (node.nodeType === 1) { // Node.ELEMENT_NODE
+                    const nested = findFirstNonEmptyTextNode(node);
+                    if (nested) return nested;
+                }
+                node = node.nextSibling;
+            }
+            return null;
+        };
+        const regexNotSpace = /\S/;
+        const linkPreviewOriginal = getIcon('civitai');
+        linkPreviewOriginal.classList.add('link-preview-position');
         const setLinkPreview = a => {
-            const icon = getIcon('civitai');
-            icon.classList.add('link-preview-position');
-            a.prepend(icon);
             a.classList.add('link-hover-preview', 'link-with-favicon');
             a.setAttribute('data-link-preview', '');
+
+            const icon = linkPreviewOriginal.cloneNode(true);
+
+            // If possible, insert the icon and the first word into a container so that the icon is never separated from the first word
+            const firstTextNode = findFirstNonEmptyTextNode(a);
+            if (!firstTextNode) {
+                a.prepend(icon);
+                return;
+            }
+
+            const text = firstTextNode.textContent;
+            const firstCharIndex = text.search(regexNotSpace);
+
+            if (firstCharIndex === -1) {
+                a.prepend(icon);
+                return;
+            }
+
+            const firstChar = text[firstCharIndex];
+            const wrapper = createElement('span', { class: 'icon-text-wrapper' }, firstChar);
+            wrapper.prepend(icon);
+
+            const parent = firstTextNode.parentNode;
+            if (firstCharIndex === 0) {
+                firstTextNode.textContent = text.slice(1);
+                parent.insertBefore(wrapper, firstTextNode);
+            } else {
+                const remainingTextNode = firstTextNode.splitText(firstCharIndex);
+                remainingTextNode.textContent = remainingTextNode.textContent.slice(1);
+                parent.insertBefore(wrapper, remainingTextNode);
+            }
         };
-        const fixLinkSpacing = (a) => {
-            const moveOutside = (node, isStart) => {
-                if (isStart) {
-                    a.parentNode.insertBefore(node, a);
-                } else {
-                    a.parentNode.insertBefore(node, a.nextSibling);
+        const moveNodeOutside = (a, node, isStart) => {
+            if (isStart) a.parentNode.insertBefore(node, a);
+            else a.parentNode.insertBefore(node, a.nextSibling);
+        };
+        const cleanLinkEdge = (a, isStart) => {
+            while (true) {
+                let target = isStart ? a.firstChild : a.lastChild;
+                if (!target) break;
+
+                // <br>>
+                if (target.nodeName === 'BR') {
+                    moveNodeOutside(a, target, isStart);
+                    continue;
                 }
-            };
 
-            const cleanEdge = (isStart) => {
-                while (true) {
-                    let target = isStart ? a.firstChild : a.lastChild;
-                    if (!target) break;
+                // text
+                if (target.nodeType === 3) { // Node.TEXT_NODE
+                    const text = target.textContent;
+                    const trimmed = isStart ? text.trimStart() : text.trimEnd();
 
-                    // <br>>
-                    if (target.nodeName === 'BR') {
-                        moveOutside(target, isStart);
+                    if (trimmed.length === 0) {
+                        moveNodeOutside(a, target, isStart);
+                        continue;
+                    } else if (trimmed.length !== text.length) {
+                        const spaceLen = text.length - trimmed.length;
+                        const spaceContent = isStart ? text.slice(0, spaceLen) : text.slice(-spaceLen);
+
+                        target.textContent = trimmed;
+                        moveNodeOutside(a, document.createTextNode(spaceContent), isStart);
                         continue;
                     }
+                }
 
-                    // text
-                    if (target.nodeType === Node.TEXT_NODE) {
-                        const text = target.textContent;
-                        const regex = isStart ? /^\s+/ : /\s+$/;
-                        const match = text.match(regex);
-
-                        if (match) {
-                            const spaceContent = match[0];
-                            if (spaceContent.length === text.length) {
-                                moveOutside(target, isStart);
-                            } else {
-                                const remainingText = isStart ? text.slice(spaceContent.length) : text.slice(0, -spaceContent.length);
-                                target.textContent = remainingText;
-                                moveOutside(document.createTextNode(spaceContent), isStart);
-                            }
+                // deep check
+                if (target.nodeType === 1) { // Node.ELEMENT_NODE
+                    const subTarget = isStart ? target.firstChild : target.lastChild;
+                    if (subTarget) {
+                        if (subTarget.nodeName === 'BR' || (subTarget.nodeType === 3 && !subTarget.textContent?.trim())) { // Node.TEXT_NODE
+                            a.insertBefore(subTarget, isStart ? target : target.nextSibling);
                             continue;
                         }
                     }
-
-                    // deep check
-                    if (target.nodeType === Node.ELEMENT_NODE) {
-                        const subTarget = isStart ? target.firstChild : target.lastChild;
-                        if (subTarget) {
-                            if (subTarget.nodeName === 'BR' || (subTarget.nodeType === Node.TEXT_NODE && /^\s*$/.test(subTarget.textContent))) {
-                                a.insertBefore(subTarget, isStart ? target : target.nextSibling);
-                                continue;
-                            }
-                        }
-                    }
-
-                    break;
                 }
-            };
 
-            cleanEdge(true);    // clean start
-            cleanEdge(false);   // clean end
+                break;
+            }
+        };
+        const fixLinkSpacing = a => {
+            if (!a.parentNode) return;
+            cleanLinkEdge(a, true);  // clean start
+            cleanLinkEdge(a, false); // clean end
         };
 
         // Add _blank and noopener to all links
@@ -3337,7 +3615,7 @@ class Controller {
         // If a block of code has a lot of commas, it's probably a prompt block
         description.querySelectorAll('code:not(.prompt)').forEach(code => {
             const text = code.textContent;
-            const count = calcCharsInString(text, ',', 3);
+            const count = calcCharsInString(text, ',', 4);
 
             if (count > 3) code.classList.add('prompt');
             else if (text.indexOf('\n') !== -1) {
@@ -3725,12 +4003,13 @@ class Controller {
                 titleContainer.appendChild(this.#genUserBlock({ username: media.username }));
 
                 // Stats
+                const stats = media.stats;
                 const statsList = [
-                    { iconString: '👍', value: media.stats.likeCount, formatter: formatNumber, unit: 'like' },
-                    { iconString: '👎', value: media.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-                    { iconString: '😭', value: media.stats.cryCount, formatter: formatNumber, unit: 'cry' },
-                    { iconString: '❤️', value: media.stats.heartCount, formatter: formatNumber, unit: 'heart' },
-                    { iconString: '🤣', value: media.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
+                    { iconString: '👍', value: stats.likeCount, unit: 'like' },
+                    { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
+                    { iconString: '😭', value: stats.cryCount, unit: 'cry' },
+                    { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
+                    { iconString: '🤣', value: stats.laughCount, unit: 'laugh' }
                 ];
 
                 const statsFragment = this.#genStats(statsList, true);
@@ -4234,20 +4513,16 @@ class Controller {
 
     static #genArticleCard(article, options) {
         const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false } = options ?? {};
-        const card = createElement('a', { class: 'card model-card', 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+        const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+        let cardClassName = 'card model-card';
         
         // Image
         const previewMedia = article.coverImage;
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
-            mediaElement.classList.add('card-background');
+            const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
             if (!SETTINGS.autoplay) {
-                if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
-                else if (previewMedia?.type === 'video') {
-                    mediaElement.classList.remove('video-hover-play');
-                    card.classList.add('video-hover-play');
-                }
-                card.classList.add('image-hover-play');
+                if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
+                cardClassName += ' image-hover-play';
             }
             card.appendChild(mediaElement);
         } else {
@@ -4257,13 +4532,13 @@ class Controller {
             insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
         }
 
+        card.className = cardClassName;
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
         const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
         const cardContentBottom = insertElement('div', cardContentWrap);
 
         // Article category
-        const modelTypeBadges = insertElement('div', cardContentTop, { class: 'badges model-type-badges' });
-        if (article.category) insertElement('div', modelTypeBadges, { class: 'badge model-type' }, article.category);
+        if (article.category) insertElement('div', cardContentTop, { class: 'badge model-type' }, article.category);
 
         // Creator
         if (article.user) cardContentBottom.appendChild(this.#genUserBlock(article.user));
@@ -4276,14 +4551,38 @@ class Controller {
         insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
 
         // Stats
-        const statsSource = article.stats;
-        const statsContainer = this.#genStats([
-            { icon: 'bookmark', value: statsSource.collectedCount, formatter: formatNumber, unit: 'bookmark' },
-            { icon: 'chat', value: statsSource.commentCount, formatter: formatNumber, unit: 'comment' },
-            { icon: 'thunder', value: statsSource.tippedAmountCount, formatter: formatNumber, unit: 'buzz' },
-            { icon: 'eye', value: statsSource.viewCount, formatter: formatNumber, unit: 'view' },
-        ]);
-        cardContentBottom.appendChild(statsContainer);
+        const insertStats = (stats, parent) => {
+            stats.forEach(({ icon, value = 0, unit }) => {
+                const badge = document.createElement('div');
+                badge.textContent = value > 999 ? formatNumber(value) : value;
+                let className = 'article-stat';
+                if (!value) {
+                    badge.setAttribute('inert', '');
+                    className += ' badge-empty';
+                }
+                const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
+                if (unit) {
+                    const units = Array.isArray(unit) ? unit : window.languagePack?.units?.[unit];
+                    badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+                } else badge.setAttribute('lilpipe-text', lilpipeValue);
+                badge.prepend(getIcon(icon));
+                badge.className = className;
+                parent.appendChild(badge);
+            });
+        };
+        const statsContainer = insertElement('div', cardContentBottom, { class: 'article-stats' });
+        const statsLeft = insertElement('div', statsContainer, { class: 'article-stats-left badge' });
+        const statsRight = insertElement('div', statsContainer, { class: 'article-stats-right badge' });
+
+        const stats = article.stats;
+        insertStats([
+            { icon: 'bookmark', value: stats.collectedCount, unit: 'bookmark' },
+            { icon: 'chat', value: stats.commentCount, unit: 'comment' },
+            { icon: 'thunder', value: stats.tippedAmountCount, unit: ["Buzz", "Buzz", "Buzz"] }
+        ], statsLeft);
+        insertStats([
+            { icon: 'eye', value: stats.viewCount, unit: 'view' }
+        ], statsRight);
 
         return card;
     }
@@ -4292,20 +4591,16 @@ class Controller {
         // Note: Adds a "modelUpdatedRecently" field to the model object
         const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false, version = null } = options ?? {};
         const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
-        const card = createElement('a', { class: 'card model-card', 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
+        const card = createElement('a', { 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
+        let cardClassName = 'card model-card';
         
         // Image
         const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
-            mediaElement.classList.add('card-background');
+            const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
             if (!SETTINGS.autoplay) {
-                if (previewMedia?.type === 'image') mediaElement.classList.remove('image-hover-play');
-                else if (previewMedia?.type === 'video') {
-                    mediaElement.classList.remove('video-hover-play');
-                    card.classList.add('video-hover-play');
-                }
-                card.classList.add('image-hover-play');
+                if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
+                cardClassName += ' image-hover-play';
             }
             card.appendChild(mediaElement);
         } else if (modelVersion.images?.length) {
@@ -4315,12 +4610,15 @@ class Controller {
             const closestMedia = modelVersion.images.find(m => m.nsfwLevel === closestNSFWLevel);
             const nsfwLabel = this.#convertNSFWLevelToString(closestMedia.nsfwLevel);
             insertElement('div', noMedia, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLabel }, nsfwLabel);
-            const ratio = closestMedia.width / closestMedia.height;
-            const blurSize = CONFIG.appearance.blurHashSize;
-            const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
-            const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
-            const blurUrl = closestMedia.hash ? `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(closestMedia.hash)}&width=${blurW}&height=${blurH}` : '';
-            if (blurUrl) cardBackgroundWrap.style.backgroundImage = `url(${blurUrl})`;
+            if (closestMedia.hash) {
+                const ratio = closestMedia.width / closestMedia.height;
+                const blurSize = CONFIG.appearance.blurHashSize;
+                const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
+                const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
+                const blurUrl = `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(closestMedia.hash)}&width=${blurW}&height=${blurH}`;
+                cardBackgroundWrap.style.backgroundColor = Blurhash.toHex(closestMedia.hash);
+                cardBackgroundWrap.style.backgroundImage = `url(${blurUrl})`;
+            }
         } else {
             const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
             const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
@@ -4328,13 +4626,13 @@ class Controller {
             insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
         }
 
+        card.className = cardClassName;
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
-        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
+        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top model-type-badges' });
         const cardContentBottom = insertElement('div', cardContentWrap);
 
         // Model Type
-        const modelTypeBadges = insertElement('div', cardContentTop, { class: 'badges model-type-badges' });
-        const modelTypeWrap = insertElement('div', modelTypeBadges, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} | ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} | ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
+        const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} · ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} · ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
 
         // Availability
         let availabilityBadge = null;
@@ -4344,7 +4642,7 @@ class Controller {
             if (model.modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
         }
         if (availabilityBadge) {
-            const badge = insertElement('div', modelTypeBadges, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+            const badge = insertElement('div', cardContentTop, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
             if (modelVersion.availability === 'Public' && model.modelUpdatedRecently) {
                 const publishedAt = new Date(model.modelUpdatedRecently.publishedAt ?? model.modelUpdatedRecently.createdAt);
                 const lilpipeText = `<b>${escapeHtml(model.modelUpdatedRecently.name || '')}</b><br>${escapeHtml(timeAgo(Math.round((Date.now() - publishedAt)/1000)))}`;
@@ -4361,10 +4659,10 @@ class Controller {
         // Stats
         const statsSource = SETTINGS.showCurrentModelVersionStats ? modelVersion.stats : model.stats;
         const statsContainer = this.#genStats([
-            { icon: 'download', value: statsSource.downloadCount, formatter: formatNumber, unit: 'download' },
-            { icon: 'like', value: statsSource.thumbsUpCount, formatter: formatNumber, unit: 'like' },
-            { icon: 'chat', value: model.stats.commentCount, formatter: formatNumber, unit: 'comment' },
-            // { icon: 'bookmark', value: model.stats.favoriteCount, formatter: formatNumber, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
+            { icon: 'download', value: statsSource.downloadCount, unit: 'download' },
+            { icon: 'like', value: statsSource.thumbsUpCount, unit: 'like' },
+            { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
+            // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
         ]);
         cardContentBottom.appendChild(statsContainer);
 
@@ -4381,21 +4679,18 @@ class Controller {
         const { isVisible = false, firstDraw = false, itemWidth, timestump = null, forceAutoplay = false } = options ?? {};
         const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
         const itemHeight = options.itemHeight ?? (itemWidth / (image.width/image.height));
-        const card = createElement('a', { class: 'card image-card', 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': draggableTitle });
+        const card = createElement('a', { 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': draggableTitle });
+        let cardClassName = 'card image-card';
 
         // Image
-        const mediaElement = this.#genMediaElement({ media: image, width: itemWidth, target: 'image-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 2 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, forceBlurhash: true });
-        mediaElement.classList.add('card-background');
+        const mediaElement = this.#genMediaElement({ media: image, className: 'card-background', width: itemWidth, target: 'image-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
         if (!SETTINGS.autoplay) {
-            if (image?.type === 'image') mediaElement.classList.remove('image-hover-play');
-            else if (image?.type === 'video') {
-                mediaElement.classList.remove('video-hover-play');
-                card.classList.add('video-hover-play');
-            }
-            card.classList.add('image-hover-play');
+            if (image?.type === 'video') cardClassName += ' video-hover-play';
+            cardClassName += ' image-hover-play';
         }
         card.appendChild(mediaElement);
 
+        card.className = cardClassName;
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
         const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
 
@@ -4421,13 +4716,14 @@ class Controller {
         }
 
         // Stats
+        const stats = image.stats;
         const statsContainer = this.#genStats([
-            { iconString: '👍', value: image.stats.likeCount, formatter: formatNumber, unit: 'like' },
-            { iconString: '👎', value: image.stats.dislikeCount, formatter: formatNumber, unit: 'dislike' },
-            { iconString: '😭', value: image.stats.cryCount, formatter: formatNumber, unit: 'cry' },
-            { iconString: '❤️', value: image.stats.heartCount, formatter: formatNumber, unit: 'heart' },
-            { iconString: '🤣', value: image.stats.laughCount, formatter: formatNumber, unit: 'laugh' },
-            { icon: 'chat', value: image.stats.commentCount, formatter: formatNumber, unit: 'comment' },
+            { iconString: '👍', value: stats.likeCount, unit: 'like' },
+            { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
+            { iconString: '😭', value: stats.cryCount, unit: 'cry' },
+            { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
+            { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
+            { icon: 'chat', value: stats.commentCount, unit: 'comment' },
         ], true);
         cardContentWrap.appendChild(statsContainer);
 
@@ -4443,7 +4739,7 @@ class Controller {
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
-                const src = `${userInfo.image.replace(/\/width=\d+\//, `/width=${this.#getNearestServerSize(creatorImageSize)}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
+                const src = `${userInfo.image.replace(this.#regex.urlParamWidth, `/width=${this.#getNearestServerSize(creatorImageSize)}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
 
                 if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, new Set());
 
@@ -4475,81 +4771,83 @@ class Controller {
     }
 
     static #genMediaElement(options) {
-        const { media, autoplay = SETTINGS.autoplay } = options;
+        // Note: Adds a "hashColor" field to the media object
+        const { media, autoplay = SETTINGS.autoplay, passiveHoverPlay = false, className: baseClassName = null } = options;
         const ratio = media.width / media.height;
-        const mediaContainer = createElement('div', { class: 'media-container loading', 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel, style: `aspect-ratio: ${+(ratio).toFixed(4)};` });
+        const mediaContainer = createElement('div', { 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel, style: `aspect-ratio: ${+(ratio).toFixed(4)};` });
         let mediaElement;
+        let className = baseClassName ? `${baseClassName} media-container loading` : 'media-container loading';
 
         if (media.type === 'image') {
-            if (!autoplay && !options.original) mediaContainer.classList.add('image-hover-play');
-            mediaContainer.classList.add('media-image');
+            className += ' media-image';
+            if (!autoplay && !options.original && !passiveHoverPlay) className += ' image-hover-play';
         } else if (media.type === 'video') {
+            className += ' media-video';
             if (autoplay) {
-                mediaContainer.classList.add('media-video', 'video-autoplay');
+                className += ' video-autoplay';
             } else {
-                mediaContainer.classList.add('media-video', 'video-hover-play');
+                if (!passiveHoverPlay) className += ' video-hover-play';
                 const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
                 videoPlayButton.appendChild(getIcon('play'));
             }
         }
+        mediaContainer.className = className;
 
         if (options.loading === 'lazy') {
-            onTargetInViewport(mediaContainer, () => this.#finishLoading(mediaContainer, options));
+            onTargetInViewport(mediaContainer, () => this.#insertMediaElement(mediaContainer, options));
         } else if (options.defer >= 0) {
             this.#queueAddPipeline(
-                { delay: options.defer, prefix: options.timestump || 'src-load' },
+                { delay: options.defer, prefix: options.timestump || 'src-load', runInFrame: true },
                 () => !this.appElement.contains(mediaContainer),
-                skip => skip ? null : this.#finishLoading(mediaContainer, options)
+                skip => skip ? null : this.#insertMediaElement(mediaContainer, options)
             );
         } else {
-            mediaElement = this.#finishLoading(mediaContainer, options);
+            mediaElement = this.#insertMediaElement(mediaContainer, options);
         }
 
-        // forceBlurhash - This is necessary for the first rendering when navigating
-        //   (otherwise the image will have the dimensions, but will not be rendered on the first frame, and there will be empty space)
-        // Problem: This check works even if the image is not ready (not decoded) yet
-        if (options.forceBlurhash || !mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) {
-            if (media.hash) {
+        if (media.hash) {
+            if (!media.hashColor) media.hashColor = Blurhash.toHex(media.hash);
+            mediaContainer.style.backgroundColor = media.hashColor;
+
+            if (!mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) {
                 const blurSize = CONFIG.appearance.blurHashSize;
                 const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
                 const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
                 const previewUrl = `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${blurW}&height=${blurH}`;
                 mediaContainer.style.backgroundImage = `url(${previewUrl})`;
             }
-        } else {
-            mediaContainer.classList.remove('loading');
         }
+
         return mediaContainer;
     }
 
-    static #finishLoading(mediaContainer, options) {
+    static #insertMediaElement(mediaContainer, options) {
         const { media, width, height = undefined, allowResize = false, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true } = options;
         const ratio = media.width / media.height;
-        const widthNeededForWidth = width || 0;
-        const widthNeededForHeight = height ? (height * ratio) : 0;
-        const targetWidth = Math.round(Math.max(widthNeededForWidth, widthNeededForHeight) * this.#devicePixelRatio);
-        const size = `width=${this.#getNearestServerSize(targetWidth)}`;
+        const targetWidth = Math.round(Math.max(width, height ? (height * ratio) : 0) * this.#devicePixelRatio);
+        const realWidth = this.#getNearestServerSize(targetWidth);
+        const size = `width=${realWidth},`; // You can't specify "not a jackal image trying to upscale"... if you just don't specify the size, it might return normally, the original resolution, or it might return a jackal 4096px
+        // const size = realWidth < media.width || media.type === 'video' ? `width=${realWidth},` : '';
+        const resized = allowResize && width && height && Math.min(realWidth, media.width) > width * 1.3;
         let paramString = target ? (`?target=${target}`) : '';
-        if (allowResize && width && height && targetWidth > width * 1.35) {
-            paramString = `${paramString}${paramString ? '&' : '?'}width=${width}&height=${height}&fit=crop`;
-        }
-        const widthString = original ? '/original=true/' : `/${size},anim=false,optimized=true/`;
-        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(/\/width=\d+\//, widthString);
+        // Crop image if result is 30% wider than required
+        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${width}&height=${height}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
+        const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
+        const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
-        const mediaElement = createElement('img', { class: 'media-element',  alt: ' ', crossorigin: 'anonymous' });
+        const mediaElement = createElement('img', { alt: ' ', crossorigin: 'anonymous' });
+        let className = 'media-element';
         let src;
 
         if (media.type === 'image') {
-            src = original ? url : (autoplay || allowAnimated ? url.replace(/anim=false,?/, '') : url);
+            src = original ? url : (autoplay || allowAnimated ? url.replace(this.#regex.urlParamAnimFalse, '') : url);
 
-            if (!autoplay && !original) {
-                mediaElement.classList.add('image-possibly-animated');
-            }
+            if (!autoplay && !original) className += ' image-possibly-animated';
         } else if (media.type === 'video') {
             // Video does not need any local parameters (video elements are skipped in sw)
-            const source = original ? urlBase : urlBase.replace('optimized=true', 'optimized=true,transcode=true');
+            const source = original ? urlBase : urlBase.replace('anim=false', 'anim=false,transcode=true');
             const poster = src = `${source}${paramString}`;
-            const videoSrc = source.replace(/anim=false,?/, '');
+            const videoSrc = source.replace(this.#regex.urlParamAnimFalse, '');
 
             mediaContainer.setAttribute('data-src', videoSrc);
             mediaContainer.setAttribute('data-poster', poster);
@@ -4560,48 +4858,99 @@ class Controller {
             if (autoplay) enableAutoPlayOnVisible(mediaContainer);
         }
 
+        mediaElement.className = className;
         if (loading === 'eager') mediaElement.loading = loading;
         if (decoding === 'sync' || decoding === 'async') mediaElement.decoding = decoding;
 
         if (src) mediaElement.setAttribute('src', src);
 
         mediaElement.style.aspectRatio = +(ratio).toFixed(4);
-        // if (resize) mediaContainer.setAttribute('data-resize', `${targetWidth}:${targetHeight || Math.round(targetWidth / ratio)}`);
+        if (resized && width && height) mediaContainer.setAttribute('data-resize', `${width}:${height}`);
         mediaContainer.prepend(mediaElement);
         return mediaElement;
     }
 
     static #genMediaPreviewFromPrevPage(mediaElement, mediaId) {
-        const previewImageOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]:not(.loading) .media-element`);
-        const previewImage = previewImageOriginal?.cloneNode(true);
-        if (!previewImage) return;
+        mediaElement = (mediaElement.classList.contains('media-container') ? mediaElement : mediaElement.querySelector('.media-container')) ?? mediaElement;
+        const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]:not([data-resize])`); // The resizing animation seems extremely unpleasant and out of place
+        // const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]`);
+        let previewImageOriginal = mediaOriginal?.querySelector(`.media-element`);
+        if (!previewImageOriginal) return;
 
         const fullMedia = mediaElement.querySelector('.media-element');
         const isImage = fullMedia?.tagName === 'IMG';
         if (!fullMedia) return;
 
-        const previewWrap = createElement('div', { class: 'media-preview-wrapper' });
+        const resized = mediaOriginal.getAttribute('data-resize')?.split(':').map(c => +c);
+
+        let timestump = 0;
+        if (mediaElement.classList.contains('media-video')) {
+            const isVideo = previewImageOriginal.tagName === 'VIDEO';
+            timestump = +(isVideo ? previewImageOriginal.currentTime : mediaOriginal.getAttribute('data-timestump')) || 0;
+            mediaElement.setAttribute('data-timestump', timestump);
+        }
+
+        if (previewImageOriginal.tagName === 'VIDEO') {
+            if (mediaOriginal.hasAttribute('data-autoplay')) pauseVideo(mediaOriginal, 'data-autoplay');
+            else if (mediaOriginal.hasAttribute('data-focus-play')) pauseVideo(mediaOriginal, 'data-focus-play');
+            previewImageOriginal = mediaOriginal.querySelector(`.media-element`);
+        }
+        
+        const previewImage = previewImageOriginal?.cloneNode(true);
+        if (!previewImage) return;
+
         previewImage.classList.add('media-preview-image');
         previewImage.setAttribute('inert', '');
+
+        const previewWrap = createElement('div', { class: 'media-preview-wrapper' });
         previewWrap.appendChild(previewImage);
-        if (previewImage.tagName === 'VIDEO' && !previewImage.paused) previewImage.pause();
-        if (previewImage.tagName === 'CANVAS') {
+        if (previewImage.tagName === 'VIDEO') {
+            if (!previewImage.paused) previewImage.pause();
+            if (timestump) previewImage.currentTime = timestump;
+        } else if (previewImage.tagName === 'CANVAS') {
             const ctx = previewImage.getContext('2d');
             ctx.drawImage(previewImageOriginal, 0, 0);
         }
-        insertElement('div', previewWrap, { class: 'media-loading-indicator' });
+        previewWrap.appendChild(Controller.genLoadingIndecator());
 
-        let isReady = false;
+        let isReady = false, onReady = null, loadingStart = Date.now();
         const onFullMediaReady = () => {
             if (isReady) return;
             isReady = true;
-            animateElement(previewWrap, {
-                keyframes: { opacity: [1, 0] },
-                duration: 200,
-                easing: 'ease'
-            }).then(() => previewWrap.remove());
+            const isInstant = Date.now() - loadingStart <= 10;
+            requestAnimationFrame(() => {
+                if (isInstant) {
+                    previewWrap.remove();
+                    return;
+                }
+                if (resized) {
+                    const fullMedia = mediaElement.querySelector('.media-element:not([inert])');
+                    const [tw, th] = resized;
+                    const ow = fullMedia.width;
+                    const oh = fullMedia.height;
+                    const scaleFactor = Math.max(tw / ow, th / oh);
+                    const scale = (ow * scaleFactor) / tw;
+                    if (scale && scale !== 1 && scale >= .01 && scale <= 4) {
+                        animateElement(fullMedia, {
+                            keyframes: { scale: [scale, 1] },
+                            duration: 200,
+                            fill: 'backwards',
+                            easing: 'ease'
+                        });
+                        previewWrap.remove();
+                        return;
+                    }
+                }
+
+                animateElement(previewWrap, {
+                    keyframes: { opacity: [1, 0] },
+                    duration: 200,
+                    easing: 'ease'
+                }).then(() => previewWrap.remove());
+            });
+            // onReady?.();
         };
-        const waitForReady = async () => {
+        const waitForReady = () => {
             if (!mediaElement.contains(fullMedia)) {
                 onFullMediaReady();
                 return;
@@ -4609,13 +4958,15 @@ class Controller {
 
             const cleanup = () => {
                 fullMedia.removeEventListener('load', onload);
-                fullMedia.removeEventListener('loadeddata', onload);
+                fullMedia.removeEventListener('canplay', onload);
                 observer.disconnect();
             };
-            const onload = async () => {
+            const onload = () => {
                 cleanup();
-                if (isImage) await fullMedia.decode?.().catch(() => {});
-                requestAnimationFrame(onFullMediaReady);
+                let promise;
+                if (isImage && mediaElement.contains(fullMedia)) promise = fullMedia.decode?.().catch(() => {});
+                if (promise) promise.finally(onFullMediaReady);
+                else onFullMediaReady();
             }
 
             // This is necessary because the image can be replaced with a video when it is ready
@@ -4629,27 +4980,44 @@ class Controller {
             observer.observe(mediaElement, { childList: true, subtree: false });
 
             // There is always an image here, because mediaElement no longer creates videos, they are created elsewhere when they hit the screen
-            if (isImage) {
+            if (!isImage) {
+                if (fullMedia.readyState >= 3) return onload();
+
+                // since the video may have preload=none, need to track at least the loading of the poster
+                const posterUrl = fullMedia.poster;
+                if (posterUrl) {
+                    const posterImg = new Image();
+                    posterImg.addEventListener('load', onload, { once: true });
+                    posterImg.src = posterUrl;
+                }
+
+                fullMedia.addEventListener('canplay', onload, { once: true });
+                return;
+            }
+
+            if (!mediaElement.classList.contains('media-video') || !timestump) {
                 if (fullMedia.complete && fullMedia.naturalWidth !== 0) onload();
                 else fullMedia.addEventListener('load', onload, { once: true });
-            } else {
-                if (fullMedia.readyState >= 2) onload();
-                else {
-                    // since the video may have preload=none, need to track at least the loading of the poster
-                    const posterUrl = fullMedia.poster;
-                    if (posterUrl) {
-                        const posterImg = new Image();
-                        posterImg.addEventListener('load', onload, { once: true });
-                        posterImg.src = posterUrl;
-                    }
-
-                    fullMedia.addEventListener('loadeddata', onload, { once: true });
-                }
+                return;
             }
+
+            // If the video has "video-autoplay", you just need to wait for the observer to trigger; otherwise, start and stop the video
+            if (mediaElement.classList.contains('video-autoplay')) return;
+
+            // Start and stop the video to get the correct frame if autoplay is off
+            observer.disconnect(); // 
+            return playVideo(mediaElement, 'data-autoplay').then(() => {
+                pauseVideo(mediaElement, 'data-autoplay');
+                onload();
+            });
         };
 
         mediaElement.prepend(previewWrap);
         waitForReady();
+
+        // return new Promise(resolve => {
+        //     onReady = resolve;
+        // });
     }
 
     static #genArticlesListFilters(onAnyChange) {
@@ -4684,16 +5052,18 @@ class Controller {
         return this.#genFilters(list, onAnyChange);
     }
 
-    static #genImagesListFilters(onAnyChange) {
+    static #genImagesListFilters(onAnyChange, options = {}) {
+        const { baseModels_images = true, groupImagesByPost = true } = options;
+        const modelsOptions = [ "All", ...this.#models.options ];
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
 
         const list = [
             { type: 'dropdown',
                 items: [
-                    { type: 'boolean',
+                    groupImagesByPost ? { type: 'boolean',
                         key: 'groupImagesByPost',
                         label: window.languagePack?.text?.group_posts ?? 'Group posts'
-                    },
+                    } : null,
                     { type: 'boolean',
                         key: 'hideImagesWithoutPositivePrompt',
                         label: window.languagePack?.text?.hideWithoutPositivePrompt ?? 'Hide without positive prompt'
@@ -4708,6 +5078,15 @@ class Controller {
                     }
                 ]
             },
+            EXTENSION_INSTALLED && baseModels_images ? { type: 'list',
+                key: 'baseModels_images',
+                label: window.languagePack?.text?.model ?? 'Model',
+                options: modelsOptions,
+                labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
+                tags: this.#models.tags,
+                setValue: newValue => SETTINGS.baseModels_images = newValue === 'All' ? [] : [ newValue ],
+                getValue: () => SETTINGS.baseModels_images.length ? (SETTINGS.baseModels_images.length > 1 ? SETTINGS.baseModels_images : SETTINGS.baseModels_images[0]) : 'All'
+            } : null,
             { type: 'list',
                 key: 'sort_images',
                 label: window.languagePack?.text?.sort ?? 'Sort',
@@ -4805,49 +5184,51 @@ class Controller {
         const filterWrap = createElement('div', { class: 'list-filters' });
 
         for (const rule of list) {
+            if (!rule) continue;
 
-        if (rule.type === 'dropdown') {
-            const { container } = this.#genDropdownFilter(filterWrap);
+            if (rule.type === 'dropdown') {
+                const { container } = this.#genDropdownFilter(filterWrap);
 
-            for (const item of rule.items ?? []) {
-                if (item.type !== 'boolean') continue;
+                for (const item of rule.items ?? []) {
+                    if (!item) continue;
+                    if (item.type !== 'boolean') continue;
 
-                const boolean = this.#genBoolean({
-                    value: SETTINGS[item.key],
-                    label: item.label,
+                    const boolean = this.#genBoolean({
+                        value: SETTINGS[item.key],
+                        label: item.label,
+                        onchange: ({ newValue }) => {
+                            SETTINGS[item.key] = newValue;
+                            onAnyChange?.();
+                        }
+                    });
+
+                    boolean.element.classList.add('list-filter');
+                    container.appendChild(boolean.element);
+                }
+
+                continue;
+            }
+
+            if (rule.type === 'list') {
+                const value = rule.getValue ? rule.getValue() : SETTINGS[rule.key];
+
+                const listEl = this.#genList({
+                    label: rule.label,
+                    options: rule.options,
+                    labels: rule.labels,
+                    tags: rule.tags,
+                    value,
                     onchange: ({ newValue }) => {
-                        SETTINGS[item.key] = newValue;
+                        if (rule.setValue) rule.setValue(newValue);
+                        else SETTINGS[rule.key] = newValue;
                         onAnyChange?.();
                     }
                 });
 
-                boolean.element.classList.add('list-filter');
-                container.appendChild(boolean.element);
+                listEl.element.classList.add('list-filter');
+                filterWrap.appendChild(listEl.element);
             }
-
-            continue;
         }
-
-        if (rule.type === 'list') {
-            const value = rule.getValue ? rule.getValue() : SETTINGS[rule.key];
-
-            const listEl = this.#genList({
-                label: rule.label,
-                options: rule.options,
-                labels: rule.labels,
-                tags: rule.tags,
-                value,
-                onchange: ({ newValue }) => {
-                    if (rule.setValue) rule.setValue(newValue);
-                    else SETTINGS[rule.key] = newValue;
-                    onAnyChange?.();
-                }
-            });
-
-            listEl.element.classList.add('list-filter');
-            filterWrap.appendChild(listEl.element);
-        }
-    }
 
         return filterWrap;
     }
@@ -4868,6 +5249,12 @@ class Controller {
             document.documentElement.scrollTo({ top: scrollTop, behavior: 'smooth' });
         }, { passive: true });
         return button;
+    }
+
+    // TODO: not boring loading indicator
+    static genLoadingIndecator() {
+        const indicator = createElement('div', { class: 'media-loading-indicator' });
+        return indicator;
     }
 
     static #genErrorPage(error) {
@@ -5156,16 +5543,7 @@ class Controller {
     }
 
     static #convertNSFWLevelToString(nsfwLevel) {
-        const levels = [
-            { minLevel: 32, string: 'Blocked' },
-            { minLevel: 16, string: 'X' },
-            { minLevel: 8, string: 'X' },
-            { minLevel: 4, string: 'Mature' },
-            { minLevel: 2, string: 'Soft' },
-            { minLevel: 0, string: 'None' },
-        ]
-
-        return levels.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
+        return this.#nsfwLevels.string[nsfwLevel] ?? this.#nsfwLevels.sort.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
     }
 
     static #onCardRemoved(card, item, preventRemoveItemsFromDOM) {
@@ -5187,14 +5565,6 @@ class Controller {
             userBlockImage.remove();
             this.#cachedUserImages.get(userBlockImage.getAttribute('src')).add(userBlockImage);
         }
-    }
-
-    static #clearAppElement() {
-        this.appElement.querySelectorAll('.user-info img[src]:not([data-original-active])').forEach(img => {
-            img.remove(); // Unpin the element from the old tree (otherwise it will also remain in memory)
-            this.#cachedUserImages.get(img.getAttribute('src')).add(img);
-        });
-        this.appElement.textContent = '';
     }
 
     static #queueAddPipeline(optionsOrFn, ...fns) {
@@ -5238,7 +5608,8 @@ class Controller {
         } else {
             const delay = options.delay ?? 0;
             group.timer = setTimeout(() => {
-                this.#runGroup(group, key);
+                if (options.runInFrame) requestAnimationFrame(() => this.#runGroup(group, key));
+                else this.#runGroup(group, key);
             }, delay);
         }
     }
@@ -5285,17 +5656,45 @@ class Controller {
         if (SETTINGS.showLogs) console.log(...args);
     }
 
-    static onScroll(scrollTop) {
+    static onScroll(scrollTop = null) {
+        if (scrollTop === null) scrollTop = document.documentElement.scrollTop;
         this.#state.scrollTop = scrollTop;
-        this.#state.scrollTopRelative = this.#onScroll?.({ scrollTop }) ?? null;
+
+        const scrollReadResults = [];
+        for (const item of this.#activeVirtualScroll) {
+            const readResult = item.readScroll?.({ scrollTop }) ?? { scrollTop };
+            scrollReadResults.push([item, readResult]);
+            this.#state[`scrollTopRelative-${item.id}`] = readResult?.scrollTopRelative ?? readResult;
+        }
+
+        for (const [item, readResult] of scrollReadResults) {
+            item.onScroll?.(readResult);
+        }
+    }
+
+    static onScrollFromNavigation(state = {}) {
+        const scrollTop = state.scrollTop || 0;
+        this.#activeVirtualScroll.forEach(item => {
+            const scrollTopRelative = state[`scrollTopRelative-${item.id}`] || 0;
+            item.onScroll({ scrollTop, scrollTopRelative });
+        });
     }
 
     static onResize() {
         this.windowWidth = window.innerWidth;
         this.windowHeight = window.innerHeight;
+
         if (this.windowWidth < 950) CONFIG.appearance = CONFIG.appearance_small;
         else CONFIG.appearance = CONFIG.appearance_normal;
-        this.#onResize?.();
+
+        const resizeReadResults = [];
+        for (const item of this.#activeVirtualScroll) {
+            resizeReadResults.push([ item, item.readResize?.() ?? {} ]);
+        }
+
+        for (const [item, readResult] of resizeReadResults) {
+            item.onResize?.(readResult);
+        }
     }
 
     static get state() {
@@ -5309,13 +5708,8 @@ const videPlaybackObservedElements = new Set();
 const videPlaybackObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
         const mediaContainer = entry.target;
-        if (entry.isIntersecting) {
-            mediaContainer.setAttribute('data-autoplay', '');
-            playVideo(mediaContainer, 'data-autoplay');
-        } else {
-            pauseVideo(mediaContainer);
-            mediaContainer.removeAttribute('data-autoplay');
-        }
+        if (entry.isIntersecting) playVideo(mediaContainer, 'data-autoplay');
+        else pauseVideo(mediaContainer, 'data-autoplay');
     });
 }, { threshold: .35 });
 
@@ -5341,7 +5735,7 @@ const onTargetInViewportObserver = new IntersectionObserver(entries => {
             onTargetInViewportClearTarget(target);
         }
     });
-}, { threshold: 0.01, rootMargin: '300px 0px' });
+}, { threshold: 0.01, rootMargin: '400px 0px' });
 
 function onTargetInViewport(target, callback) {
     target.classList.add('inviewport-observed');
@@ -5465,13 +5859,14 @@ function filterItems(items, rules) {
         return cur;
     };
 
+    const blocksRegex = /[+\-][^+\-]+/g;
     const compiledRules = rules.map(rule => {
         if (!rule || !Array.isArray(rule.conditions)) return null;
 
         const parseTag = rule.type === 'number' ? v => Number(v) : v => String(v);
 
         const conditionMatchers = rule.conditions.map(conditionStr => {
-            const blocks = conditionStr.match(/[+\-][^+\-]+/g);
+            const blocks = conditionStr.match(blocksRegex);
             if (!blocks) return null;
 
             const blockMatchers = blocks.map(block => {
@@ -5737,13 +6132,26 @@ function onBodyFocus(e) {
 function onVisibilityChange() {
     const isVisible = !document.hidden;
     if (isVisible) {
-        Array.from(document.querySelectorAll('video[muted][loop][data-autoplay]')).forEach(video => video.play().catch(() => null));
+        Array.from(document.querySelectorAll('.media-container[data-autoplay] video'))
+        .forEach(video => {
+            if (!video._wasPlaying) return;
+            video.play().catch(() => null);
+            video._wasPlaying = false;
+        });
         if (!cacheClearTimer) {
             tryClearCache();
             cacheClearTimer = setInterval(tryClearCache, 60000);
         }
     } else {
-        Array.from(document.querySelectorAll('video[muted][loop][data-autoplay]')).forEach(video => video.pause());
+        Array.from(document.querySelectorAll('.media-container[data-autoplay] video'))
+        .forEach(video => {
+            if (video.paused) video._wasPlaying = false;
+            else {
+                video.pause();
+                video._wasPlaying = true;
+            }
+        });
+        document.querySelectorAll('.media-container[data-focus-play-timer]').forEach(v => v.removeAttribute('data-focus-play-timer'));
         document.querySelectorAll('.media-container[data-focus-play]').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
         if (cacheClearTimer) {
             clearInterval(cacheClearTimer);
@@ -5799,15 +6207,19 @@ function markMediaAsLoadedWhenReady(el) {
         // videos
         for (const media of instantMedia) {
             media.parentElement.classList.remove('loading');
+            // media.parentElement.style.backgroundColor = '';
             media.parentElement.style.backgroundImage = '';
         }
 
         // images (Waiting to eliminate possible flickering)
         if (readyImages.length) {
             setTimeout(() => {
-                readyImages.filter(img => document.body.contains(img)).forEach(img => {
-                    img.parentElement.classList.remove('loading');
-                    img.parentElement.style.backgroundImage = '';
+                requestAnimationFrame(() => {
+                    readyImages.filter(img => document.body.contains(img)).forEach(img => {
+                        img.parentElement.classList.remove('loading');
+                        // img.parentElement.style.backgroundColor = '';
+                        img.parentElement.style.backgroundImage = '';
+                    });
                 });
             }, 180);
         }
@@ -6036,6 +6448,9 @@ function onDragleave(e) {
 }
 
 function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
+    if (mediaContainer.hasAttribute(attrCheck)) return;
+    mediaContainer.setAttribute(attrCheck, '');
+
     const src = mediaContainer.getAttribute('data-src');
     const timestump = mediaContainer.getAttribute('data-timestump');
 
@@ -6051,23 +6466,31 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     video.currentTime = +timestump;
     video.play().catch(() => null);
 
-    const play = () => {
-        video.removeEventListener('canplay', play);
-        video.removeEventListener('error', play);
-        if (!mediaContainer.hasAttribute(attrCheck)) {
-            video.src = '';
-            return;
-        }
+    return new Promise(resolve => {
+        const canplayEventName = +timestump > 0 ? 'seeked' : 'canplay';
+        const play = () => {
+            video.removeEventListener(canplayEventName, play);
+            video.removeEventListener('error', play);
+            if (!mediaContainer.hasAttribute(attrCheck)) {
+                video.src = '';
+                resolve();
+                return;
+            }
 
-        const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
-        mediaElement.replaceWith(video);
-    };
+            const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
+            mediaElement.replaceWith(video);
+            resolve();
+        };
 
-    video.addEventListener('canplay', play, { once: true });
-    video.addEventListener('error', play, { once: true });
+        video.addEventListener(canplayEventName, play, { once: true });
+        video.addEventListener('error', play, { once: true });
+    });
 }
 
-function pauseVideo(mediaContainer) {
+function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
+    if (!mediaContainer.hasAttribute(attrCheck)) return;
+    mediaContainer.removeAttribute(attrCheck);
+
     const video = mediaContainer.querySelector('video:not([inert])');
     if (!video) return;
 
@@ -6168,31 +6591,32 @@ function replaceImageElement(img, newUrl, options) {
 }
 
 function startVideoPlayEvent(target, options = { fromFocus: false }) {
-    const selector = '.media-container[data-src][data-poster][data-timestump]:not([data-focus-play])';
+    const selector = '.media-container[data-src][data-poster][data-timestump]:not([data-focus-play]):not([data-focus-play-timer])';
     const container = target.matches(selector) ? target : target.querySelector(selector);
     if (!container) return;
 
+    document.querySelectorAll('.media-container[data-focus-play-timer]').forEach(v => v.removeAttribute('data-focus-play-timer'));
     document.querySelectorAll('.media-container[data-focus-play]').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
 
-    container.setAttribute('data-focus-play', '');
+    container.setAttribute('data-focus-play-timer', '');
 
     // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
     setTimeout(() => {
-        if (!container.hasAttribute('data-focus-play')) return;
+        if (!container.hasAttribute('data-focus-play-timer')) return;
 
         playVideo(container, 'data-focus-play');
-    }, 200);
+    }, 250);
 
     target.addEventListener('blur', stopVideoPlayEvent, { passive: true });
     target.addEventListener('pointerleave', stopVideoPlayEvent, { passive: true });
 }
 
 function stopVideoPlayEvent(e) {
-    const selector = '.media-container[data-focus-play]';
+    const selector = '.media-container[data-focus-play-timer]';
     const container = e.target.matches(selector) ? e.target : e.target.querySelector(selector);
     if (container) {
-        pauseVideo(container);
-        container.removeAttribute('data-focus-play');
+        container.removeAttribute('data-focus-play-timer');
+        pauseVideo(container, 'data-focus-play');
     }
     e.target.removeEventListener('blur', stopVideoPlayEvent);
     e.target.removeEventListener('pointerleave', stopVideoPlayEvent);
@@ -6208,7 +6632,7 @@ function startLinkPreviewEvent(e, options = { fromFocus: false }) {
     }
 
     const previewElement = createElement('div', { class: 'link-preview loading', inert: '' });
-    insertElement('div', previewElement, { class: 'media-loading-indicator' });
+    previewElement.appendChild(Controller.genLoadingIndecator());
     let positionTarget = target.querySelector('.link-preview-position');
 
     const showPreview = element => {
@@ -6300,7 +6724,7 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
         // Animate new tooltip
         tooltip.setAttribute('data-animation', 'in');
         setTimeout(() => {
-            if (tooltip.offsetParent !== null && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
+            if (document.body.contains(tooltip) && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
         }, animationDuration);
     };
 

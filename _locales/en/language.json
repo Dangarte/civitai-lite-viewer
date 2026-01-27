@@ -96,6 +96,7 @@
         "laugh": ["laugh", "laughs", "laughter"],
         "download": ["download", "downloads", "downloads"],
         "bookmark": ["bookmark", "bookmarks", "bookmarks"],
+        "view": ["view", "views", "views"],
         "message": ["message", "messages", "messages"],
         "comment": ["comment", "comments", "comments"]
     },

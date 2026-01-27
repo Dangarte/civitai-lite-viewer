@@ -7,6 +7,9 @@ const SW_CONFIG = {
         mediafull: 'civitai_light-mediafull-cache-v1',
         mediathumbs: 'civitai_light-mediathumbs-cache-v1'
     },
+    immutableCaches: [
+        'media', 'mediathumbs', 'blurhash'
+    ],
     cacheByTarget: {
         'model-preview': 'media',
         'model-card': 'mediathumbs',
@@ -43,6 +46,7 @@ SW_CONFIG.local_urls = {
     base: `${SW_CONFIG.base_url}local`,
     blurhash: `${SW_CONFIG.base_url}local/blurhash`
 };
+SW_CONFIG.immutableCaches = SW_CONFIG.immutableCaches.map(k => SW_CONFIG.cache[k]);
 SW_CONFIG.validTargets = new Set([...Object.keys(SW_CONFIG.cacheByTarget), ...Object.keys(SW_CONFIG.ttl)]);
 
 self.addEventListener('activate', () => {
@@ -150,7 +154,7 @@ function actionClearCache(data) {
     return Promise.all(promises).then(result => ({ countRemoved: result.reduce((c, response) => c + response.countRemoved, 0) }));
 }
 
-async function cacheFetch(request, cacheControl) {
+async function cacheFetch(request, cacheControl = { public: true }) {
     if (request.url.startsWith(SW_CONFIG.local_urls.base)) return localFetch(request);
 
     let cacheName = SW_CONFIG.cache.media;
@@ -161,16 +165,16 @@ async function cacheFetch(request, cacheControl) {
 
     if (request.url.startsWith(SW_CONFIG.base_url)) {
         cacheName = SW_CONFIG.cache.static;
-        if (!cacheControl) {
+        if (!cacheControl.maxAge) {
             const isCore = url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html';
-            cacheControl = `max-age=${SW_CONFIG.ttl[isCore ? 'lite-viewer-core' : 'lite-viewer']}`;
+            cacheControl.maxAge = isCore ? SW_CONFIG.ttl['lite-viewer-core'] : SW_CONFIG.ttl['lite-viewer'];
         }
     } else if (request.url.startsWith(SW_CONFIG.api_url)) {
         cacheName = SW_CONFIG.cache.api;
-        if (!cacheControl) {
-            if (url.pathname.includes('/model-versions/')) cacheControl = `max-age=${SW_CONFIG.ttl['model-version']}`;
+        if (!cacheControl.maxAge) {
+            if (url.pathname.includes('/model-versions/')) cacheControl.maxAge = SW_CONFIG.ttl['model-version'];
             else if (url.pathname.endsWith('/images') && params.imageId) {
-                cacheControl = `max-age=${SW_CONFIG.ttl['image-meta']}`;
+                cacheControl.maxAge = SW_CONFIG.ttl['image-meta'];
                 if (!params.nsfw) specialFetch = fetchImageWithUnknownNSFW;
             }
         }
@@ -197,14 +201,15 @@ async function cacheFetch(request, cacheControl) {
         let blob = await fetchResponse.blob();
         const customHeaders = [];
 
-        if (!cacheControl) {
+        if (!cacheControl.maxAge) {
             if (blob.type === 'application/json') {
-                cacheControl = request.method === 'GET' ? 'max-age=60' : 'no-cache'; // Agressive caching for 1 minute (only GET requests)
+                if (request.method === 'GET') cacheControl.maxAge = 'max-age=60'; // Agressive caching for 1 minute (only GET requests)
+                else cacheControl.noCache = true;
             }
-            else {
-                const maxAge = blob.size < 15000000 ? SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl.unknown : SW_CONFIG.ttl['large-file'];
-                cacheControl = `max-age=${maxAge}`;
-            }
+            else if (blob.size < 15000000) {
+                const maxAge = SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl.unknown;
+                cacheControl.maxAge = maxAge;
+            } else cacheControl.maxAge = SW_CONFIG.ttl['large-file'];
         }
 
         const forceDisableAnimation = request.url.includes(',anim=false,');
@@ -214,19 +219,22 @@ async function cacheFetch(request, cacheControl) {
             //     const originalResponse = responseFromBlob(blob, cacheControl);
             //     const editedUrl = request.url.includes('?') ? `${request.url}&original=true` : `${request.url}?original=true`;
             //     const editedRequest = cloneRequestWithModifiedUrl(request, editedUrl);
-            //     if (params.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(editedRequest, originalResponse, cacheName);
+            //     if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(editedRequest, originalResponse, cacheName);
             //     customHeaders.push([ 'X-Animated', true ]);
             // }
 
             const { width, height , format, quality, fit } = params;
             const forceFormat = forceDisableAnimation && !format ? await isImageAnimated(blob) : false;
-            const resizedBlob = (await resizeBlobImage(blob, { width, height, quality, format: format || (forceFormat ? 'webp' : undefined), fit }));
+            const options = { width, height, quality, format: format || (forceFormat ? 'webp' : undefined), fit };
+            const resizedBlob = (await ImageResizeQueue.run(blob, options));
+            // const resizedBlob = (await resizeBlobImage(blob, options));
             blob = resizedBlob || blob;
         }
 
+        if (!cacheControl.noCache) cacheControl.immutable = SW_CONFIG.immutableCaches.includes(cacheName);
         const response = responseFromBlob(blob, cacheControl);
         if (customHeaders.length) customHeaders.forEach(([k, v]) => response.headers.set(k, v));
-        if (params.cache !== 'no-cache' && cacheControl !== 'no-cache') CacheManager.put(request, response.clone(), cacheName);
+        if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(request, response.clone(), cacheName);
         return response;
     } catch (_) {
         console.error(_);
@@ -288,15 +296,16 @@ function createBlurhashResponse(hash, width, height, punch) {
     const pixels = blurhashToPixelsBGRA(hash, width, height, punch);
 
     const size = pixels.length;
-    const buffer = new ArrayBuffer(54 + size);
+    const totalSize = 54 + size;
+    const buffer = new ArrayBuffer(totalSize);
     const v = new DataView(buffer);
 
-    v.setUint16(0, 0x4D42, true); v.setUint32(2, 54 + size, true); v.setUint32(10, 54, true);
+    v.setUint16(0, 0x4D42, true); v.setUint32(2, totalSize, true); v.setUint32(10, 54, true);
     v.setUint32(14, 40, true); v.setInt32(18, width, true); v.setInt32(22, -height, true);
     v.setUint16(26, 1, true); v.setUint16(28, 32, true); v.setUint32(30, 0, true); v.setUint32(34, size, true);
 
     new Uint8Array(buffer, 54).set(pixels);
-    return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Cache-Control': `max-age=${SW_CONFIG.ttl['blurhash']}`, 'Date': new Date().toUTCString() } });
+    return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Content-Length': totalSize, 'Cache-Control': `public, max-age=${SW_CONFIG.ttl['blurhash']}, immutable`, 'Date': new Date().toUTCString() } });
 }
 
 async function resizeBlobImage(blob, options) { // Resize image blob
@@ -390,7 +399,18 @@ function getTargetFromUrl(url) {
 }
 
 function responseFromBlob(blob, cacheControl) {
-    return new Response(blob, { headers: { 'Content-Type': blob.type, 'Content-Length': blob.size, ...(cacheControl ? { 'Cache-Control': cacheControl, 'Date': new Date().toUTCString() } : {}) } });
+    const headers = { 'Content-Type': blob.type, 'Content-Length': blob.size, 'Date': new Date().toUTCString() };
+    if (cacheControl) {
+        if (cacheControl.noCache) headers['Cache-Control'] = cacheControl;
+        else {
+            const v = [];
+            if (cacheControl.public) v.push('public');
+            if (cacheControl.maxAge) v.push(`max-age=${cacheControl.maxAge}`);
+            if (cacheControl.immutable) v.push('immutable');
+            headers['Cache-Control'] = v.join(', ');
+        }
+    }
+    return new Response(blob, { headers });
 }
 
 function blurhashToPixelsBGRA(hash, width = 32, height = 32, punch = 1) {
@@ -509,6 +529,44 @@ function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
         init.duplex = 'half';
     }
     return new Request(newUrl, init);
+}
+
+class ImageResizeQueue {
+    static #queue = [];
+    static #activeCount = 0;
+    static #MAX_CONCURRENT = 2;
+
+    static run(blob, options = {}) {
+        return new Promise((resolve, reject) => {
+            this.#queue.push({ blob, options, size: blob.size, resolve, reject });
+            this.#next();
+        });
+    }
+
+    static async #next() {
+        if (this.#activeCount >= this.#MAX_CONCURRENT || this.#queue.length === 0) return;
+
+        // (Shortest Job First)
+        let smallestIdx = 0;
+        for (let i = 1; i < this.#queue.length; i++) {
+            if (this.#queue[i].size < this.#queue[smallestIdx].size) {
+                smallestIdx = i;
+            }
+        }
+
+        const task = this.#queue.splice(smallestIdx, 1)[0];
+        this.#activeCount++;
+
+        try {
+            const result = await resizeBlobImage(task.blob, task.options);
+            task.resolve(result);
+        } catch (error) {
+            task.reject(error);
+        } finally {
+            this.#activeCount--;
+            this.#next();
+        }
+    }
 }
 
 class CacheManager {

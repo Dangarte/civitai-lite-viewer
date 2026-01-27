@@ -36,7 +36,7 @@
     });
 
     const startTime = Date.now();
-    const TIMEOUT = 2000;
+    const TIMEOUT = 4000;
     const sleep = ms => new Promise(res => setTimeout(res, ms));
 
     // Proxy function

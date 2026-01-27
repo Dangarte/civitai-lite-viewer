@@ -36,9 +36,10 @@ function insertTextNode(text, parent) {
 }
 
 function animateElement(element, options) {
-    const { keyframes, framescount, timing = {}, duration, easing, fill, timeline = document.timeline } = options;
+    const { keyframes, framescount, timing = {}, duration, delay, easing, fill, timeline = document.timeline } = options;
     if (framescount !== undefined) timing.number = framescount;
     if (duration !== undefined) timing.duration = duration;
+    if (delay !== undefined) timing.delay = delay;
     if (easing !== undefined) timing.easing = easing;
     if (fill !== undefined) timing.fill = fill;
     const effect = new KeyframeEffect(element, keyframes, timing);
@@ -458,8 +459,47 @@ class Color {
     }
 }
 
+class Blurhash {
+    static #LOOKUP = (() => {
+        const t = new Uint8Array(128);
+        const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~';
+        for (let i = 0; i < 83; i++) t[chars.charCodeAt(i)] = i;
+        return t;
+    })();
+
+    static #HEX = '0123456789abcdef';
+
+    // 0xRRGGBB
+    static toRGB(hash) {
+        const t = Blurhash.#LOOKUP;
+
+        let v = 0;
+        v = v * 83 + t[hash.charCodeAt(2)];
+        v = v * 83 + t[hash.charCodeAt(3)];
+        v = v * 83 + t[hash.charCodeAt(4)];
+        v = v * 83 + t[hash.charCodeAt(5)];
+
+        return v;
+    }
+
+    // #RRGGBB
+    static toHex(hash) {
+        const v = Blurhash.toRGB(hash);
+        const h = Blurhash.#HEX;
+
+        return (
+            '#' +
+            h[(v >> 20) & 15] + h[(v >> 16) & 15] +
+            h[(v >> 12) & 15] + h[(v >> 8) & 15] +
+            h[(v >> 4) & 15] + h[v & 15]
+        );
+    }
+}
+
+
 // TODO: Animate scroll to element (when navigating with the keyboard)
 class MasonryLayout {
+    #id;
     #container;
     #generator;
     #options;
@@ -467,6 +507,7 @@ class MasonryLayout {
     #allowUseElementFromAddItems = false; // A switch that allows elements to be reused when the number of columns changes
 
     #columns = [];
+    #layers = [];
     #items = [];
     #itemsById = new Map();
     #inViewport = new Set();
@@ -474,11 +515,18 @@ class MasonryLayout {
 
     #onScroll;
     #onResize;
+    #readScroll;
+    #readResize;
     #onKeydown;
 
     #onElementRemove;
 
+    windowHeight = 0;
+    windowWidth = 0;
+    containerWidth = 0;
+
     constructor(container, options) {
+        this.#id = options.id || Date.now();
         this.#container = container;
         this.#generator = options.generator;
         this.#isPassive = options.passive ?? false;
@@ -486,12 +534,12 @@ class MasonryLayout {
             itemWidth: options.itemWidth ?? 300,
             itemHeight: options.itemHeight ?? null,
             gap: options.gap ?? 8,
-            minOverscan: options.minOverscan ?? 1,
-            maxOverscan: options.maxOverscan ?? 3,
-            speedFactor: options.speedFactor ?? 300,
+            maxOverscanScreens: options.maxOverscanScreens ?? 4,
+            basePaddingFactor: options.basePaddingFactor ?? .7,
+            lookAheadTime: options.lookAheadTime ?? 300,
+            layerHeight: options.layerHeight ?? 1500,
             stopThreshold: options.stopThreshold ?? 0.1,
             cooldownTime: options.cooldownTime ?? 200,
-            disableVirtualScroll: options.disableVirtualScroll ?? false,
         };
         this.#onElementRemove = options.onElementRemove;
 
@@ -501,9 +549,11 @@ class MasonryLayout {
         this.#itemsById = new Map();
         this.#focusedItem = null;
 
-        this.#onScroll = !this.#options.disableVirtualScroll ? this.#handleScroll.bind(this) : null;
+        this.#onScroll = this.#handleScroll.bind(this);
         this.#onResize = this.#handleResize.bind(this);
         this.#onKeydown = this.#handleKeydown.bind(this);
+        this.#readScroll = this.#handleReadScroll.bind(this);
+        this.#readResize = this.#handleReadResize.bind(this);
 
         this.#init();
     }
@@ -512,7 +562,8 @@ class MasonryLayout {
     resize({ animate = false, passive = false } = {}) {
         const options = this.#options;
         this.#columns = [];
-        const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
+        const columnsCount = Math.floor((this.windowWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
+        const containerWidth = columnsCount * (options.itemWidth + options.gap) - options.gap;
         for(let i = 0; i < columnsCount; i++) {
             this.#columns.push({
                 height: 0,
@@ -522,7 +573,7 @@ class MasonryLayout {
 
         // skip all if layout is empty
         if (!this.#items.length) {
-            this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
+            this.#container.style.width = `${containerWidth}px`;
             return;
         }
 
@@ -536,55 +587,67 @@ class MasonryLayout {
             });
         }
 
+        // Clear layers
+        this.#layers.forEach(layer => {
+            layer.items = [];
+            layer.inDOM = false;
+            if (layer.element) {
+                layer.element.remove();
+                delete layer.element;
+            }
+        });
+        this.#layers = [];
+
         // Recalculate the position of all elements
         const items = this.#items;
         if (items.length) {
             const lastFocusedItem = this.#focusedItem;
             this.#focusedItem?.element?.setAttribute('tabIndex', -1);
             this.#items = [];
+            this.#layers = [];
             this.#inViewport = new Set();
             this.#itemsById = new Map();
             this.#allowUseElementFromAddItems = true;
             this.#focusedItem = null;
-            this.addItems(items, Boolean(lastFocusedItem));
+            this.addItems(items, true);
             this.#allowUseElementFromAddItems = false;
 
-            if (lastFocusedItem) {
-                const focusedItem = this.#itemsById.get(lastFocusedItem.id);
-                if (focusedItem) {
-                    const targetScrollOffset = this.#lastScrollTop - lastFocusedItem.boundTop;
-                    const targetScroll = focusedItem.boundTop + targetScrollOffset;
-                    this.#handleScroll({ scrollTopRelative: targetScroll });
-                    if (this.#focusedItem.id !== focusedItem.id) {
-                        this.#focusedItem?.element?.setAttribute('tabIndex', -1);
-                        this.#focusedItem = focusedItem;
-                        this.#focusedItem?.element?.setAttribute('tabIndex', 0);
-                    }
-                    if (!passive) document.documentElement.scrollTo({ top: this.#lastScrollTop + this.#container.offsetTop, behavior: 'instant' });
-                } else {
-                    this.#handleScroll({ scrollTopRelative: this.#lastScrollTop || 0 });
+            const focusedItem = lastFocusedItem ? this.#itemsById.get(lastFocusedItem.id) : null;
+            if (focusedItem) {
+                const targetScrollOffset = this.#lastScrollTop - lastFocusedItem.boundTop;
+                const targetScroll = focusedItem.boundTop + targetScrollOffset;
+                this.#handleScroll({ scrollTopRelative: targetScroll });
+                if (this.#focusedItem.id !== focusedItem.id) {
+                    this.#focusedItem?.element?.setAttribute('tabIndex', -1);
+                    this.#focusedItem = focusedItem;
+                    this.#focusedItem?.element?.setAttribute('tabIndex', 0);
                 }
+                this.#lastScrollTop = this.#lastScrollTop + this.#container.offsetTop;
+                if (!passive) document.documentElement.scrollTo({ top: this.#lastScrollTop, behavior: 'instant' });
+            } else {
+                this.#handleScroll({ scrollTopRelative: this.#lastScrollTop || 0 });
             }
 
             items.forEach(item => {
-                const gridItem = this.#itemsById.get(item.id);
                 if (!item.inDOM) return;
+                const gridItem = this.#itemsById.get(item.id);
                 if (this.#inViewport.has(gridItem)) {
                     if (!passive) gridItem.element.getAnimations().forEach(a => a.cancel());
-                } else {
+                } else if (gridItem.element) {
                     gridItem.element.remove();
                     this.#onElementRemove?.(gridItem.element, gridItem.data);
                     delete gridItem.element;
                 }
             });
+
         }
 
-        this.#container.style.width = `${columnsCount * (options.itemWidth + options.gap) - options.gap}px`;
+        this.#container.style.width = `${containerWidth}px`;
 
         // Calc new positions and animate
         if (animate) {
             const animations = [];
-            const windowHeight = window.innerHeight;
+            const vh = this.windowHeight;
             const endScrollTop = this.#lastScrollTop;
             const deltaOffsetLeft = startOffsetLeft - this.#container.offsetLeft;
             this.#inViewport.forEach(item => {
@@ -595,31 +658,34 @@ class MasonryLayout {
                     if (
                         (start.left === end.left && start.top === end.top && !deltaOffsetLeft)
                         || (start.top + start.height < 0 && end.top + end.height < 0)
-                        || (start.top > windowHeight && end.top > windowHeight)
+                        || (start.top > vh && end.top > vh)
                     ) return;
 
                     keyframes.transform = [ `translate(${deltaOffsetLeft + start.left - end.left}px, ${start.top - end.top}px)`, 'translate(0, 0)' ];
                 } else {
-                    if (end.top + end.height < 0 || end.top > windowHeight) return;
+                    if (end.top + end.height < 0 || end.top > vh) return;
                     keyframes.transform = [ 'scale(0)', 'scale(1)' ];
                 }
                 animations.push({ element: item.element, keyframes });
             });
 
-            animations.forEach(({ element, keyframes }) => animateElement(element, { keyframes, duration: 300, easing: 'cubic-bezier(0.33, 1, 0.68, 1)' }));
+            const columnsStart = this.#columns.length;
+            this.#container.classList.add('cards-animating');
+            Promise.all(
+                animations.map(({ element, keyframes }) => animateElement(element, { keyframes, duration: 300, easing: 'cubic-bezier(0.33, 1, 0.68, 1)' }))
+            ).then(() => {
+                if (columnsStart !== this.#columns.length) return;
+                this.#container.classList.remove('cards-animating');
+            });
         }
     }
 
     addItems(items, dryAdd = false) {
         const options = this.#options;
         const itemsToUpdate = new Map();
-        let resized = false;
         items.forEach(item => {
             if (this.#itemsById.has(item.id)) {
-                if (!itemsToUpdate.has(item.id)) itemsToUpdate.set(item.id, item.data);
-                const gridItem = this.#itemsById.get(item.id);
-                const cardHeight = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
-                if (gridItem.aspectRatio !== item.aspectRatio || gridItem.boundHeight !== cardHeight) resized = true;
+                if (!itemsToUpdate.has(item.id)) itemsToUpdate.set(item.id, item);
                 return;
             }
 
@@ -640,6 +706,8 @@ class MasonryLayout {
                 inDOM: false
             };
 
+            gridItem.layer = this.#addToLayer(gridItem);
+
             if (this.#allowUseElementFromAddItems && item.element) gridItem.element = item.element;
 
             targetColumn.height += cardHeight + options.gap;
@@ -648,65 +716,49 @@ class MasonryLayout {
             this.#itemsById.set(item.id, gridItem);
         });
 
+        const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
+        const containerHeight = largestColumn.height > options.gap ? largestColumn.height - options.gap : 0;
+
         // Recreate elements with new data
+        let resized = false;
         if (itemsToUpdate.size) {
-            itemsToUpdate.forEach((data, id) => {
+            itemsToUpdate.forEach((item, id) => {
                 const gridItem = this.#itemsById.get(id);
-                this.#inViewport.delete(gridItem);
-                if (!gridItem.inDOM) gridItem.data = data;
-                else {
-                    this.#onElementRemove?.(gridItem.element, gridItem.data);
-                    gridItem.element.remove();
-                    delete gridItem.element;
-                    gridItem.data = data;
-                    gridItem.inDOM = false;
+                if (gridItem.aspectRatio !== item.aspectRatio) {
+                    gridItem.aspectRatio = item.aspectRatio;
+                    resized = true;
                 }
+                gridItem.data = item.data;
+                if (gridItem.inDOM) this.#hideItem(gridItem);
             });
         }
 
         // If any of the cards have changed size, then update the position of all cards
-        if (resized) {
-            console.time('resize');
-            this.resize({ animate: false, passive: true });
-            console.timeEnd('resize');
-
-            const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
-            this.#container.style.height = largestColumn.height > options.gap ? `${largestColumn.height - options.gap}px` : '0px';
-            return;
+        if (!dryAdd) {
+            if (resized) this.resize({ animate: false, passive: true });
+            else this.#handleScroll({ scrollTopRelative: this.#lastScrollTop || 0, firstDraw: true });
         }
 
-        if (!this.#options.disableVirtualScroll) {
-            if (!dryAdd) this.#handleScroll({ firstDraw: true });
-        }
-        else {
-            const now = performance.now();
-            this.#items.forEach(item => {
-                if (item.inDOM) return;
-                if (!item.element) {
-                    item.element = this.#generator(item.data, { itemWidth: options.itemWidth, itemHeight: options.itemHeight, isVisible: false, timestump: now });
-                    item.element.tabIndex = -1;
-                    item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
-                }
-                item.element.style.left = `${item.boundLeft}px`;
-                item.element.style.top = `${item.boundTop}px`;
-
-                this.#container.appendChild(item.element);
-                item.inDOM = true;
-                this.#inViewport.add(item);
-            });
-        }
-
-        const largestColumn = this.#columns.reduce((maxCol, col) => col.height > maxCol.height ? col : maxCol, this.#columns[0]);
-        this.#container.style.height = largestColumn.height > options.gap ? `${largestColumn.height - options.gap}px` : '0px';
+        this.#container.style.height = `${containerHeight}px`;
     }
 
     clear() {
         this.#items.forEach(item => {
-            if (!item.inDOM) return;
+            if (!item.element) return;
+            item.element.remove();
             this.#onElementRemove?.(item.element, item.data, true);
+            delete item.element;
+        });
+
+        this.#layers.forEach(layer => {
+            layer.items = [];
+            if (!layer.element) return;
+            layer.element.remove();
+            delete layer.element;
         });
 
         this.#items = [];
+        this.#layers = [];
         this.#inViewport = new Set();
         this.#itemsById = new Map();
         this.#focusedItem = null;
@@ -722,31 +774,43 @@ class MasonryLayout {
         }
         this.#container.removeEventListener('keydown', this.#onKeydown);
         this.#items.forEach(item => {
-            if (item.inDOM) {
-                item.inDOM = false;    
-                if (!preventRemoveItemsFromDOM) item.element.remove();
-                this.#onElementRemove?.(item.element, item.data, preventRemoveItemsFromDOM);
-                delete item.element;
-            }
+            if (!item.element) return;
+            item.inDOM = false;    
+            if (!preventRemoveItemsFromDOM) item.element.remove();
+            this.#onElementRemove?.(item.element, item.data, preventRemoveItemsFromDOM);
+            delete item.element;
         });
+        this.#layers.forEach(layer => {
+            layer.items = [];
+            if (!layer.element) return;
+            layer.inDOM = false;
+            if (!preventRemoveItemsFromDOM) layer.element.remove();
+            delete layer.element;
+        });
+        this.#layers = null;
         this.#columns = null;
         this.#items = null;
         this.#inViewport = null;
         this.#itemsById = null;
         this.#focusedItem = null;
+        this.#container = null;
     }
 
     getCallbacks() {
-        if (this.#isPassive) return { onScroll: this.#onScroll, onResize: this.#onResize };
+        if (this.#isPassive) return { onScroll: this.#onScroll, onResize: this.#onResize, readScroll: this.#readScroll, readResize: this.#readResize };
         else return {};
     }
 
     #init() {
+        this.windowHeight = window.innerHeight;
+        this.windowWidth = window.innerWidth;
+
         if (!this.#isPassive) {
             document.addEventListener('scroll', this.#onScroll, { passive: true });
             document.addEventListener('resize', this.#onResize, { passive: true });
         }
         this.#container.addEventListener('keydown', this.#onKeydown, { capture: true });
+
         this.resize();
     }
 
@@ -825,6 +889,117 @@ class MasonryLayout {
         return best;
     }
 
+    #addToLayer(item) {
+        const options = this.#options;
+
+        const layerIndex = Math.floor(item.boundTop / (options.layerHeight ?? 1500));
+        const layerTopAnchor = layerIndex * (options.layerHeight ?? 1500);
+
+        let layer = this.#layers[layerIndex];
+        if (!layer) {
+            const containerWidth = this.#columns.length * (options.itemWidth + options.gap) - options.gap;
+            const el = createElement('div', { class: 'cards-layer', style: `top: ${layerTopAnchor}px; width: ${containerWidth}px; height: 0;` });
+
+            this.#layers[layerIndex] = layer = {
+                index: layerIndex,
+                top: item.boundTop,
+                bottom: item.boundTop,
+                height: 0,
+                element: el,
+                inDOM: false,
+                visibleCount: 0,
+                items: []
+            };
+        }
+
+        layer.items.push(item);
+
+        let changed = false;
+        if (item.boundTop < layer.top) {
+            layer.top = item.boundTop;
+            layer.items.forEach(item => {
+                if (!item.element) return;
+                item.element.style.top = `${item.boundTop - layer.top}px`; // Change the offset of the card relative to the layer
+            });
+            changed = true;
+        }
+        if (item.boundBottom > layer.bottom) {
+            layer.bottom = item.boundBottom;
+            changed = true;
+        }
+
+        if (changed) {
+            layer.height = layer.bottom - layer.top;
+            const containerWidth = this.#columns.length * (options.itemWidth + options.gap) - options.gap;
+
+            layer.element.style.top = `${layer.top}px`;
+            layer.element.style.height = `${layer.height}px`;
+            layer.element.style.containIntrinsicSize = `${containerWidth}px ${layer.height}px`;
+        }
+
+        return layer;
+    }
+
+    #drawItem(item, ctx) {
+        if (!item.element) {
+            const options = {
+                itemWidth: this.#options.itemWidth,
+                itemHeight: this.#options.itemHeight,
+                firstDraw: ctx?.firstDraw ?? false,
+                timestump: ctx?.now
+            };
+            if (ctx) options.isVisible = item.boundBottom > ctx.screenTop - 300 && item.boundTop < ctx.screenBottom + 300; // isVisible - disable lazy loading
+            item.element = this.#generator(item.data, options);
+            item.element.setAttribute('tabIndex', -1);
+            item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
+        }
+
+        this.#inViewport.add(item);
+
+        item.element.style.left = `${item.boundLeft}px`;
+        // item.element.style.top = `${item.boundTop}px`;
+        item.element.style.top = `${item.boundTop - item.layer.top}px`;
+
+        // this.#container.appendChild(item.element);
+
+        item.layer.visibleCount++;
+        item.layer.element.appendChild(item.element);
+        if (!item.layer.inDOM) {
+            this.#container.appendChild(item.layer.element);
+            item.layer.inDOM = true;
+        }
+        this.#inViewport.add(item);
+        item.inDOM = true;
+    }
+
+    #hideItem(item) {
+        if (item.element) {
+            item.element.remove();
+            this.#onElementRemove?.(item.element, item.data);
+            delete item.element;
+        }
+        this.#inViewport.delete(item);
+        item.inDOM = false;
+
+        item.layer.visibleCount--;
+        if (item.layer.visibleCount <= 0) {
+            item.layer.visibleCount = 0;
+            item.layer.element.remove();
+            item.layer.inDOM = false;
+        }
+    }
+
+    #handleReadScroll(e = {}) {
+        e.scrollTopRelative = (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+        return e;
+    }
+
+    #handleReadResize(e = {}) {
+        this.windowHeight = window.innerHeight;
+        this.windowWidth = window.innerWidth;
+        return e;
+    }
+
     #handleKeydown(e) {
         let direction = null;
 
@@ -862,7 +1037,7 @@ class MasonryLayout {
         }
     }
 
-    #lastScrollTop = 0;
+    #lastScrollTop = null;
     #lastScrollTime = performance.now();
     #scrollDirection = 1; // 1 down, -1 up
     #scrollSpeed = 0;
@@ -874,71 +1049,63 @@ class MasonryLayout {
         // scrollTopRelative - used to restore elements when moving through nav history, without causing a recalculation of styles
         const currentScrollTop = typeof e?.scrollTopRelative === 'number'
                                     ? e?.scrollTopRelative
-                                    : (e?.scrollTop ?? document.documentElement.scrollTop) - this.#container.offsetTop;
+                                    : this.#handleReadScroll(e).scrollTopRelative;
 
-        // --- speed calculation
+        if (this.#lastScrollTop === null) this.#lastScrollTop = currentScrollTop; // Reset delta to 0 when first render
         const delta = currentScrollTop - this.#lastScrollTop;
         const dt = now - this.#lastScrollTime;
-        let speed = 0;
-        if (dt > 0) speed = Math.abs(delta) / dt; // px/ms
 
-        // --- direction determination
-        let direction = this.#scrollDirection;
-        if (delta > 0) direction = 1;
-        else if (delta < 0) direction = -1;
+        // Calculation of instantaneous speed (px/ms)
+        // Add a small filter (EMA) to avoid micro-jerks in the mouse delta
+        const instantSpeed = dt > 0 ? Math.abs(delta) / dt : 0;
+        this.#scrollSpeed = this.#scrollSpeed * .8 + instantSpeed * .2;
 
-        // --- save the state
-        this.#scrollSpeed = speed;
-        this.#scrollDirection = direction;
+        if (delta > 0) this.#scrollDirection = 1;
+        else if (delta < 0) this.#scrollDirection = -1;
+
         this.#lastScrollTop = currentScrollTop;
         this.#lastScrollTime = now;
 
         const options = this.#options;
-        const vh = window.innerHeight;
+        const vh = this.windowHeight;
 
-        // --- basic overscan parameters
-        const minOverscan = vh * (options.minOverscan ?? 1); // minimum: 1 screens
-        const maxOverscan = vh * (options.maxOverscan ?? 3); // maximum: 3 screens
-        const speedFactor = options.speedFactor ?? 300; // px/s -> overscan
+        // "Dead zone" - at least half a screen on each side, so as not to fall apart during reversal
+        const basePadding = vh * (options.basePaddingFactor ?? .7);
 
-        // --- recalculate the desired overscan forward
-        let targetOverscan = minOverscan + Math.min(
-            speed * dt * (speedFactor / 1000), // scaling speed
-            maxOverscan - minOverscan
-        );
+        // Look-ahead: How many pixels will the user fly through during the system's response time (e.g. 300 ms)
+        const lookAheadTime = options.lookAheadTime ?? 300;
+        const dynamicBenefit = this.#scrollSpeed * lookAheadTime;
 
-        // direction: forward = more, backward = less
-        let overscanForward = targetOverscan;
-        let overscanBackward = minOverscan;
+        // We limit it from above so as not to inflate the DOM to infinity (e.g. maximum 4 screens)
+        const maxDynamic = vh * (options.maxOverscanScreens ?? 4);
+        const targetOverscan = basePadding + Math.min(dynamicBenefit, maxDynamic);
 
-        if (direction < 0) {
-            // moving up
-            overscanForward = minOverscan;
-            overscanBackward = targetOverscan;
-        }
-
-        // --- hysteresis: if the speed is low, start the collapse timer
-        const stopThreshold = options.stopThreshold ?? 0.1; // px/ms
-        const cooldownTime = options.cooldownTime ?? 200; // ms
-
-        if (speed > stopThreshold) this.#overscanCooldown = 0;
+        // --- Hysteresis (collapse) ---
+        const stopThreshold = .1; // px/ms
+        const cooldownTime = 500;
+        if (this.#scrollSpeed > stopThreshold) this.#overscanCooldown = 0;
         else if (this.#overscanCooldown === 0) this.#overscanCooldown = now + cooldownTime;
+        let finalTarget = targetOverscan;
+        if (this.#overscanCooldown && now > this.#overscanCooldown) finalTarget = basePadding; // Collapse to the base
 
-        // if the collapse time has passed, we reset to a minimum
-        if (this.#overscanCooldown && now > this.#overscanCooldown) {
-            overscanForward = minOverscan;
-            overscanBackward = minOverscan;
-        }
+        // --- Smoothing ---
+        // Use different coefficients for expansion and contraction
+        // Expanding should be INSTANTLY (0.8), contracting slowly (0.05)
+        const isExpanding = finalTarget > (this.#currentOverscan || 0);
+        const smooth = isExpanding ? .8 : .05;
 
-        // --- smooth interpolation (so it doesn't jitter)
-        const smooth = options.smoothFactor ?? 0.2; // the smaller, the smoother
-        this.#currentOverscan = this.#lerp(this.#currentOverscan || minOverscan, Math.max(overscanForward, overscanBackward), smooth);
+        this.#currentOverscan = this.#lerp(this.#currentOverscan || basePadding, finalTarget, smooth);
 
-        // --- final screen boundaries
+        // --- borders ---
+        const leadFactor = .2; // 20% more "forward" than "backward" from current currentOverscan
+        const forwardExtra = this.#currentOverscan * (1 + leadFactor);
+        const backwardExtra = this.#currentOverscan * (1 - leadFactor);
+
+        const overscanTop = currentScrollTop - (this.#scrollDirection < 0 ? forwardExtra : backwardExtra);
+        const overscanBottom = currentScrollTop + vh + (this.#scrollDirection > 0 ? forwardExtra : backwardExtra);
         const screenTop = currentScrollTop;
         const screenBottom = currentScrollTop + vh;
-        const overscanTop = screenTop - (direction < 0 ? this.#currentOverscan : minOverscan / 2);
-        const overscanBottom = screenBottom + (direction > 0 ? this.#currentOverscan : minOverscan / 2);
+        const overscanCtx = { now, firstDraw, screenTop, screenBottom };
 
         let hasChanges = false;
 
@@ -948,11 +1115,7 @@ class MasonryLayout {
         // Remove items that are no longer visible
         for (const item of this.#inViewport) {
             if (item.index < newStartIndex || item.index > newEndIndex) {
-                item.inDOM = false;
-                item.element?.remove();
-                this.#inViewport.delete(item);
-                this.#onElementRemove?.(item.element, item.data);
-                delete item.element;
+                this.#hideItem(item);
                 hasChanges = true;
             }
         }
@@ -962,23 +1125,7 @@ class MasonryLayout {
             const item = this.#items[i];
 
             if (!item.inDOM) {
-                item.inDOM = true;
-                if (!item.element) {
-                    item.element = this.#generator(item.data, {
-                        itemWidth: options.itemWidth,
-                        itemHeight: options.itemHeight,
-                        isVisible: item.boundBottom > screenTop - 300 && item.boundTop < screenBottom + 300, // isVisible - disable lazy loading
-                        firstDraw,
-                        timestump: now
-                    });
-                    item.element.setAttribute('tabIndex', -1);
-                    item.element.style.containIntrinsicSize = `${item.boundWidth}px ${item.boundHeight}px`;
-                }
-                item.element.style.left = `${item.boundLeft}px`;
-                item.element.style.top = `${item.boundTop}px`;
-
-                this.#inViewport.add(item);
-                this.#container.appendChild(item.element);
+                this.#drawItem(item, overscanCtx);
                 hasChanges = true;
             }
         }
@@ -1010,14 +1157,19 @@ class MasonryLayout {
         return currentScrollTop;
     }
 
-    #handleResize() {
+    #handleResize(e) {
         const options = this.#options;
-        const columnsCount = Math.floor((window.innerWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
+        if (!e) this.#handleReadResize();
+        const columnsCount = Math.floor((this.windowWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
         if (columnsCount !== this.#columns.length) this.resize({ animate: true });
     }
 
     #lerp(a, b, t) {
         return a + (b - a) * t;
+    }
+
+    get id() {
+        return this.#id;
     }
 }
 
