@@ -5553,10 +5553,10 @@ class Controller {
         const realWidth = this.#getNearestServerSize(targetWidth);
         const size = `width=${realWidth},`; // You can't specify "not a jackal image trying to upscale"... if you just don't specify the size, it might return normally, the original resolution, or it might return a jackal 4096px
         // const size = realWidth < media.width || media.type === 'video' ? `width=${realWidth},` : '';
-        const resized = allowResize && width && height && Math.min(realWidth, media.width) > width * 1.3;
+        const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.3;
         let paramString = target ? (`?target=${target}`) : '';
         // Crop image if result is 30% wider than required
-        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${width}&height=${height}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
+        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${+(width * this.#devicePixelRatio).toFixed(4)}&height=${+(height * this.#devicePixelRatio).toFixed(4)}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
         const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
         const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
