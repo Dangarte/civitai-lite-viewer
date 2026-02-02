@@ -9,6 +9,9 @@ const ORIGINS = [
 const CIVITAI_ORIGIN = "https://civitai.com";
 const CIVITAI_TRPC = "/api/trpc/";
 const CIVITAI_TRPC_ROUTES = [
+    'model.getAll',
+    'model.getById',
+    'collection.getById',
     'model.getAssociatedResourcesCardData', // not used now
     'image.getInfinite',
     'article.getInfinite',

@@ -1,8 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 28,
-    extensionVertsion: 1,
+    version: 29,
+    extensionVertsion: 2,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -76,13 +76,18 @@ const CONFIG = {
                 "+3822", // "yaoi"
                 "+114923+304|2013", // "male focus" and "nude" or "nudity"
                 "+279", // "futanari"
+                "+308+1788-111991", // "penis" and "close-up" and not "sexual activity"
                 "+3485" // "femboy"
             ],
             hideGay_nsfw: [ // Soft+ (Mature+ doesn't work because the tags aren't always accurate, and the "futanari" tag might not be in the list at all, and you need to filter it somehow even if the level is only "soft")
                 "+114923+5262|3852", // "male focus" and "solo"
-                "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
+                // "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
             ]
         }
+    },
+    userGroups: {
+        // civbot = civitai bot (challanges, contest, etc.)
+        6235605: 'civbot' // "CivBot"
     },
     minDateForNewBadge: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days model "new" (Dates are in ISO format, so they can be compared as strings)
     timeOut: 20000, // 20 sec (ms)
@@ -120,6 +125,7 @@ const SETTINGS = {
     hideImagesWithoutResources: false,
     colorCorrection: true,
     showLogs: true,
+    civitaiLinksAltClickByDefault: false,
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
@@ -153,6 +159,8 @@ const SETTINGS = {
 //  3485: femboy
 //  112481: graphic male nudity
 //  112683: graphic female nudity
+//  1788: close-up
+//  111991: sexual activity
 //
 // To get tags and tagIds from image
 //  https://civitai.com/api/trpc/tag.getVotableTags?input=%7B%22json%22%3A%7B%22id%22%3A{imageId}%2C%22type%22%3A%22image%22%2C%22authed%22%3Atrue%7D%7D
@@ -161,18 +169,16 @@ const SETTINGS = {
 const DEVMODE = Boolean(localStorage.getItem('civitai-lite-viewer--devmode'));
 const EXTENSION_INSTALLED = Boolean(window.proxyFetchCivAPI);
 
-// If the extension is installed, the content in the feed and when loaded separately are different, so they cannot be interchanged
+Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
+
+// Check extension version
 if (EXTENSION_INSTALLED) {
-    SETTINGS.assumeListSameAsImage = false;
-    SETTINGS.assumeListSameAsModel = false;
-    if (CONFIG.extensionVertsion !== window.extension_civitaiExtensionProxyAPI_vertsion) {
+    if (CONFIG.extensionVertsion < window.extension_civitaiExtensionProxyAPI_vertsion) {
         document.addEventListener('DOMContentLoaded', () => {
             notify('Outdated version of the extension', 'warning');
         }, { once: true });
     }
 }
-
-Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settings ?? {}).forEach(([ key, value ]) => SETTINGS[key] = value);
 
 // Reasons for some old code snippets
 // Snippet_1:
@@ -299,8 +305,6 @@ class CivitaiPublicAPI {
         if (id) url.searchParams.append('imageId', id);
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
 
-        // Guessing the nsfw level has been moved to sw
-
         const data = await this.#getJSON({ url, target: `image meta (id: ${id}; nsfwLevel: ${nsfwLevel})` });
         return data?.items?.[0] ?? null;
     }
@@ -335,7 +339,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     async #getJSON({ route, params, target }) {
         try {
             const data = await window.proxyFetchCivAPI(route, params);
-            // console.log('[API Bridge] Raw Data', data);
+            // console.log(`[API Bridge] (${target}) Raw Data`, data);
 
             if (data.error) throw new Error(data.error);
 
@@ -482,11 +486,74 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return childrenHtml;
     }
 
+    #convertImages(items, browsingLevel) {
+        return items.map(item => {
+            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+            if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
+
+            return {
+                id: item.id,
+                hash: item.hash,
+                meta: item.hasMeta ? item.meta || {
+                    prompt: item.hasPositivePrompt ? `[Fake prompt, the API says there should be something here, but it didn't return anything]` : null,
+                    negativePrompt: `[Fake prompt, API returned nothing]`,
+                    civitaiResources: [
+                        ...(item.modelVersionIds || []),
+                        ...(item.modelVersionIdsManual || []),
+                        item.modelVersionId || null
+                    ].filter(Boolean).map(id => ({ modelVersionId: id })),
+                } : null,
+                postId: item.postId,
+                userId: item.user?.id,
+                username: item.user?.username || '[username]',
+                tags: [],
+                tagIds: item.tagIds || item.tags || [],
+                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, itemId: item.id, width: 450 }),
+                width: item.width,
+                height: item.height,
+                nsfwLevel: item.nsfwLevel,
+                browsingLevel: item.nsfwLevel,
+                type: item.type,
+                createdAt: item.createdAt,
+                publishedAt: item.publishedAt,
+                stats: item.stats ? this.#prepareStats(item.stats) : {}
+            };
+        }).filter(Boolean);
+    }
+
+    #convertFiles(files, type) {
+        if (!files || !Array.isArray(files) || !files.length) return [];
+        return files.map(file => {
+            const metadata = file.metadata ? {
+                format: file.metadata.format,
+                size: file.metadata.size,
+                fp: file.metadata.fp,
+            } : null;
+            return {
+                id: file.id,
+                modelVersionId: file.modelVersionId,
+                sizeKB: file.sizeKB,
+                name: file.name,
+                type: file.type,
+                pickleScanResult: file.pickleScanResult,
+                pickleScanMessage: file.pickleScanMessage,
+                virusScanResult: file.virusScanResult,
+                virusScanMessage: file.virusScanMessage,
+                scannedAt: file.scannedAt,
+                metadata: metadata || {},
+                hashes: file.hashes ? Object.fromEntries(file.hashes.map(h => ([ h.type, h.hash ]))) : {},
+                url: file.url,
+                downloadUrl: `${CONFIG.civitai_url}/api/download/${type}/${file.id}?type=${file.type}${metadata ? `&format=${metadata.format}&size=${metadata.size}&fp=${metadata.fp}` : ''}`,
+            }
+        });
+    }
+
     async fetchImages(options = {}) {
         const {
             limit = 20, // 0 ... 100
             cursor,
             modelVersionId,
+            collectionId,
             postId,
             username = '',
             baseModels = [],
@@ -495,10 +562,12 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             period = '',
         } = options;
 
+        const disableIndex = Boolean(collectionId); // Due to index, collection parameter is ignored
+
         const input = {
             json: {
                 periodMode: 'published',
-                useIndex: true,
+                useIndex: !disableIndex,
                 include: ["cosmetics", "meta"],
                 excludedTagIds: [],
                 // authed: true,
@@ -510,44 +579,16 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (sort) input.json.sort = sort;
         // if (browsingLevel) input.json.browsingLevel = browsingLevel; // Error: Strict limitation: i.e. if you specify Mature, it will be ONLY Mature, instead of Soft + Mature
         if (limit) input.json.limit = Math.min(limit, 100);
-        if (modelVersionId) input.json.modelVersionId = modelVersionId;
+        if (modelVersionId) input.json.modelVersionId = +modelVersionId;
+        if (collectionId) input.json.collectionId = +collectionId;
         if (postId) input.json.postId = +postId;
         if (username) input.json.username = username;
         if (baseModels?.length > 0) input.json.baseModels = baseModels;
 
         const data = (await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' })).json;
 
-        const items = data.items.map(item => {
-            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
-            if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
-
-            return {
-                id: item.id,
-                hash: item.hash,
-                meta: item.hasMeta ? item.meta || {
-                    prompt: item.hasPositivePrompt ? `[Fake prompt, the API says there should be something here, but it didn't return anything]` : null,
-                    negativePrompt: `[Fake prompt, API returned nothing]`,
-                    civitaiResources: [ ...(item.modelVersionIds || []), ...(item.modelVersionIdsManual || []) ].map(id => ({ modelVersionId: id })),
-                } : null,
-                postId: item.postId,
-                userId: item.user?.id,
-                username: item.user?.username || '[username]',
-                tags: [],
-                tagIds: item.tagIds,
-                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, itemId: item.id, width: 450 }),
-                width: item.width,
-                height: item.height,
-                nsfwLevel: item.nsfwLevel,
-                browsingLevel: item.nsfwLevel,
-                type: item.type,
-                createdAt: item.createdAt,
-                publishedAt: item.publishedAt,
-                stats: this.#prepareStats(item.stats)
-            };
-        }).filter(Boolean);
-
         return {
-            items,
+            items: this.#convertImages(data.items, browsingLevel),
             metadata: {
                 nextCursor: data.nextCursor
             }
@@ -561,6 +602,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             username = '',
             tags = [],
             browsingLevel,
+            collectionId,
             sort = '',
             period = '',
         } = options;
@@ -579,6 +621,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (sort) input.json.sort = sort;
         // if (browsingLevel) json.browsingLevel = browsingLevel; // Error: Strict limitation: i.e. if you specify Mature, it will be ONLY Mature, instead of Soft + Mature
         if (limit) input.json.limit = Math.min(limit, 100);
+        if (collectionId) input.json.collectionId = +collectionId;
         if (username) input.json.username = String(username);
         if (tags.length > 0 && !tags.some(t => typeof t !== 'number' || isNaN(t))) input.json.tags = tags;
 
@@ -629,7 +672,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             user: this.#prepareUserBlock(article.user),
             content: article.contentJson ? this.#convertContentToHtml(article.contentJson) : article.content,
             category: article.tags?.find(t => t.isCategory)?.name || 'misc',
-            attachments: article.attachments,
+            attachments: this.#convertFiles(article.attachments, 'attachments'),
             createdAt: article.createdAt,
             publishedAt: article.publishedAt,
             updatedAt: article.updatedAt,
@@ -640,6 +683,169 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             stats: this.#prepareStats(article.stats)
         };
     }
+
+    // This is necessary because the public API does not include tags, and here you also need to sort the models (at least by cover images)
+    async fetchModels(options) {
+        const {
+            limit = 20, // 0 ... 100
+            cursor,
+            query = '',
+            tag = '',
+            collectionId,
+            username = '',
+            types = [],
+            baseModels = [],
+            checkpointType = 'All',
+            browsingLevel,
+            sort = '',
+            period = '',
+        } = options;
+
+        const input = {
+            json: {
+                periodMode: 'published',
+                include: ["cosmetics"],
+                excludedTagIds: [],
+                // authed: true,
+                browsingLevel: 9999, // get all lvls (otherwise, there will be the same error as with the images)
+                cursor
+            }
+        };
+
+        if (period) input.json.period = period;
+        if (sort) input.json.sort = sort;
+        if (limit) input.json.limit = Math.min(limit, 100); // useless (dont work)
+        // if (browsingLevel) input.json.browsingLevel = browsingLevel;
+        if (checkpointType !== 'All') input.json.checkpointType = checkpointType;
+        if (types?.length > 0) input.json.types = types;
+        if (collectionId) input.json.collectionId = +collectionId;
+        if (username) input.json.username = username;
+        if (query) input.json.query = query;
+        if (tag) input.json.tag = tag;
+        if (baseModels?.length > 0) input.json.baseModels = baseModels;
+
+        const data = (await this.#getJSON({ route: 'model.getAll', params: { input }, target: 'models' })).json;
+
+        const items = data.items.map(item => {
+            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+            if (Math.round(item.nsfwLevel/2) > browsingLevel) return null; // Hide all above current browsingLevel level // kinda strange lvls in models (60? what?)
+
+            const version = item.version;
+            return {
+                id: item.id,
+                availability: item.availability,
+                type: item.type,
+                creator: this.#prepareUserBlock(item.user),
+                nsfwLevel: item.nsfwLevel,
+                name: item.name,
+                description: '',
+                modelVersions: [
+                    {
+                        id: version.id,
+                        name: version.name,
+                        images: this.#convertImages(item.images, browsingLevel),
+                        availability: version.availability,
+                        earlyAccessDeadline: item.earlyAccessDeadline,
+                        baseModel: version.baseModel,
+                        createdAt: version.createdAt,
+                        publishedAt: version.publishedAt,
+                        nsfwLevel: version.nsfwLevel,
+                        trainedWords: version.trainedWords || [],
+                    },
+                    item.publishedAt === item.lastVersionAt ? null : {
+                        publishedAt: item.publishedAt,
+                        name: `[Fake name, the API says there should be something here, but it didn't return anything]`
+                    }
+                ].filter(Boolean),
+                userId: item.user?.id,
+                tagIds: item.tags ?? [],
+                stats: this.#prepareStats(item.rank)
+            };
+        }).filter(Boolean);
+
+        return {
+            items,
+            metadata: {
+                nextCursor: data.nextCursor
+            }
+        };
+    }
+
+    // No images... lol...
+    async fetchModelInfo_no_image_DISABLED(id) {
+        const input = {
+            json: {
+                // authed: true,
+                id: Number(id)
+            }
+        };
+
+        const model = (await this.#getJSON({ route: 'model.getById', params: { input }, target: `model (id: ${id})` })).json;
+
+        return {
+            id: model.id,
+            availability: model.availability,
+            checkpointType: model.checkpointType,
+            earlyAccessDeadline: model.earlyAccessDeadline,
+            hasSuggestedResources: model.hasSuggestedResources,
+            name: model.name,
+            creator: this.#prepareUserBlock(model.user),
+            description: model.description,
+            publishedAt: model.publishedAt,
+            updatedAt: model.updatedAt,
+            nsfwLevel: model.nsfwLevel,
+            modelVersions: model.modelVersions.map(version => {
+
+                return {
+                    id: version.id,
+                    modelId: version.modelId,
+                    name: version.name,
+                    files: this.#convertFiles(version.files, 'models'),
+                    // images: this.#convertImages(version.images, browsingLevel),
+                    description: version.description,
+                    availability: version.earlyAccessConfig ? 'EarlyAccess' : version.availability,
+                    earlyAccessConfig: version.earlyAccessConfig,
+                    earlyAccessDeadline: version.earlyAccessDeadline,
+                    baseModel: version.baseModel,
+                    createdAt: version.createdAt,
+                    publishedAt: version.publishedAt,
+                    nsfwLevel: version.nsfwLevel,
+                    trainedWords: version.trainedWords || [],
+                    stats: this.#prepareStats(version.rank)
+                };
+            }),
+            tags: model.tagsOnModels?.map(t => t.name ?? t.tag?.name) ?? [],
+            tagIds: model.tagsOnModels?.map(t => t.id ?? t.tag?.id) ?? [],
+            stats: this.#prepareStats(model.rank)
+        };
+    }
+
+    async fetchCollectionInfo(id) {
+        const input = {
+            json: {
+                // authed: true,
+                id: Number(id)
+            }
+        };
+
+        const data = (await this.#getJSON({ route: 'collection.getById', params: { input }, target: `collection (id: ${id})` })).json;
+        const collection = data.collection;
+
+        return {
+            id: collection.id,
+            availability: collection.availability,
+            name: collection.name,
+            user: this.#prepareUserBlock(collection.user),
+            description: collection.description,
+            mode: collection.mode,
+            type: collection.type,
+            metadata: { ...collection.metadata },
+            nsfwLevel: collection.nsfwLevel,
+            image: this.#prepareMedia(collection.image),
+        };
+    }
+
+    // model.getCollectionShowcase -> {"json":{"id":MODEL_ID,"authed":true}}
 }
 
 // TODO: Normalize the management of the history, I don't like that inside #genImageFullPage the history are touched...
@@ -651,15 +857,12 @@ class Controller {
     static #errorTimer = null;
     static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
     static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
-    static #onScroll = null;
-    static #onResize = null;
     static #activeVirtualScroll = [];
     static #state = {};
 
     static windowWidth = 0;
     static windowHeight = 0;
 
-    static #groups = new Map(); // key -> { list, timer }
     static #preClickResults = {};
     static #cachedUserImages = new Map(); // try to reuse user profile images
 
@@ -668,6 +871,7 @@ class Controller {
         posts: new Map(),           // dummy cache for transferring information about posts from the list to fullscreen mode
         models: new Map(),          // Cache for quickly obtaining information about models
         articles: new Map(),        // Cache for quickly obtaining information about articles
+        collections: new Map(),     // Cache for quickly obtaining information about collections (items)
         modelVersions: new Map(),   // Cache for quickly obtaining information about model versions
         history: new Map()          // History cache (for fast back and forth)
     };
@@ -742,11 +946,13 @@ class Controller {
             'Wan Video 2.5 I2V',
             'Wan Video 2.5 T2V',
             'ZImageTurbo',
+            'ZImageBase',
             'Other'
         ],
         labels: {
             AuraFlow: 'Aura Flow',
             ZImageTurbo: 'Z-Image Turbo',
+            ZImageBase: 'Z-Image Base',
             'PixArt a': 'PixArt α',
             'PixArt E': 'PixArt Σ',
             'Wan Video 2.2 I2V-A14B': 'Wan 2.2 I2V A14B',
@@ -796,6 +1002,7 @@ class Controller {
             'Wan Video 2.5 I2V': 'Wan 2.5 I2V',
             'HiDream': 'HiD',
             'ZImageTurbo': 'ZIT',
+            'ZImageBase': 'ZI',
         },
         tags: {
             'AuraFlow': ['image', 'weights', 'fal-ai', 'multilingual'],
@@ -867,6 +1074,7 @@ class Controller {
             'Wan Video 2.5 I2V': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
             'Wan Video 2.5 T2V': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
             'ZImageTurbo': ['image', 'weights', 'multilingual'],
+            'ZImageBase': ['image', 'weights', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -931,12 +1139,13 @@ class Controller {
     };
 
     static #regex = {
-        urlModels: /\/models\/(\d+)/i,          // get model id from civ url
-        urlImages: /\/images\/(\d+)/i,          // get image id from civ url
-        urlPosts: /\/posts\/(\d+)/i,            // get post id from civ url
-        urlArticles: /\/articles\/(\d+)/i,      // get article id from civ url
-        urlParamWidth: /\/width=\d+\//,         // /width=NUMBER/
-        urlParamAnimFalse: /anim=false,?/,      // anim=false, or anim=false
+        urlModels: /\/models\/(\d+)/i,              // get model id from civ url
+        urlImages: /\/images\/(\d+)/i,              // get image id from civ url
+        urlPosts: /\/posts\/(\d+)/i,                // get post id from civ url
+        urlArticles: /\/articles\/(\d+)/i,          // get article id from civ url
+        urlCollections: /\/collections\/(\d+)/i,    // get collection id from civ url
+        urlParamWidth: /\/width=\d+\//,             // /width=NUMBER/
+        urlParamAnimFalse: /anim=false,?/,          // anim=false, or anim=false
     };
 
     static #pages = [
@@ -955,6 +1164,7 @@ class Controller {
                 return this.gotoModels({
                     tag: params.tag,
                     query: params.query,
+                    collectionId: params.collection,
                     username: params.username || params.user
                 });
             },
@@ -975,16 +1185,21 @@ class Controller {
                     };
                 }
 
+                const forcedPeriod = params.collection ? 'AllTime' : null;
+                const forcedType = params.collection ? [] : null;
+                const forcedCheckpountType = params.collection ? 'All' : null;
+                const forcedBaseModel = params.collection ? [] : null;
                 const query = {
                     limit: CONFIG.perRequestLimits.models,
                     tag: params.tag ?? '',
                     query: params.query,
+                    collectionId: params.collection,
                     username: params.username || params.user,
-                    types: SETTINGS.types,
+                    types: forcedType || SETTINGS.types,
                     sort: SETTINGS.sort,
-                    period: SETTINGS.period,
-                    checkpointType: SETTINGS.checkpointType,
-                    baseModels: SETTINGS.baseModels,
+                    period: forcedPeriod || SETTINGS.period,
+                    checkpointType: forcedCheckpountType || SETTINGS.checkpointType,
+                    baseModels: forcedBaseModel || SETTINGS.baseModels,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfw,
                 };
@@ -1002,17 +1217,21 @@ class Controller {
                 return this.gotoArticles({
                     tag: params.tag,
                     username: params.username,
+                    collectionId: params.collection,
                 });
             }
         },
         { // #images
             match: ({ pageId }) => pageId === '#images',
             goto: ({ params = {} }) => {
+                if (params.collection) return this.gotoCollection(params.collection);
+
                 if (params.image) return this.gotoImage(params.image, params.nsfw);
 
                 if (
                     params.model ||
                     params.modelversion ||
+                    params.collection ||
                     params.username ||
                     params.userId ||
                     params.user ||
@@ -1022,6 +1241,7 @@ class Controller {
                         userId: params.userId,
                         modelId: params.model,
                         modelVersionId: params.modelversion,
+                        collectionId: params.collection,
                         username: params.username || params.user,
                         postId: params.post
                     });
@@ -1030,14 +1250,20 @@ class Controller {
                 return this.gotoImages();
             },
             prepare: ({ params = {} }) => {
-                if (!params.image) return { key: null, promise: null };
+                if (params.collection && !this.#cache.collections.has(`${params.collection}`)) {
+                    return {
+                        key: params.collection,
+                        promise: this.api.fetchCollectionInfo(params.collection)
+                    };
+                }
 
-                if (!this.#cache.images.has(`${params.image}`)) {
+                if (params.image && !this.#cache.images.has(`${params.image}`)) {
                     return {
                         key: params.image,
                         promise: this.api.fetchImageMeta(params.image, params.nsfw)
                     };
                 }
+
 
                 return { key: null, promise: null };
             }
@@ -1076,6 +1302,13 @@ class Controller {
                 params.articleId = url.pathname.match(this.#regex.urlArticles)?.[1] ?? null;
             },
             toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
+        },
+        { // collections
+            match: ({ url }) => url.pathname.startsWith('/collections/'),
+            parse: ({ url, params }) => {
+                params.collectionId = url.pathname.match(this.#regex.urlCollections)?.[1] ?? null;
+            },
+            toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.collectionId ? `#images?collection=${params.collectionId}` : null
         }
     ];
 
@@ -1133,14 +1366,13 @@ class Controller {
             }
             if (result.title !== undefined) this.#setTitle(result.title);
 
-            if (loaded) {
-                hideTimeError();
-                cleanupDetachedObservers();
-                document.getElementById('page-loading-bar')?.remove();
-                this.appElement.classList.remove('page-loading');
-                this.onScrollFromNavigation(navigationState);
-                document.documentElement.scrollTo({ top: navigationState.scrollTop || 0, behavior: 'instant' });
-            }
+            if (!loaded) return;
+
+            hideTimeError();
+            cleanupDetachedObservers();
+            document.getElementById('page-loading-bar')?.remove();
+            this.appElement.classList.remove('page-loading');
+            this.onScrollFromNavigation(navigationState);
         };
 
         const finishPageLoading = (result = {}) => {
@@ -1180,7 +1412,12 @@ class Controller {
         const params = parseParams(paramString) || {};
         for (const page of this.#pages) {
             if (page.match({ pageId, params })) {
-                result = page.goto({ pageId, params });
+                try {
+                    result = page.goto({ pageId, params });
+                } catch (error) {
+                    console.error(error);
+                    result = this.#gotoError(error);
+                }
                 break;
             }
         }
@@ -1189,7 +1426,7 @@ class Controller {
 
         if (result.promise instanceof Promise) {
             processNavigation(result);
-            result.promise.then(finishPageLoading);
+            result.promise.then(finishPageLoading).catch(error => this.#gotoError(error));
         } else finishPageLoading(result);
     }
 
@@ -1220,8 +1457,13 @@ class Controller {
 
     static #gotoError(error, fallbackMessage = 'Error') {
         console.error('Error:', error?.message ?? error);
-        const appContent = createElement('div', { class: 'app-content' });
+        const appContent = createElement('div', { class: 'app-content error-page' });
         appContent.appendChild(this.#genErrorPage(error?.message ?? fallbackMessage));
+
+        // Open in CivitAI
+        const civitaiUrl = this.createCivitUrl();
+        if (civitaiUrl) insertElement('a', element, { href: civitaiUrl, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
         return { element: appContent, title: window.languagePack?.errors?.error ?? 'Error' };
     }
 
@@ -1295,41 +1537,45 @@ class Controller {
             const promises = [];
 
             // try convert url
-            try {
-                const url = new URL(q);
-                if (url.origin === CONFIG.civitai_url) {
-                    const { localUrl: redirectUrl, params } = this.parseCivUrl(url);
-                    if (!redirectUrl) throw new Error('Unknown url');
-                    let promise;
-
-                    if (url.pathname.startsWith('/models/')) {
-                        if (!params.modelId) throw new Error('There is no model id in the link');
-                        if (params.modelVersionId) {
-                            promise = this.api.fetchModelVersionInfo(params.modelVersionId).then(version => {
-                                const previewMedia = version?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-                                const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? redirectUrl;
-                                results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: version.model?.type ?? window.languagePack?.text?.model ?? 'Model' });
-                            });
-                        } else {
-                            promise = this.api.fetchModelInfo(params.modelId).then(model => {
-                                const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-                                const title = model.name ?? redirectUrl;
-                                results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
-                            });
-                        }
-                    } else if (url.pathname.startsWith('/images/')) {
-                        if (!params.imageId) throw new Error('There is no image id in the link');
-                        promise = this.api.fetchImageMeta(params.imageId).then(media => {
-                            const title = window.languagePack?.text?.image ?? 'Image';
-                            results.push({ media, image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
-                        });
-                    } else if (url.pathname.startsWith('/posts/')) {
-                        if (!params.postId) throw new Error('There is no post id in the link');
-                        const title = window.languagePack?.text?.post ?? 'Post';
-                        results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
-                    }
-                    if (promise) promises.push(promise);
+            const qUrl = toURL(q);
+            if (qUrl) {
+                if (qUrl.origin !== CONFIG.civitai_url) {
+                    results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
+                    renderResults(results);
+                    return;
                 }
+
+                const { localUrl: redirectUrl, params } = this.parseCivUrl(qUrl);
+                if (!redirectUrl) throw new Error('Unknown url');
+                let promise;
+
+                if (qUrl.pathname.startsWith('/models/')) {
+                    if (!params.modelId) throw new Error('There is no model id in the link');
+                    if (params.modelVersionId) {
+                        promise = this.api.fetchModelVersionInfo(params.modelVersionId).then(version => {
+                            const previewMedia = version?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                            const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? redirectUrl;
+                            results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: version.model?.type ?? window.languagePack?.text?.model ?? 'Model' });
+                        });
+                    } else {
+                        promise = this.api.fetchModelInfo(params.modelId).then(model => {
+                            const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                            const title = model.name ?? redirectUrl;
+                            results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
+                        });
+                    }
+                } else if (qUrl.pathname.startsWith('/images/')) {
+                    if (!params.imageId) throw new Error('There is no image id in the link');
+                    promise = this.api.fetchImageMeta(params.imageId).then(media => {
+                        const title = window.languagePack?.text?.image ?? 'Image';
+                        results.push({ media, image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
+                    });
+                } else if (qUrl.pathname.startsWith('/posts/')) {
+                    if (!params.postId) throw new Error('There is no post id in the link');
+                    const title = window.languagePack?.text?.post ?? 'Post';
+                    results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
+                }
+                if (promise) promises.push(promise);
 
                 if (!promises.length && !results.length) results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
 
@@ -1339,7 +1585,7 @@ class Controller {
                 } else renderResults(results);
 
                 return;
-            } catch(_) {}
+            }
 
             // try search by hash
             if (!q.includes(':') && hashSizes.some(n => q.length === n)) {
@@ -1437,7 +1683,7 @@ class Controller {
                 insertElement('p', descriptionContainer, undefined, description);
                 if (blockquote) insertElement('blockquote', descriptionContainer, undefined, blockquote);
                 settingsContainer.appendChild(container);
-            } catch(_) {
+            } catch (_) {
                 console.error(_);
                 insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
             }
@@ -1465,7 +1711,7 @@ class Controller {
                 insertElement('p', descriptionContainer, undefined, 'Images filter (WIP)');
                 // insertElement('blockquote', descriptionContainer, undefined, '...');
                 settingsContainer.appendChild(container);
-            } catch(_) {
+            } catch (_) {
                 console.error(_);
                 insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
             }
@@ -1590,17 +1836,20 @@ class Controller {
             };
         }
 
-        const { tag, username } = options;
+        const { tag, username, collectionId } = options;
+        const forcedPeriod = collectionId ? 'AllTime' : null;
         const fragment = new DocumentFragment();
         const navigationState = {...this.#state};
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         let query, hiddenArticles = 0;
         const layoutConfig = {
             id: 'articles',
+            state: navigationState[`virtualScrollState-articles`] ?? null,
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
             generator: this.#genArticleCard.bind(this),
+            progressiveGenerator: this.#genArticleCardProgressive,
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
@@ -1610,10 +1859,11 @@ class Controller {
                 query = {
                     limit: CONFIG.perRequestLimits.articles,
                     sort: SETTINGS.sort_articles,
-                    period: SETTINGS.period_articles,
+                    period: forcedPeriod || SETTINGS.period_articles,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfw,
                     tags: tag ? [+tag] : [],
+                    collectionId,
                     username,
                 };
                 this.#state.filter = JSON.stringify(query);
@@ -1680,6 +1930,8 @@ class Controller {
             savePageSettings();
             this.#pageNavigation = Date.now();
             infinityScroll.reload();
+        }, {
+            period_articles: !forcedPeriod
         });
         fragment.appendChild(filter);
 
@@ -1781,7 +2033,7 @@ class Controller {
             const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
             article.attachments.forEach(file => {
                 const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
-                const downloadUrl = `${CONFIG.civitai_url}/api/download/attachments/${file.id}`; // file.url - required auth
+                const downloadUrl = file.downloadUrl || `${CONFIG.civitai_url}/api/download/attachments/${file.id}`; // file.url - required auth
                 const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: downloadUrl });
                 a.appendChild(getIcon('download'));
                 insertElement('span', a, undefined, file.name || 'Unnamed');
@@ -1895,10 +2147,10 @@ class Controller {
     }
 
     static gotoImages(options = {}) {
-        const { modelId, username, userId, modelVersionId, postId } = options;
+        const { modelId, username, userId, modelVersionId, collectionId, postId } = options;
 
         const appContentWide = createElement('div', { class: 'app-content app-content-wide cards-list-container' });
-        const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, username, userId, postId });
+        const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, collectionId, username, userId, postId });
         appContentWide.appendChild(imagesList);
         appContentWide.appendChild(this.#genScrollToTopButton());
 
@@ -1907,6 +2159,86 @@ class Controller {
             title: window.languagePack?.text?.images ?? 'Images',
             promise: imagesListPromise
         };
+    }
+
+    static gotoCollection(id) {
+        const pageNavigation = this.#pageNavigation;
+        const navigationState = {...this.#state};
+
+        const insertCollectionPage = collection => {
+            const title = [collection.name];
+
+            const cache = this.#cache.history.get(navigationState.id) ?? {};
+            if (!cache.descriptionImages) cache.descriptionImages = new Map();
+
+            // to select the background color when correcting colors
+            const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            const fragment = new DocumentFragment();
+            const appContent = insertElement('div', fragment, { class: 'app-content app-content-small collection-page' });
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
+
+            // Title
+            insertElement('h1', appContent, { class: 'model-name' }, collection.name);
+
+            // Creator
+            if (collection.user) {
+                const userBLock = this.#genUserBlock(collection.user);
+                if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
+                appContent.appendChild(userBLock);
+            }
+
+            // Description
+            if (collection.description) {
+                const modelDescription = createElement('div', { class: 'model-description' });
+                const description = this.#analyzeModelDescriptionString(collection.description);
+                const modelDescriptionFragment = safeParseHTML(description);
+                this.#analyzeModelDescription(modelDescriptionFragment, cache);
+                if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+                modelDescription.appendChild(modelDescriptionFragment);
+                if (modelDescription.childNodes.length) appContent.appendChild(modelDescription);
+            }
+
+            const itemsList = ({
+                Image: this.gotoImages,
+                Model: this.gotoModels,
+                Article: this.gotoArticles
+
+            })[collection.type]?.bind(this)({ collectionId: collection.id }) ?? null;
+
+            if (itemsList.element) {
+                appContentWide.appendChild(itemsList.element);
+            }
+
+            let promise = itemsList.promise;
+
+            if (promise instanceof Promise) {
+                promise = promise.then(() => ({ element: fragment, title }));
+                return { promise };
+            } else return { element: fragment, title };
+        };
+
+        const cached = this.#cache.collections.get(`${id}`) || this.#preClickResults[`${id}-result`];
+        if (cached) {
+            this.#log('Loaded collection (cache):', cached);
+            return insertCollectionPage(cached);
+        }
+
+        const apiPromise = this.#preClickResults[id] ?? this.api.fetchCollectionInfo(id);
+        const promise = apiPromise
+        .then(data => {
+            if (data?.id) this.#cache.collections.set(`${data.id}`, data);
+            if (pageNavigation !== this.#pageNavigation) return;
+            this.#log('Loaded collection:', data);
+            const result = insertCollectionPage(data);
+            if (result.promise) return result.promise;
+            return result;
+        }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            return this.#gotoError(error);
+        });
+
+        return { promise };
     }
 
     static gotoModelByHash(hash) {
@@ -1936,6 +2268,10 @@ class Controller {
         const navigationState = {...this.#state};
 
         const insertModelPage = model => {
+            if (!model.modelVersions.length) {
+                return this.#gotoError({ message: 'Model not available. API returned empty list.' });
+            }
+
             const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
             const title = [model.name, modelVersion.name, modelVersion.baseModel, model.type];
 
@@ -1996,7 +2332,9 @@ class Controller {
             if (data?.id) this.#cache.models.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
             this.#log('Loaded model:', data);
-            return insertModelPage(data);
+            const result = insertModelPage(data);
+            if (result.promise) return result.promise;
+            return result;
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             return this.#gotoError(error);
@@ -2006,9 +2344,13 @@ class Controller {
     }
 
     static gotoModels(options = {}) {
-        const { tag = '', query: searchQuery, username: searchUsername } = options;
+        const { tag = '', query: searchQuery, username: searchUsername, collectionId = null } = options;
         const navigationState = {...this.#state};
         const cache = this.#cache.history.get(navigationState.id) ?? {};
+        const forcedPeriod = collectionId ? 'AllTime' : null;
+        const forcedType = collectionId ? [] : null;
+        const forcedCheckpountType = collectionId ? 'All' : null;
+        const forcedBaseModel = collectionId ? [] : null;
         let query;
         let modelById = new Map(), hiddenModels = 0;
         const fragment = new DocumentFragment();
@@ -2017,6 +2359,11 @@ class Controller {
             savePageSettings();
             this.#pageNavigation = Date.now();
             infinityScroll.reload();
+        }, {
+            period: !forcedPeriod,
+            types: !forcedType,
+            checkpointType: !forcedCheckpountType,
+            baseModels: !forcedBaseModel,
         });
         fragment.appendChild(filter);
 
@@ -2026,16 +2373,18 @@ class Controller {
 
         const layoutConfig = {
             id: 'models',
+            state: navigationState[`virtualScrollState-models`] ?? null,
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
             generator: this.#genModelCard.bind(this),
+            progressiveGenerator: this.#genModelCardProgressive,
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
         const onPointerDown = id => {
-            if (!SETTINGS.assumeListSameAsModel) return;
+            if (!SETTINGS.assumeListSameAsModel || EXTENSION_INSTALLED) return;
             if (!modelById.has(id)) return;
             const model = modelById.get(id);
             this.#cache.models.set(`${id}`, model);
@@ -2047,12 +2396,13 @@ class Controller {
                     limit: CONFIG.perRequestLimits.models,
                     tag,
                     query: searchQuery,
+                    collectionId,
                     username: searchUsername,
-                    types: SETTINGS.types,
+                    types: forcedType || SETTINGS.types,
                     sort: SETTINGS.sort,
-                    period: SETTINGS.period,
-                    checkpointType: SETTINGS.checkpointType,
-                    baseModels: SETTINGS.baseModels,
+                    period: forcedPeriod || SETTINGS.period,
+                    checkpointType: forcedCheckpountType || SETTINGS.checkpointType,
+                    baseModels: forcedBaseModel || SETTINGS.baseModels,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfw,
                 };
@@ -2092,7 +2442,46 @@ class Controller {
 
             const hiddenBefore = hiddenModels;
             const countAll = models.length;
-            models = models.filter(model => (model?.modelVersions?.length && !model.tags.some(tag => SETTINGS.blackListTags.includes(tag))));
+
+            if (EXTENSION_INSTALLED) {
+                if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
+
+                    // A shallow copy of the list of models and images in versions (a full copy is too expensive)
+                    // (since they can be filtered, and this filtering must not be passed through to the original object taken from the cache)
+                    models = models.map(model => {
+                        model = {...model};
+                        model.modelVersions = model.modelVersions.map(version => {
+                            version = {...version};
+                            if (version.images) version.images = [...version.images];
+                            return version;
+                        });
+                        return model;
+                    });
+
+                    let blackListTagIds = [...SETTINGS.blackListTagIds];
+                    if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
+                    if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
+                    if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
+                    blackListTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
+
+                    // Filter images in each model
+                    models = models.filter(model => {
+                        const modelVersion = model.modelVersions[0];
+                        if (!modelVersion.images.length) return true;
+                        modelVersion.images = this.#filterImages(modelVersion.images, { blackListTagIds });
+                        return modelVersion.images.length;
+                    });
+
+                    // Filter models
+                    models = filterItems(models, [
+                        { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
+                        // { key: 'modelVersions.0.images.0.tagIds', conditions: blackListTagIds, type: 'number' } // filtered above
+                    ]);
+                }
+            } else {
+                models = models.filter(model => (model?.modelVersions?.length && !model.tags?.some(tag => SETTINGS.blackListTags.includes(tag))));
+            }
+
             if (models.length !== countAll) {
                 this.#log(`Due to the selected tags for hiding, ${countAll - models.length} model(s) were hidden`);
                 hiddenModels += countAll - models.length;
@@ -2133,6 +2522,20 @@ class Controller {
         }
     }
 
+    static createCivitUrl() {
+        if (!location.hash.includes('?')) return null;
+        try {
+            const params = parseParams(location.hash.substring(location.hash.indexOf('?') + 1));
+
+            if (params.model) return `${CONFIG.civitai_url}/models/${params.model}/`;
+            if (params.article) return `${CONFIG.civitai_url}/articles/${params.article}/`;
+            if (params.image) return `${CONFIG.civitai_url}/images/${params.image}/`;
+            return null;
+        } catch (_) {
+            return null;
+        }
+    }
+
     static openFromCivitUrl(href) {
         const { localUrl } = this.parseCivUrl(href);
         if (!localUrl) return this.#gotoError(error, 'Unsupported url');
@@ -2163,15 +2566,10 @@ class Controller {
     }
 
     static createLinkPreview(url) {
-        if (!(url instanceof URL)) {
-            try {
-                url = new URL(url, location.origin);
-            } catch (_) {
-                return;
-            }
-        }
+        if (!(url instanceof URL)) url = toURL(url, location.origin);
+        if (!url) return;
 
-        let imageId = null, postId = null, modelId = null, articleId = null, modelVersionId = null;
+        let imageId = null, postId = null, modelId = null, articleId = null, collectionId = null, modelVersionId = null;
 
         if (url.origin === CONFIG.civitai_url) {
             const { params } = this.parseCivUrl(url);
@@ -2179,6 +2577,7 @@ class Controller {
             modelId = params.modelId;
             articleId = params.articleId;
             postId = params.postId;
+            collectionId = params.collectionId;
             modelVersionId = params.modelVersionId;
         }
 
@@ -2189,7 +2588,31 @@ class Controller {
             postId = params.post;
             modelId = params.model;
             articleId = params.article;
+            collectionId = params.collection;
             modelVersionId = params.version;
+        }
+
+        if (collectionId && EXTENSION_INSTALLED) {
+            const showCollection = collection => {
+                const card = this.#genCollectionCard(collection, { itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
+                return card;
+            };
+
+            if (this.#cache.collections.has(collectionId)) {
+                const cached = this.#cache.collections.get(collectionId);
+                if (cached) return showCollection(cached);
+                else return this.#genErrorPage(`No collection with id ${collectionId}`);
+            }
+
+            return this.api.fetchCollectionInfo(collectionId).then(model => {
+                if (model) this.#cache.collections.set(collectionId, model);
+                return showCollection(model);
+            }).catch(error => {
+                if (error?.message.startsWith('No collection with id')) {
+                    this.#cache.collections.set(collectionId, null); // Do not try to download again if there is no collection with this ID
+                }
+                return this.#genErrorPage(error?.message ?? 'Error');
+            });
         }
 
         if (imageId || postId) {
@@ -2197,8 +2620,15 @@ class Controller {
                 let maxImg = media;
                 if (media instanceof Set) {
                     const arr = [...media];
-                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
-                    maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
+                    maxImg = arr.reduce((max, img) => {
+                        const s = img.stats;
+                        const rate = s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                        if (rate > max.rate) {
+                            max.rate = rate;
+                            max.img = img;
+                        }
+                        return max;
+                    }, { rate: -1, img: arr[0] }).img;
 
                     const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
                     media = newData;
@@ -2207,12 +2637,12 @@ class Controller {
                 const baseWidth = CONFIG.appearance.imageCard.width;
                 const aspectRatio = Math.min(maxImg.width / maxImg.height, 2);
                 const itemWidth = aspectRatio > 1.38 ? Math.round(baseWidth * aspectRatio) : baseWidth;
-                const card = this.#genImageCard(media, { isVisible: true, firstDraw: true, itemWidth, forceAutoplay: true });
+                const card = this.#genImageCard(media, { itemWidth, forceAutoplay: true });
                 return card;
             };
 
             const cache = postId ? this.#cache.posts : this.#cache.images;
-            const cached = cache.get(imageId || postId);
+            const cached = cache.get(postId || imageId);
             if (cached) return showImage(cached);
 
             if (postId) {
@@ -2231,7 +2661,7 @@ class Controller {
 
         if (modelId) {
             const showModel = model => {
-                const card = this.#genModelCard(model, { isVisible: true, firstDraw: true, itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
+                const card = this.#genModelCard(model, { itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
                 return card;
             };
 
@@ -2254,7 +2684,7 @@ class Controller {
 
         if (articleId && EXTENSION_INSTALLED) {
             const showArticle = article => {
-                const card = this.#genArticleCard(article, { isVisible: true, firstDraw: true, itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true });
+                const card = this.#genArticleCard(article, { itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true });
                 return card;
             };
 
@@ -2294,10 +2724,13 @@ class Controller {
             { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
         ];
         const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
-        const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
-        if (availabilityBadge) statsList.push({ icon: iconId || 'information', value: window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge, type: availabilityBadge });
         const statsFragment = this.#genStats(statsList);
-        if (availabilityBadge) statsFragment.children[statsFragment.children.length - 1].classList.add('model-availability');
+        if (availabilityBadge) {
+            const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
+            const badge = createElement('div', { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+            badge.prepend(getIcon(iconId || 'information'));
+            statsFragment.appendChild(badge);
+        }
         modelNameH1.appendChild(statsFragment);
 
         // Download buttons
@@ -2405,6 +2838,9 @@ class Controller {
         if (modelVersion.images?.length) {
             const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
             const previewImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+            // const rawImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+            // const filteredImages = this.#filterImages(rawImages, { results: true });
+            // const previewImages = filteredImages.filter(it => it.ok).map(it => it.item);
             const isWideMinRatio = 1.38;
             const generateMediaPreview = media => {
                 const ratio = +(media.width/media.height).toFixed(4);
@@ -2514,6 +2950,7 @@ class Controller {
         if (model.creator) {
             const userInfo = {...model.creator};
             if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
+            if (!userInfo.userId) userInfo.userId = model.userId;
             const userBLock = this.#genUserBlock(userInfo);
             if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
             modelVersionDescription.appendChild(userBLock);
@@ -2522,7 +2959,7 @@ class Controller {
         }
 
         // to select the background color when correcting colors
-        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
+        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
         // Version description
         if (modelVersion.description) {
@@ -2577,7 +3014,7 @@ class Controller {
             this.#setTitle((window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username));
 
             // Creator and Created At
-            const creator = this.#genUserBlock({ username: media.username, url: `#images?username=${media.username}` });
+            const creator = this.#genUserBlock({ userId: media.userId, username: media.username, url: `#images?username=${media.username}` });
             if (media.createdAt) {
                 const createdAt = new Date(media.createdAt);
                 insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
@@ -2754,17 +3191,16 @@ class Controller {
 
             if (result instanceof Promise) {
                 const pageNavigation = this.#pageNavigation;
-                const hasLoadingBar = Boolean(document.getElementById('page-loading-bar'));
-                if (!hasLoadingBar) {
-                    const bar = insertElement('div', document.body, { id: 'page-loading-bar' });
-                    result.finally(() => bar.remove());
-                }
+                document.getElementById('page-loading-bar')?.remove();
+                insertElement('div', document.body, { id: 'page-loading-bar' });
                 return result.then(result => {
                     if (pageNavigation !== this.#pageNavigation) return;
+                    document.getElementById('page-loading-bar')?.remove();
                     cursor = result.cursor;
                     insertItems(result.items);
                 }).catch(error => {
                     if (pageNavigation !== this.#pageNavigation) return;
+                    document.getElementById('page-loading-bar')?.remove();
                     console.error('Failed to fetch items:', error?.message ?? error);
                     element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
@@ -2907,11 +3343,8 @@ class Controller {
                 element.classList.remove('error');
                 const pageNavigation = this.#pageNavigation;
 
-                const hasLoadingBar = Boolean(document.getElementById('page-loading-bar'));
-                if (!hasLoadingBar) {
-                    const bar = insertElement('div', document.body, { id: 'page-loading-bar' });
-                    result.finally(() => bar.remove());
-                }
+                document.getElementById('page-loading-bar')?.remove();
+                insertElement('div', document.body, { id: 'page-loading-bar' });
 
                 promise = result.then(result => {
                     if (pageNavigation !== this.#pageNavigation) return;
@@ -2930,6 +3363,7 @@ class Controller {
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
                 }).finally(() => {
                     if (pageNavigation !== this.#pageNavigation) return;
+                    document.getElementById('page-loading-bar')?.remove();
                     parent?.classList.remove('cards-loading');
                     element.removeAttribute('inert');
                 });
@@ -2951,8 +3385,9 @@ class Controller {
     }
 
     static #genImages(options) {
-        const { modelId, modelVersionId, postId, userId, username, opCreator = null, state: navigationState = {...this.#state} } = options; // Snippet_1 : modelId
-        const isSpecific = modelVersionId || modelId || userId || username || postId;
+        const { modelId, modelVersionId, collectionId, postId, userId, username, opCreator = null, state: navigationState = {...this.#state} } = options; // Snippet_1 : modelId
+        const isSpecific = modelVersionId || collectionId || modelId || userId || username || postId;
+        const forcedPeriod = collectionId || postId ? 'AllTime' : null;
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         let query;
         let groupingByPost = SETTINGS.groupImagesByPost && !postId;
@@ -2963,15 +3398,17 @@ class Controller {
 
         const layoutConfig = {
             id: 'images',
+            state: navigationState[`virtualScrollState-images`] ?? null,
             gap: CONFIG.appearance.imageCard.gap,
             itemWidth: CONFIG.appearance.imageCard.width,
             generator: this.#genImageCard.bind(this),
+            progressiveGenerator: this.#genImageCardProgressive,
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
         const onPointerDown = id => {
-            if (!SETTINGS.assumeListSameAsImage) return;
+            if (!SETTINGS.assumeListSameAsImage || EXTENSION_INSTALLED) return;
             if (!imagesMetaById.has(id)) return;
             const imageMeta = imagesMetaById.get(id);
             const postInfo = imageMeta.postId ? postsById.get(imageMeta.postId) : null;
@@ -2985,11 +3422,12 @@ class Controller {
                 query = {
                     limit: CONFIG.perRequestLimits.images,
                     sort: SETTINGS.sort_images,
-                    period: SETTINGS.period_images,
+                    period: forcedPeriod || SETTINGS.period_images,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfwLevel,
                     baseModels,
                     modelVersionId,
+                    collectionId,
                     modelId, // Snippet_1
                     userId,
                     username,
@@ -3080,18 +3518,8 @@ class Controller {
             }
 
             if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
-                let blackListTagIds = [...SETTINGS.blackListTagIds];
-                if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
-                if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
-                if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
-
                 const countBefore = images.length;
-                images = filterItems(images, [
-                    { key: 'tagIds', conditions: blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`), type: 'number' },
-                    SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
-                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
-                ])
-
+                images = this.#filterImages(images);
                 if (countBefore !== images.length) countHidden.badTags = countBefore - images.length;
             }
 
@@ -3106,35 +3534,41 @@ class Controller {
                 this.#log(`Hidden ${hiddenImages - hiddenBefore} image(s):\n  ${hiddenCountMessages.join('\n  ')}`);
             }
 
-            images.forEach(image => {
-                if (imagesMetaById.has(image.id)) return;
+            const usedPosts = new Set();
+            const items = [];
+            for (const image of images) {
+                if (imagesMetaById.has(image.id)) continue;
                 imagesMetaById.set(image.id, image);
 
                 // Mark user as model uploader
                 if (opCreator && image.username === opCreator) image.usergroup = 'OP';
-
+    
                 if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
                 postsById.get(image.postId).add(image);
-            });
 
-            const postsInList = new Set();
-            const items = images.map(image => {
                 if (groupingByPost) {
-                    if (postsInList.has(image.postId)) return null;
-                    postsInList.add(image.postId);
+                    if (usedPosts.has(image.postId)) continue;
+                    usedPosts.add(image.postId);
                 }
 
                 const aspectRatio = image.width / image.height;
-                if (groupingByPost) return { id: image.postId, aspectRatio, data: postsById.get(image.postId) };
-                else return { id: image.id, aspectRatio, data: image }
-            }).filter(Boolean);
+                if (groupingByPost) items.push({ id: image.postId, aspectRatio, data: postsById.get(image.postId) });
+                else items.push({ id: image.id, aspectRatio, data: image });
+            }
 
             // Select image with the most reactions in each group
             items.forEach(item => {
                 if (item.data instanceof Set && item.data.size > 1) {
                     const arr = [...item.data];
-                    const sum = s => s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
-                    const maxImg = arr.reduce((max, img) => sum(img.stats) > sum(max.stats) ? img : max);
+                    const maxImg = arr.reduce((max, img) => {
+                        const s = img.stats;
+                        const rate = s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                        if (rate > max.rate) {
+                            max.rate = rate;
+                            max.img = img;
+                        }
+                        return max;
+                    }, { rate: -1, img: arr[0] }).img;
 
                     const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
                     item.data = newData;
@@ -3163,7 +3597,8 @@ class Controller {
             infinityScroll.reload();
         }, {
             baseModels_images: !isSpecific,
-            groupImagesByPost: !postId
+            groupImagesByPost: !postId,
+            period_images: !forcedPeriod
         }));
 
         if (infinityScroll.promise instanceof Promise) {
@@ -3175,6 +3610,27 @@ class Controller {
         fragment.appendChild(listWrap);
 
         return { element: fragment, promise: infinityScroll.promise };
+    }
+
+    static #filterImages(images, options = { blackListTagIds: null, results: false }) {
+        if (!SETTINGS.blackListTagIds.length && !SETTINGS.hideFurry && !SETTINGS.hideExtreme && !SETTINGS.hideGay) return options.results ? images.map(it => ({ item: it, ok: true })) : images;
+        let blackListTagIds = options.blackListTagIds;
+
+        if (!blackListTagIds) {
+            blackListTagIds = [...SETTINGS.blackListTagIds];
+            if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
+            if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
+            if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
+            blackListTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
+        }
+
+        const result = filterItems(images, [
+            { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
+            SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.nsfwLevel >= 2 } : null,
+            // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+        ], { results: options.results });
+
+        return result;
     }
 
     static #genStats(stats, hideEmpty = false) {
@@ -3202,8 +3658,7 @@ class Controller {
     }
 
     static #genFakeVirtualScroll(id, container) {
-        const readScroll = e => e;
-        const onScroll = e => e;
+        const readScroll = onScroll = e => e;
         const readResize = (e = {}) => {
             e.items = Array.from(container.children).map(element => ({ element, bounds: element.getBoundingClientRect() }));    
             return e;
@@ -3278,17 +3733,17 @@ class Controller {
         }
 
         // Remove extra nesting (paragraph in list item is extra)
-        // description.querySelectorAll('li>p:only-child').forEach(p => {
-        //     p.replaceWith(...p.children);
-        // });
+        description.querySelectorAll('li>p:only-child').forEach(p => {
+            p.replaceWith(...p.childNodes);
+        });
 
         const headers = description.querySelectorAll('h1, h2, h3');
 
         // The entire header wrapped in <strong/u/em/b/i> makes no sense
         headers.forEach(header => {
+            const hText = header.textContent.trim();
             header.querySelectorAll('strong, u, em, b, i').forEach(el => {
-                const isFullWrap = el.textContent.trim() === header.textContent.trim();
-                if (isFullWrap) el.replaceWith(...el.childNodes);
+                if (el.textContent.trim() === hText) el.replaceWith(...el.childNodes);
             });
         });
 
@@ -3296,7 +3751,7 @@ class Controller {
         // or Expand spam headings into a normal paragraph (contains line breaks or is too long)
         if (headers.length / description.children.length >= .65) {
             headers.forEach(header => {
-                const p = createElement('p');
+                const p = document.createElement('p');
                 p.append(...header.childNodes);
                 header.replaceWith(p);
             });
@@ -3312,14 +3767,41 @@ class Controller {
             });
         }
 
+        // Remove bad styles (font family, font size)
+        // Reduce unnecessary nesting and extra styles from empty (space-only) spans
+        description.querySelectorAll('span').forEach(span => {
+            if (!span.textContent.trim().length) {
+                const rawText = span.textContent;
+                let rootToDelete = span;
+
+                while (
+                    rootToDelete.parentElement && 
+                    rootToDelete.parentElement !== description &&
+                    rootToDelete.parentElement.childNodes.length === 1
+                ) {
+                    rootToDelete = rootToDelete.parentElement;
+                }
+
+                rootToDelete.replaceWith(document.createTextNode(rawText));
+                return;
+            }
+
+            if (span.hasAttribute('style')) {
+                const s = span.style;
+                if (s.fontSize) s.removeProperty('font-size');
+                if (s.fontFamily) s.removeProperty('font-family');
+                if (s.fontWeight) s.removeProperty('font-weight');
+            }
+        });
+
         // Add loading lazy, decoding async and srcset
         const regexUrlWidth = /width=(\d+)/;
         description.querySelectorAll('img').forEach(img => {
             let src = img.getAttribute('src');
+            img.removeAttribute('src');
             img.setAttribute('decoding', 'async');
 
-            let url = null, srcset = null;
-            try { url = new URL(src); } catch (_) {}
+            let url = toURL(src), srcset = null;
 
             if (url && url.origin === CONFIG.images_url && !src.includes('original=true')) {
                 const urlWidth = Number(src.match(regexUrlWidth)?.[1] || 0);
@@ -3338,16 +3820,14 @@ class Controller {
                 });
 
                 srcset = srcSetParts.join(', ');
-                if (urlWidth !== baseWidth) {
-                    src = src.replace(regexUrlWidth, `width=${baseWidth}`);
-                    img.setAttribute('src', src);
-                }
+                if (urlWidth !== baseWidth) src = src.replace(regexUrlWidth, `width=${baseWidth}`);
             }
 
             if (cacheDescriptionImages.has(src)) {
                 const item = cacheDescriptionImages.get(src);
                 img.style.aspectRatio = item.ratio;
                 img.style.height = `${item.height}px`;
+                img.setAttribute('src', src);
                 if (srcset) img.setAttribute('srcset', srcset);
             } else {
                 const onload = e => {
@@ -3393,9 +3873,8 @@ class Controller {
                 img.addEventListener('load', onload, { once: true });
                 img.addEventListener('error', onload, { once: true });
 
-                if (srcset) img.setAttribute('data-srcset', srcset);
                 img.setAttribute('data-src', src);
-                img.removeAttribute('src');
+                if (srcset) img.setAttribute('data-srcset', srcset);
                 onTargetInViewport(img, () => {
                     const src = img.getAttribute('data-src');
                     const srcset = img.getAttribute('data-srcset');
@@ -3518,38 +3997,32 @@ class Controller {
         // Add _blank and noopener to all links
         description.querySelectorAll('a').forEach(a => {
             const href = a.getAttribute('href');
-            const rel = (a.rel || '').split(' ');
+            const rel = (a.getAttribute('rel') || '').split(' ');
             if (!rel.includes('noopener')) rel.push('noopener');
             a.setAttribute('rel', rel.join(' ').trim());
             a.setAttribute('target', '_blank');
             fixLinkSpacing(a);
-
+            
             // Add link preview and check url syntax
-            try {
-                const url = href.startsWith('/') ? new URL(href, CONFIG.civitai_url) : new URL(href);
-                if (url.origin === CONFIG.civitai_url) {
-                    if (href.startsWith('/')) a.setAttribute('href', url.toString());
-                    const { params } = this.parseCivUrl(url);
-                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && params.articleId)) setLinkPreview(a);
-                    else {
-                        // a.prepend(getIcon('civitai'));
-                        // a.classList.add('link-with-favicon');
-                    }
-                } else if (url.protocol !== 'https:') {
-                    a.classList.add('link-warning');
-                    if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
-                }
-            } catch (_) {
+            const url = href.startsWith('/') ? toURL(href, CONFIG.civitai_url) : toURL(href);
+            if (!url) {
                 a.classList.add('link-broken');
                 if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
+                return;
             }
-        });
 
-        // Remove bad styles (font family, font size)
-        description.querySelectorAll('span[style]').forEach(span => {
-            span.style.fontSize = '';
-            span.style.fontFamily = '';
-            span.style.fontWeight = '';
+            if (url.origin === CONFIG.civitai_url) {
+                if (href.startsWith('/')) a.setAttribute('href', url.toString());
+                const { params } = this.parseCivUrl(url);
+                if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) setLinkPreview(a);
+                else {
+                    // a.prepend(getIcon('civitai'));
+                    // a.classList.add('link-with-favicon');
+                }
+            } else if (url.protocol !== 'https:') {
+                a.classList.add('link-warning');
+                if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
+            }
         });
 
         // Remove underscores that are too large (they don't make sense if they're on multiple lines)
@@ -3625,6 +4098,8 @@ class Controller {
         });
 
         if (!SETTINGS.disablePromptFormatting) description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
+
+        description.normalize();
     }
 
     static #analyzePromptCode(codeElement) {
@@ -3745,7 +4220,7 @@ class Controller {
                 if (isURL(value)) {
                     const a = insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
                     const { params } = this.parseCivUrl(value);
-                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && params.articleId)) a.setAttribute('data-link-preview', '');
+                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) a.setAttribute('data-link-preview', '');
                 }
                 else insertElement('span', weightContainer, { class: 'link' }, value);
             } else if (type === 'bracket') {
@@ -3915,6 +4390,48 @@ class Controller {
             return best;
         }
 
+        function correctBackground(bgRGB, textRGB, targetLC, steps = 3) {
+            const baseLch = Color.convert(bgRGB, 'oklch');
+            const polarity = Math.sign(apca(textRGB, bgRGB));
+            if (!polarity) return null;
+
+            let best = bgRGB;
+            let bestLc = Math.abs(apca(textRGB, bgRGB));
+
+            let low = 0, high = 1;
+
+            for (let i = 0; i < steps; i++) {
+                const mid = (low + high) / 2;
+
+                const l = clamp01(
+                    polarity > 0
+                        ? baseLch.l + mid * (1 - baseLch.l)
+                        : baseLch.l - mid * baseLch.l
+                );
+
+                const lch = { ...baseLch, l, c: baseLch.c * 0.9 };
+
+                const rgb = Color.convert(lch, 'rgba');
+                if (!rgbValid(rgb)) {
+                    high = mid;
+                    continue;
+                }
+
+                const lc = Math.abs(apca(textRGB, rgb));
+
+                if (lc > bestLc) {
+                    bestLc = lc;
+                    best = rgb;
+                }
+
+                if (lc >= targetLC) return rgb;
+
+                low = mid;
+            }
+
+            return bestLc > Math.abs(apca(textRGB, bgRGB)) ? best : null;
+        }
+
 
         /* ---------- DOM ---------- */
 
@@ -3944,7 +4461,8 @@ class Controller {
 
             if (cache.has(colorKey)) {
                 const cached = cache.get(colorKey);
-                if (cached) span.style.color = cached;
+                if (cached?.fg) span.style.color = cached.fg;
+                if (cached?.bg) span.style.backgroundColor = cached.bg;
                 return;
             }
 
@@ -3967,9 +4485,16 @@ class Controller {
                 return;
             }
 
+            let correctedBg = null;
+            if (mBg && Math.abs(apca(corrected, finalBg)) < TARGET_LC_MIN) {
+                correctedBg = correctBackground(finalBg, corrected, targetLС);
+            }
+
             const css = `rgb(${corrected.r}, ${corrected.g}, ${corrected.b})`;
-            cache.set(colorKey, css);
+            const bgCss = correctedBg ? `rgb(${correctedBg.r}, ${correctedBg.g}, ${correctedBg.b})` : null;
+            cache.set(colorKey, { fg: css, bg: bgCss });
             span.style.color = css;
+            if (bgCss) span.style.backgroundColor = bgCss;
         });
     }
 
@@ -4000,7 +4525,7 @@ class Controller {
                 insertElement('i', titleContainer, undefined, 'Remix of ');
 
                 // Creator
-                titleContainer.appendChild(this.#genUserBlock({ username: media.username }));
+                titleContainer.appendChild(this.#genUserBlock({ userId: media.userId, username: media.username }));
 
                 // Stats
                 const stats = media.stats;
@@ -4511,15 +5036,17 @@ class Controller {
         return matched ? fragment : document.createTextNode(modelVersionName);
     }
 
-    static #genArticleCard(article, options) {
-        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false } = options ?? {};
-        const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+    // used only in link previews
+    static #genCollectionCard(collection, options) {
+        const { itemWidth, itemHeight, forceAutoplay = false } = options ?? {};
+
+        const card = createElement('a', { 'data-id': collection.id, href: `#images?collection=${collection.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': collection.name });
         let cardClassName = 'card model-card';
         
         // Image
-        const previewMedia = article.coverImage;
+        const previewMedia = collection.image;
         if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
+            const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
             if (!SETTINGS.autoplay) {
                 if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
                 cardClassName += ' image-hover-play';
@@ -4535,206 +5062,406 @@ class Controller {
         card.className = cardClassName;
         const cardContentWrap = insertElement('div', card, { class: 'card-content' });
         const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
-        const cardContentBottom = insertElement('div', cardContentWrap);
+        const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
 
-        // Article category
-        if (article.category) insertElement('div', cardContentTop, { class: 'badge model-type' }, article.category);
+        // Collection category
+        if (collection.mode) insertElement('div', cardContentTop, { class: 'badge model-type' }, collection.mode);
+        if (collection.type) {
+            const type = { Article: 'articles', Model: 'models', Image: 'images' }[collection.type] ?? collection.type;
+            const typeText = window.languagePack?.text?.[type] ?? type;
+            insertElement('div', cardContentTop, { class: 'badge model-type' }, typeText);
+        }
 
         // Creator
-        if (article.user) cardContentBottom.appendChild(this.#genUserBlock(article.user));
+        if (collection.user) cardContentBottom.appendChild(this.#genUserBlock(collection.user));
 
-        // publishedAt
-        const publishedAt = new Date(article.publishedAt);
-        insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+        // challengeDate
+        if (collection.metadata && collection.metadata.challengeDate && collection.metadata.endsAt) {
+            const challengeDate = new Date(collection.metadata.challengeDate);
+            const endsAt = new Date(collection.metadata.endsAt);
+            insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': `${challengeDate.toLocaleString()} — ${endsAt.toLocaleString()}` }, timeAgo(Math.round((Date.now() - challengeDate)/1000)));
+        }
 
-        // Article Name
-        insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
-
-        // Stats
-        const insertStats = (stats, parent) => {
-            stats.forEach(({ icon, value = 0, unit }) => {
-                const badge = document.createElement('div');
-                badge.textContent = value > 999 ? formatNumber(value) : value;
-                let className = 'article-stat';
-                if (!value) {
-                    badge.setAttribute('inert', '');
-                    className += ' badge-empty';
-                }
-                const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
-                if (unit) {
-                    const units = Array.isArray(unit) ? unit : window.languagePack?.units?.[unit];
-                    badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
-                } else badge.setAttribute('lilpipe-text', lilpipeValue);
-                badge.prepend(getIcon(icon));
-                badge.className = className;
-                parent.appendChild(badge);
-            });
-        };
-        const statsContainer = insertElement('div', cardContentBottom, { class: 'article-stats' });
-        const statsLeft = insertElement('div', statsContainer, { class: 'article-stats-left badge' });
-        const statsRight = insertElement('div', statsContainer, { class: 'article-stats-right badge' });
-
-        const stats = article.stats;
-        insertStats([
-            { icon: 'bookmark', value: stats.collectedCount, unit: 'bookmark' },
-            { icon: 'chat', value: stats.commentCount, unit: 'comment' },
-            { icon: 'thunder', value: stats.tippedAmountCount, unit: ["Buzz", "Buzz", "Buzz"] }
-        ], statsLeft);
-        insertStats([
-            { icon: 'eye', value: stats.viewCount, unit: 'view' }
-        ], statsRight);
+        // Collection Name
+        insertElement('div', cardContentBottom, { class: 'model-name' }, collection.name);
 
         return card;
     }
+
+    static #genArticleCardProgressive = [
+        { // base
+            weight: 1,
+            generator: (ctx) => {
+                const { data: article, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+
+                let cardClassName = 'card model-card';
+                const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+
+                if (article.coverImage) {
+                    const previewMedia = article.coverImage;
+                    const ratio = previewMedia.width / previewMedia.height;
+                    if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${previewMedia.hashColor || 'transparent'};` });
+
+                    if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
+                        if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
+                        cardClassName += ' image-hover-play';
+                    }
+                }
+                card.className = cardClassName;
+
+                ctx.card = card;
+
+                return { element: card };
+            }
+        },
+        { // blurhash
+            weight: 5,
+            generator: (ctx) => {
+                const { data: article, mediaContainer, forceAutoplay = false } = ctx;
+
+                if (article.coverImage) {
+                    const previewMedia = article.coverImage;
+                    if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
+
+                    // play button
+                    if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
+                        const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
+                        videoPlayButton.appendChild(getIcon('play'));
+                    }
+                } else {
+                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+                    const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
+                    noMedia.appendChild(getIcon('image'));
+                    insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
+                }
+            }
+        },
+        { // full
+            weight: 10,
+            generator: (ctx) => {
+                const { mediaContainer, card, data: article, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+
+                // card content
+                const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+                const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
+                const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
+
+                // Article category
+                if (article.category) insertElement('div', cardContentTop, { class: 'badge model-type' }, article.category);
+
+                // Creator
+                if (article.user) cardContentBottom.appendChild(this.#genUserBlock(article.user));
+
+                // publishedAt
+                const publishedAt = new Date(article.publishedAt);
+                insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+
+                // Article Name
+                insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
+
+                // Stats
+                const insertStats = (stats, parent) => {
+                    stats.forEach(({ icon, value = 0, unit }) => {
+                        const badge = document.createElement('div');
+                        badge.textContent = value > 999 ? formatNumber(value) : value;
+                        let className = 'article-stat';
+                        if (!value) {
+                            badge.setAttribute('inert', '');
+                            className += ' badge-empty';
+                        }
+                        const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
+                        if (unit) {
+                            const units = Array.isArray(unit) ? unit : window.languagePack?.units?.[unit];
+                            badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+                        } else badge.setAttribute('lilpipe-text', lilpipeValue);
+                        badge.prepend(getIcon(icon));
+                        badge.className = className;
+                        parent.appendChild(badge);
+                    });
+                };
+                const statsContainer = insertElement('div', cardContentBottom, { class: 'article-stats' });
+                const statsLeft = insertElement('div', statsContainer, { class: 'article-stats-left badge' });
+                const statsRight = insertElement('div', statsContainer, { class: 'article-stats-right badge' });
+
+                const stats = article.stats;
+                insertStats([
+                    { icon: 'bookmark', value: stats.collectedCount, unit: 'bookmark' },
+                    { icon: 'chat', value: stats.commentCount, unit: 'comment' },
+                    { icon: 'thunder', value: stats.tippedAmountCount, unit: ["Buzz", "Buzz", "Buzz"] }
+                ], statsLeft);
+                insertStats([
+                    { icon: 'eye', value: stats.viewCount, unit: 'view' }
+                ], statsRight);
+
+                // actual image
+                if (article.coverImage) {
+                    this.#insertMediaElement(mediaContainer, { media: article.coverImage, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
+                    mediaContainer.setAttribute('data-id', article.coverImage.id);
+                }
+            }
+        }
+    ];
+
+    static #genArticleCard(article, options) {
+        const ctx = { data: article, ...options };
+        this.#genArticleCardProgressive.forEach(step => step.generator(ctx));
+        return ctx.card;
+    }
+
+    static #genModelCardProgressive = [
+        { // base
+            weight: 1,
+            generator: (ctx) => {
+                const { data: model, itemWidth, itemHeight, version, forceAutoplay = false } = ctx;
+
+                const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
+
+                let cardClassName = 'card model-card';
+                const card = createElement('a', { 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
+
+                // Select image
+                const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                if (previewMedia) {
+                    ctx.previewMedia = previewMedia;
+                    const ratio = previewMedia.width / previewMedia.height;
+                    if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${previewMedia.hashColor || 'transparent'};` });
+                    if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
+                        if (previewMedia.type === 'video') cardClassName += ' video-hover-play';
+                        cardClassName += ' image-hover-play';
+                    }
+                } else if (modelVersion.images?.length) {
+                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background nsfw-blur-hash' });
+                    const closestNSFWLevel = Math.min(...modelVersion.images.map(m => m.nsfwLevel));
+                    const closestMedia = modelVersion.images.find(m => m.nsfwLevel === closestNSFWLevel);
+                    if (closestMedia?.hash) {
+                        ctx.closestMedia = closestMedia;
+                        cardBackgroundWrap.style.backgroundColor = Blurhash.toHex(closestMedia.hash);
+                        ctx.mediaContainer = cardBackgroundWrap;
+                    }
+                }
+
+                card.className = cardClassName;
+
+                ctx.card = card;
+                ctx.modelVersion = modelVersion;
+
+                return { element: card };
+            }
+        },
+        { // blurhash
+            weight: 5,
+            generator: (ctx) => {
+                const { data: model, mediaContainer, card, previewMedia, closestMedia, forceAutoplay = false } = ctx;
+
+                if (previewMedia) {
+                    if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
+
+                    // play button
+                    if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
+                        const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
+                        videoPlayButton.appendChild(getIcon('play'));
+                    }
+                } else if (closestMedia) {
+                    const noMedia = insertElement('div', mediaContainer, { class: 'media-element nsfw-filter' });
+                    const nsfwLabel = this.#convertNSFWLevelToString(closestMedia.nsfwLevel);
+                    insertElement('div', noMedia, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLabel }, nsfwLabel);
+                    this.#insertMediaBlurhash(mediaContainer, { media: closestMedia });
+                } else {
+                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+                    const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
+                    noMedia.appendChild(getIcon('image'));
+                    insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
+                }
+            }
+        },
+        { // full
+            weight: 10,
+            generator: (ctx) => {
+                const { mediaContainer, card, data: model, modelVersion, previewMedia, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+
+                // card content
+                const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+                const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top model-type-badges' });
+                const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
+
+                // Model Type
+                const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} · ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} · ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
+
+                // Availability
+                let availabilityBadge = null;
+                if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
+                else {
+                    if (model.modelUpdatedRecently === undefined) model.modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
+                    if (model.modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
+                }
+                if (availabilityBadge) {
+                    const badge = insertElement('div', cardContentTop, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+                    let date = null, modelName = null;
+                    if (modelVersion.availability === 'EarlyAccess' && modelVersion.earlyAccessDeadline) {
+                        date = new Date(modelVersion.earlyAccessDeadline);
+                        modelName = modelVersion.name;
+                    } else if (modelVersion.availability === 'Public' && model.modelUpdatedRecently) {
+                        date = new Date(model.modelUpdatedRecently.publishedAt ?? model.modelUpdatedRecently.createdAt);
+                        modelName = model.modelUpdatedRecently.name;
+                    }
+                    if (date) {
+                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><span class="dark-text">${escapeHtml(timeAgo(Math.round((Date.now() - date)/1000)))}</span>`;
+                        badge.setAttribute('lilpipe-text', lilpipeText);
+                    }
+                }
+
+                // Creator
+                if (model.creator) cardContentBottom.appendChild(this.#genUserBlock(model.creator));
+
+                // Model Name
+                insertElement('div', cardContentBottom, { class: 'model-name' }, model.name);
+
+                // Stats
+                const statsSource = SETTINGS.showCurrentModelVersionStats && modelVersion.stats ? modelVersion.stats : model.stats;
+                const statsContainer = this.#genStats([
+                    { icon: 'download', value: statsSource.downloadCount, unit: 'download' },
+                    { icon: 'like', value: statsSource.thumbsUpCount, unit: 'like' },
+                    { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
+                    // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
+                ]);
+                cardContentBottom.appendChild(statsContainer);
+
+                // actual image
+                if (previewMedia) {
+                    this.#insertMediaElement(mediaContainer, { media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
+                    mediaContainer.setAttribute('data-id', previewMedia.id);
+                }
+            }
+        }
+    ];
 
     static #genModelCard(model, options) {
         // Note: Adds a "modelUpdatedRecently" field to the model object
-        const { isVisible = false, firstDraw = false, itemWidth, itemHeight, timestump = null, forceAutoplay = false, version = null } = options ?? {};
-        const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
-        const card = createElement('a', { 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
-        let cardClassName = 'card model-card';
-        
-        // Image
-        const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-        if (previewMedia) {
-            const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
-            if (!SETTINGS.autoplay) {
-                if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
-                cardClassName += ' image-hover-play';
-            }
-            card.appendChild(mediaElement);
-        } else if (modelVersion.images?.length) {
-            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background nsfw-blur-hash' });
-            const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element nsfw-filter' });
-            const closestNSFWLevel = Math.min(...modelVersion.images.map(m => m.nsfwLevel));
-            const closestMedia = modelVersion.images.find(m => m.nsfwLevel === closestNSFWLevel);
-            const nsfwLabel = this.#convertNSFWLevelToString(closestMedia.nsfwLevel);
-            insertElement('div', noMedia, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLabel }, nsfwLabel);
-            if (closestMedia.hash) {
-                const ratio = closestMedia.width / closestMedia.height;
-                const blurSize = CONFIG.appearance.blurHashSize;
-                const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
-                const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
-                const blurUrl = `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(closestMedia.hash)}&width=${blurW}&height=${blurH}`;
-                cardBackgroundWrap.style.backgroundColor = Blurhash.toHex(closestMedia.hash);
-                cardBackgroundWrap.style.backgroundImage = `url(${blurUrl})`;
-            }
-        } else {
-            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
-            const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
-            noMedia.appendChild(getIcon('image'));
-            insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
-        }
-
-        card.className = cardClassName;
-        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
-        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top model-type-badges' });
-        const cardContentBottom = insertElement('div', cardContentWrap);
-
-        // Model Type
-        const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} · ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} · ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
-
-        // Availability
-        let availabilityBadge = null;
-        if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
-        else {
-            if (model.modelUpdatedRecently === undefined) model.modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
-            if (model.modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
-        }
-        if (availabilityBadge) {
-            const badge = insertElement('div', cardContentTop, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
-            if (modelVersion.availability === 'Public' && model.modelUpdatedRecently) {
-                const publishedAt = new Date(model.modelUpdatedRecently.publishedAt ?? model.modelUpdatedRecently.createdAt);
-                const lilpipeText = `<b>${escapeHtml(model.modelUpdatedRecently.name || '')}</b><br>${escapeHtml(timeAgo(Math.round((Date.now() - publishedAt)/1000)))}`;
-                badge.setAttribute('lilpipe-text', lilpipeText);
-            }
-        }
-
-        // Creator
-        if (model.creator) cardContentBottom.appendChild(this.#genUserBlock({ image: model.creator.image, username: model.creator.username }));
-
-        // Model Name
-        insertElement('div', cardContentBottom, { class: 'model-name' }, model.name);
-
-        // Stats
-        const statsSource = SETTINGS.showCurrentModelVersionStats ? modelVersion.stats : model.stats;
-        const statsContainer = this.#genStats([
-            { icon: 'download', value: statsSource.downloadCount, unit: 'download' },
-            { icon: 'like', value: statsSource.thumbsUpCount, unit: 'like' },
-            { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
-            // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
-        ]);
-        cardContentBottom.appendChild(statsContainer);
-
-        return card;
+        const ctx = { data: model, ...options };
+        this.#genModelCardProgressive.forEach(step => step.generator(ctx));
+        return ctx.card;
     }
 
+    static #genImageCardProgressive = [
+        { // base
+            weight: 1,
+            generator: (ctx) => {
+                const { data, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+
+                let image = data;
+                if (image instanceof Set) {
+                    ctx.postSize = image.size;
+                    image = image.values().next().value;
+                };
+
+                const ratio = image.width / image.height;
+                const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
+
+                let cardClassName = 'card image-card';
+                const card = createElement('a', { 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight || itemWidth / ratio}px;`, 'data-draggable-title': draggableTitle });
+
+                if (!image.hashColor && image.hash) {
+                    image.hashColor = Blurhash.toHex(image.hash);
+
+                    // The site doesn't provide blurhash for videos, it's always black
+                    if (image.hashColor === '#000000' && image.type === 'video') image.hashColor = 'transparent';
+                }
+                const mediaContainer = insertElement('div', card, { class: `card-background media-container media-${image.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${image.hashColor || 'transparent'};` });
+
+                if (!(forceAutoplay ?? SETTINGS.autoplay) && image.type === 'video') {
+                    if (image?.type === 'video') cardClassName += ' video-hover-play';
+                    cardClassName += ' image-hover-play';
+                }
+                card.className = cardClassName;
+
+                ctx.card = card;
+                ctx.mediaContainer = mediaContainer;
+                ctx.image = image;
+
+                return { element: card };
+            }
+        },
+        { // blurhash
+            weight: 5,
+            generator: (ctx) => {
+                const { image, mediaContainer, forceAutoplay = false } = ctx;
+
+                // blurhash
+                if (image.hash) this.#insertMediaBlurhash(mediaContainer, { media: image });
+
+                // play button
+                if (!(forceAutoplay ?? SETTINGS.autoplay) && image.type === 'video') {
+                    const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
+                    videoPlayButton.appendChild(getIcon('play'));
+                }
+            }
+        },
+        { // full
+            weight: 10,
+            generator: (ctx) => {
+                const { mediaContainer, card, image, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+
+                // card content
+                const cardContentWrap = insertElement('div', card, { class: 'card-content' });
+                const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
+
+                // user and createdAt
+                const creator = this.#genUserBlock({ userId: image.userId, username: image.username, group: image.usergroup ?? null });
+                if (image.createdAt) {
+                    const createdAt = new Date(image.createdAt);
+                    insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
+                }
+                cardContentTop.appendChild(creator);
+
+                // badges
+                const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
+                const nsfwLevel = typeof image.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(image.nsfwLevel) : image.nsfwLevel;
+                if (nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
+                if (ctx.postSize > 1) {
+                    const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, ctx.postSize > 99 ? '99+' : ctx.postSize);
+                    metaIconContainer.appendChild(getIcon('image'));
+                }
+                if (image.meta) {
+                    const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': escapeHtml(window.languagePack?.text?.hasMeta ?? 'Generation info') });
+                    metaIconContainer.appendChild(getIcon('information'));
+                }
+
+                // stats
+                const stats = image.stats ?? {};
+                const statsContainer = this.#genStats([
+                    { iconString: '👍', value: stats.likeCount, unit: 'like' },
+                    { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
+                    { iconString: '😭', value: stats.cryCount, unit: 'cry' },
+                    { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
+                    { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
+                    { iconString: '💬', value: stats.commentCount, unit: 'comment' },
+                ], true);
+                cardContentWrap.appendChild(statsContainer);
+
+                // actual image
+                this.#insertMediaElement(mediaContainer, { media: image, width: itemWidth, height: itemHeight, decoding: 'async', target: 'image-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
+                mediaContainer.setAttribute('data-id', image.id);
+            }
+        }
+    ];
+
     static #genImageCard(image, options) {
-        let postSize = 1;
-        if (image instanceof Set) {
-            postSize = image.size;
-            image = image.values().next().value;
-        };
-
-        const { isVisible = false, firstDraw = false, itemWidth, timestump = null, forceAutoplay = false } = options ?? {};
-        const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
-        const itemHeight = options.itemHeight ?? (itemWidth / (image.width/image.height));
-        const card = createElement('a', { 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': draggableTitle });
-        let cardClassName = 'card image-card';
-
-        // Image
-        const mediaElement = this.#genMediaElement({ media: image, className: 'card-background', width: itemWidth, target: 'image-card', decoding: 'async', defer: isVisible ? firstDraw ? -1 : 4 : 8, timestump, autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
-        if (!SETTINGS.autoplay) {
-            if (image?.type === 'video') cardClassName += ' video-hover-play';
-            cardClassName += ' image-hover-play';
-        }
-        card.appendChild(mediaElement);
-
-        card.className = cardClassName;
-        const cardContentWrap = insertElement('div', card, { class: 'card-content' });
-        const cardContentTop = insertElement('div', cardContentWrap, { class: 'card-content-top' });
-
-        // Creator and Created At
-        const creator = this.#genUserBlock({ username: image.username, group: image.usergroup ?? null });
-        if (image.createdAt) {
-            const createdAt = new Date(image.createdAt);
-            insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
-        }
-        cardContentTop.appendChild(creator);
-
-        // Badges (NSFW Level and Has Meta)
-        const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
-        const nsfwLevel = typeof image.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(image.nsfwLevel) : image.nsfwLevel;
-        if (nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
-        if (postSize > 1) {
-            const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, postSize);
-            metaIconContainer.appendChild(getIcon('image'));
-        }
-        if (image.meta) {
-            const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': escapeHtml(window.languagePack?.text?.hasMeta ?? 'Generation info') });
-            metaIconContainer.appendChild(getIcon('information'));
-        }
-
-        // Stats
-        const stats = image.stats;
-        const statsContainer = this.#genStats([
-            { iconString: '👍', value: stats.likeCount, unit: 'like' },
-            { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
-            { iconString: '😭', value: stats.cryCount, unit: 'cry' },
-            { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
-            { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
-            { icon: 'chat', value: stats.commentCount, unit: 'comment' },
-        ], true);
-        cardContentWrap.appendChild(statsContainer);
-
-        return card;
+        const ctx = { data: image, ...options };
+        this.#genImageCardProgressive.forEach(step => step.generator(ctx));
+        return ctx.card;
     }
 
     static #genUserBlock(userInfo) {
+        let className = 'user-info';
         const container = createElement('div', { class: 'user-info' });
 
-        if (userInfo.deletedAt) container.classList.add('user-deleted');
-        if (userInfo.isModerator) container.classList.add('user-moderator');
+        if (userInfo.deletedAt) className += ' user-deleted';
+        if (userInfo.isModerator) className += ' user-moderator';
+
+        if (userInfo.userId && CONFIG.userGroups[userInfo.userId]) className += ` user-${CONFIG.userGroups[userInfo.userId]}`;
+        container.className = className;
 
         const creatorImageSize = Math.round(48 * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
@@ -4759,7 +5486,7 @@ class Controller {
             else insertElement('div', container, { class: 'no-media' }, userInfo.username?.substring(0, 2) ?? 'NM');
         }
 
-        const usernameText = userInfo.url
+        const usernameText = userInfo.url && userInfo.url[0] === '#'
             ? insertElement('a', container, { href: userInfo.url }, userInfo.username)
             : insertElement('span', container, undefined, userInfo.username);
 
@@ -4795,12 +5522,6 @@ class Controller {
 
         if (options.loading === 'lazy') {
             onTargetInViewport(mediaContainer, () => this.#insertMediaElement(mediaContainer, options));
-        } else if (options.defer >= 0) {
-            this.#queueAddPipeline(
-                { delay: options.defer, prefix: options.timestump || 'src-load', runInFrame: true },
-                () => !this.appElement.contains(mediaContainer),
-                skip => skip ? null : this.#insertMediaElement(mediaContainer, options)
-            );
         } else {
             mediaElement = this.#insertMediaElement(mediaContainer, options);
         }
@@ -4809,16 +5530,20 @@ class Controller {
             if (!media.hashColor) media.hashColor = Blurhash.toHex(media.hash);
             mediaContainer.style.backgroundColor = media.hashColor;
 
-            if (!mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) {
-                const blurSize = CONFIG.appearance.blurHashSize;
-                const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
-                const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
-                const previewUrl = `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${blurW}&height=${blurH}`;
-                mediaContainer.style.backgroundImage = `url(${previewUrl})`;
-            }
+            if (!mediaElement || !mediaElement.complete || mediaElement.naturalWidth === 0) this.#insertMediaBlurhash(mediaContainer, { media });
         }
 
         return mediaContainer;
+    }
+
+    static #insertMediaBlurhash(mediaContainer, options) {
+        const { media } = options;
+        const blurSize = CONFIG.appearance.blurHashSize;
+        const ratio = media.width / media.height;
+        const blurW = ratio > 1 ? Math.round(blurSize * ratio) : blurSize;
+        const blurH = ratio > 1 ? blurSize : Math.round(blurSize / ratio);
+        const previewUrl = `${CONFIG.local_urls.blurHash}?hash=${encodeURIComponent(media.hash)}&width=${blurW}&height=${blurH}`;
+        mediaContainer.style.backgroundImage = `url(${previewUrl})`;
     }
 
     static #insertMediaElement(mediaContainer, options) {
@@ -5020,7 +5745,8 @@ class Controller {
         // });
     }
 
-    static #genArticlesListFilters(onAnyChange) {
+    static #genArticlesListFilters(onAnyChange, options = {}) {
+        const { period_articles = true } = options;
         const sortOptions = [ 'Most Bookmarks', 'Most Reactions', 'Most Comments', 'Most Collected', 'Newest', 'Recently Updated' ];
 
         const list = [
@@ -5030,12 +5756,12 @@ class Controller {
                 options: sortOptions,
                 labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
             },
-            { type: 'list',
+            period_articles ? { type: 'list',
                 key: 'period_articles',
                 label: window.languagePack?.text?.period ?? 'Pediod',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
-            },
+            } : null,
             { type: 'list',
                 key: 'nsfwLevel',
                 label: window.languagePack?.text?.nsfw ?? 'NSFW',
@@ -5053,7 +5779,7 @@ class Controller {
     }
 
     static #genImagesListFilters(onAnyChange, options = {}) {
-        const { baseModels_images = true, groupImagesByPost = true } = options;
+        const { baseModels_images = true, groupImagesByPost = true, period_images = true } = options;
         const modelsOptions = [ "All", ...this.#models.options ];
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
 
@@ -5093,12 +5819,12 @@ class Controller {
                 options: sortOptions,
                 labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
             },
-            { type: 'list',
+            period_images ? { type: 'list',
                 key: 'period_images',
                 label: window.languagePack?.text?.period ?? 'Pediod',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
-            },
+            } : null,
             { type: 'list',
                 key: 'nsfwLevel',
                 label: window.languagePack?.text?.nsfw ?? 'NSFW',
@@ -5115,14 +5841,15 @@ class Controller {
         return this.#genFilters(list, onAnyChange);
     }
 
-    static #genModelsListFilters(onAnyChange) {
+    static #genModelsListFilters(onAnyChange, options = {}) {
+        const { period = true, types = true, checkpointType = true, baseModels = true } = options;
         const modelsOptions = [ "All", ...this.#models.options ];
         const typeOptions = [ "All", ...this.#types.options];
         const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
 
         const list = [
-            { type: 'dropdown',
+            EXTENSION_INSTALLED ? null : { type: 'dropdown', // the main API (unlike the public one) does not return version statistics, so this parameter does not work
                 items: [
                     { type: 'boolean',
                         key: 'showCurrentModelVersionStats',
@@ -5130,7 +5857,7 @@ class Controller {
                     }
                 ]
             },
-            { type: 'list',
+            baseModels ? { type: 'list',
                 key: 'baseModels',
                 label: window.languagePack?.text?.model ?? 'Model',
                 options: modelsOptions,
@@ -5138,33 +5865,33 @@ class Controller {
                 tags: this.#models.tags,
                 setValue: newValue => SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All'
-            },
-            { type: 'list',
+            } : null,
+            types ? { type: 'list',
                 key: 'types',
                 label: window.languagePack?.text?.type ?? 'Type',
                 options: typeOptions,
                 labels: this.#listFilters.genLabels(typeOptions, 'typeOptions', this.#types.labels),
                 setValue: newValue => SETTINGS.types = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.types.length ? (SETTINGS.types.length > 1 ? SETTINGS.types : SETTINGS.types[0]) : 'All'
-            },
-            { type: 'list',
+            } : null,
+            checkpointType ? { type: 'list',
                 key: 'checkpointType',
                 label: window.languagePack?.text?.origin ?? 'Origin',
                 options: trainedOrMergedOptions,
                 labels: this.#listFilters.genLabels(trainedOrMergedOptions, 'checkpointTypeOptions')
-            },
+            } : null,
             { type: 'list',
                 key: 'sort',
                 label: window.languagePack?.text?.sort ?? 'Sort',
                 options: sortOptions,
                 labels: this.#listFilters.genLabels(sortOptions, 'sortOptions')
             },
-            { type: 'list',
+            period ? { type: 'list',
                 key: 'period',
                 label: window.languagePack?.text?.period ?? 'Pediod',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
-            },
+            } : null,
             { type: 'list',
                 key: 'nsfwLevel',
                 label: window.languagePack?.text?.nsfw ?? 'NSFW',
@@ -5286,21 +6013,63 @@ class Controller {
         const button = insertElement('button', parent, { class: 'list-filter list-filter-dropdown closed' });
         button.appendChild(getIcon('filter'));
         const container = insertElement('div', button, { class: 'list-filter-dropdown-container' });
-        let isClosed = true;
-        button.addEventListener('click', e => {
+        let isClosed = true, fromClick = false;
+
+        const open = () => {
+            if (!isClosed) return;
+            isClosed = false;
+            button.classList.remove('closed');
+
+            const offsetRight = button.offsetParent.offsetWidth - (button.offsetLeft + button.offsetWidth);
+            const width = container.offsetWidth;
+            const targetOffsetRight = offsetRight + button.offsetWidth / 2 - width / 2;
+            const windowWidth = window.innerWidth;
+            const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
+            const offsetX = aviableOffsetRight - targetOffsetRight;
+
+            container.style.top = `${button.offsetTop + button.offsetHeight + 8}px`;
+            container.style.right = `${aviableOffsetRight}px`;
+            container.style.setProperty('--offsetX', `${offsetX}px`);
+
+            button.focus({ preventScroll: true });
+        };
+
+        const close = () => {
+            if (isClosed) return;
+            isClosed = true;
+            fromClick = false;
+            button.classList.add('closed');
+        };
+
+        button.addEventListener('pointerdown', e => {
             if (e.target.closest('.list-filter-dropdown-container')) return;
-            isClosed = !isClosed;
-            button.classList.toggle('closed', isClosed);
-            if (!isClosed) {
-                const offsetRight = button.offsetParent.offsetWidth - (button.offsetLeft + button.offsetWidth);
-                const width = container.offsetWidth;
-                const targetOffsetRight = offsetRight + button.offsetWidth / 2 - width / 2;
-                const windowWidth = window.innerWidth;
-                const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
-                const offsetX = aviableOffsetRight - targetOffsetRight;
-                container.style.top = `${button.offsetTop + button.offsetHeight + 8}px`;
-                container.style.right = `${aviableOffsetRight}px`;
-                container.style.setProperty('--offsetX', `${offsetX}px`);
+            if (isClosed) fromClick = true;
+        });
+
+        button.addEventListener('click', e => {
+            if (fromClick) {
+                fromClick = false;
+                if (!isClosed) return;
+            }
+            if (e.target.closest('.list-filter-dropdown-container')) return;
+            isClosed ? open() : close();
+        });
+
+        button.addEventListener('focusin', () => {
+            open();
+        });
+
+        button.addEventListener('focusout', e => {
+            const relatedTarget = e.relatedTarget;
+            if (relatedTarget && button.contains(relatedTarget)) return;
+            close();
+        });
+
+        button.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                close();
+                button.focus({ preventScroll: true });
             }
         });
 
@@ -5567,81 +6336,6 @@ class Controller {
         }
     }
 
-    static #queueAddPipeline(optionsOrFn, ...fns) {
-        let options = {};
-        if (typeof optionsOrFn === "function") {
-            fns.unshift(optionsOrFn);
-        } else if (optionsOrFn && typeof optionsOrFn === "object") {
-            options = optionsOrFn;
-        }
-
-        if (!fns.length) return;
-
-        const pipeline = { fns };
-
-        // gen key
-        const key = `${options.prefix || ''}${options.frames ? `f${options.frames}` : `d${options.delay ?? 0}`}`;
-
-        let group = this.#groups.get(key);
-        if (!group) {
-            group = { list: [], timer: null, options };
-            this.#groups.set(key, group);
-            this.#scheduleGroup(group, key);
-        }
-
-        group.list.push(pipeline);
-    }
-
-    static #scheduleGroup(group, key) {
-        const { options } = group;
-
-        if (options.frames) {
-            let framesLeft = options.frames;
-            const frameLoop = () => {
-                if (--framesLeft <= 0) {
-                    this.#runGroup(group, key);
-                } else {
-                    group.timer = requestAnimationFrame(frameLoop);
-                }
-            };
-            group.timer = requestAnimationFrame(frameLoop);
-        } else {
-            const delay = options.delay ?? 0;
-            group.timer = setTimeout(() => {
-                if (options.runInFrame) requestAnimationFrame(() => this.#runGroup(group, key));
-                else this.#runGroup(group, key);
-            }, delay);
-        }
-    }
-
-    static #runGroup(group, key) {
-        const pipelines = group.list;
-        this.#groups.delete(key);
-
-        let results = new Array(pipelines.length).fill(undefined);
-        let step = 0;
-
-        while (true) {
-            let hasWork = false;
-
-            for (let i = 0; i < pipelines.length; i++) {
-                const fn = pipelines[i].fns[step];
-                if (fn) {
-                    hasWork = true;
-                    try {
-                        results[i] = fn(results[i]);
-                    } catch (e) {
-                        console.error("Pipeline error:", e);
-                        results[i] = undefined;
-                    }
-                }
-            }
-
-            if (!hasWork) break;
-            step++;
-        }
-    }
-
     static #setTitle(input) {
         const SEPARATOR = '•';
         const ESCAPED_SEP = '·';
@@ -5664,7 +6358,7 @@ class Controller {
         for (const item of this.#activeVirtualScroll) {
             const readResult = item.readScroll?.({ scrollTop }) ?? { scrollTop };
             scrollReadResults.push([item, readResult]);
-            this.#state[`scrollTopRelative-${item.id}`] = readResult?.scrollTopRelative ?? readResult;
+            this.#state[`scrollTopRelative-${item.id}`] = (readResult?.scrollTopRelative ?? readResult) || 0;
         }
 
         for (const [item, readResult] of scrollReadResults) {
@@ -5674,10 +6368,17 @@ class Controller {
 
     static onScrollFromNavigation(state = {}) {
         const scrollTop = state.scrollTop || 0;
-        this.#activeVirtualScroll.forEach(item => {
+
+        // The scroller may attempt to restore scrolling to its original target, taking into account possible window resizing
+        const scrollDeltaMax = this.#activeVirtualScroll.map(item => {
             const scrollTopRelative = state[`scrollTopRelative-${item.id}`] || 0;
-            item.onScroll({ scrollTop, scrollTopRelative });
-        });
+            const virtualScrollState = state[`virtualScrollState-${item.id}`] || {};
+            const scrollTopRelativeNew = item.onScroll({ scrollTop, scrollTopRelative, ...virtualScrollState });
+            const delta = scrollTopRelativeNew - scrollTopRelative;
+            return Math.abs(delta) > 10 ? delta : 0;
+        }).sort((a, b) => a - b)[0];
+
+        document.documentElement.scrollTo({ top: scrollTop + scrollDeltaMax, behavior: 'instant' });
     }
 
     static onResize() {
@@ -5698,7 +6399,15 @@ class Controller {
     }
 
     static get state() {
-        return {...this.#state};
+        const stateCopy = {...this.#state};
+        // Get the state of all virtual scrolls
+        for (const item of this.#activeVirtualScroll) {
+            const virtualScrollState = item.virtualScroll.state || {};
+            this.#state[`virtualScrollState-${item.id}`] = virtualScrollState;
+            stateCopy[`virtualScrollState-${item.id}`] = {...virtualScrollState};
+        }
+
+        return stateCopy;
     }
 }
 
@@ -5792,8 +6501,9 @@ function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
 
         try {
             sw.postMessage(message, [channel.port2]);
-        } catch (err) {
-            resolve({ ok: false, error: err });
+        } catch (error) {
+            console.error(error);
+            resolve({ ok: false, error });
         }
     });
 }
@@ -5847,7 +6557,7 @@ function getIcon(name, original = false) {
  * - AND is implicit between blocks
  * - Only '|' is allowed inside a block
  */
-function filterItems(items, rules) {
+function filterItems(items, rules, options = { results: false }) {
     if (!Array.isArray(items) || items.length === 0) return [];
     if (!Array.isArray(rules) || rules.length === 0) return items;
 
@@ -5901,7 +6611,10 @@ function filterItems(items, rules) {
         };
     }).filter(Boolean);
 
-    return items.filter(item => {
+    const requireAll = options.results ?? false;
+    const result = [];
+    for(const item of items) {
+        let failedRule = null;
         const isFilteredOut = compiledRules.some(rule => {
             if (!rule.shouldApply(item)) return false;
 
@@ -5909,11 +6622,21 @@ function filterItems(items, rules) {
             const tags = Array.isArray(rawTags) ? rawTags : rawTags != null ? [rawTags] : [];
 
             // OR between condition strings
-            return rule.conditionMatchers.some(match => match(tags));
+            for (let i = 0; i < rule.conditionMatchers.length; i++) {
+                if (rule.conditionMatchers[i](tags)) {
+                    if (requireAll) failedRule = { index: rule.index, key: rule.key, conditionIndex: i };
+                    return true;
+                }
+            }
+            return false;
         });
 
-        return !isFilteredOut;
-    });
+        if (requireAll) {
+            result.push({ item, ok: !isFilteredOut, rule: isFilteredOut ? failedRule : null });
+        } else if (!isFilteredOut) result.push(item);
+    }
+
+    return result;
 }
 
 
@@ -6012,7 +6735,7 @@ function tryClearCache() {
             localStorage.setItem(key, new Date(Date.now() + 5 * 60 * 1000).toISOString());
             clearCache('old');
         }
-    } catch(_) {
+    } catch (_) {
         console.error(_);
     }
 }
@@ -6027,7 +6750,7 @@ function gotoLocalLink(hash) {
 }
 
 function onBodyClick(e) {
-    if (e.altKey) {
+    if (e.altKey || SETTINGS.civitaiLinksAltClickByDefault) {
         const href = e.target.closest('a[href]')?.getAttribute('href');
         if (href) {
             const { localUrl } = Controller.parseCivUrl(href);
@@ -6183,11 +6906,8 @@ function languageToggleClick(e) {
 
 const pendingMedia = new Set();
 let batchTimer = null;
-function markMediaAsLoadedWhenReady(el) {
+function markMediaAsLoadedWhenReady(el, isOk = true) {
     if (!el.parentElement?.classList.contains('loading')) return;
-
-    const tag = el.tagName;
-    if (tag !== 'IMG' && tag !== 'VIDEO') return;
 
     pendingMedia.add(el);
 
@@ -6206,9 +6926,12 @@ function markMediaAsLoadedWhenReady(el) {
 
         // videos
         for (const media of instantMedia) {
+            media.parentElement.classList.toggle('error', !isOk);
             media.parentElement.classList.remove('loading');
-            // media.parentElement.style.backgroundColor = '';
-            media.parentElement.style.backgroundImage = '';
+            if (isOk) {
+                // media.parentElement.style.backgroundColor = '';
+                media.parentElement.style.backgroundImage = '';
+            }
         }
 
         // images (Waiting to eliminate possible flickering)
@@ -6217,8 +6940,11 @@ function markMediaAsLoadedWhenReady(el) {
                 requestAnimationFrame(() => {
                     readyImages.filter(img => document.body.contains(img)).forEach(img => {
                         img.parentElement.classList.remove('loading');
-                        // img.parentElement.style.backgroundColor = '';
-                        img.parentElement.style.backgroundImage = '';
+                        img.parentElement.classList.toggle('error', !isOk);
+                        if (isOk) {
+                            // img.parentElement.style.backgroundColor = '';
+                            img.parentElement.style.backgroundImage = '';
+                        }
                     });
                 });
             }, 180);
@@ -6226,7 +6952,9 @@ function markMediaAsLoadedWhenReady(el) {
     });
 }
 function onMediaElementLoaded(e) {
-    markMediaAsLoadedWhenReady(e.target);
+    const tag = e.target.tagName;
+    if (tag !== 'IMG' && tag !== 'VIDEO') return;
+    markMediaAsLoadedWhenReady(e.target, e.type !== 'error');
 }
 
 let isPageScrolled = false;
@@ -6342,7 +7070,7 @@ function onDragstart(e) {
                 insertElement('b', urlElement, undefined, url.host);
                 insertElement('span', urlElement, { class: 'darker-text' }, `${url.pathname + url.search}`);
             }
-        } catch(_) {
+        } catch (_) {
             urlElement.textContent = href;
         }
 
@@ -6468,7 +7196,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
 
     return new Promise(resolve => {
         const canplayEventName = +timestump > 0 ? 'seeked' : 'canplay';
-        const play = () => {
+        const play = e => {
             video.removeEventListener(canplayEventName, play);
             video.removeEventListener('error', play);
             if (!mediaContainer.hasAttribute(attrCheck)) {
@@ -6477,6 +7205,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
                 return;
             }
 
+            mediaContainer.classList.toggle('error', e.type === 'error');
             const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
             mediaElement.replaceWith(video);
             resolve();
@@ -6826,6 +7555,7 @@ function init() {
     document.body.addEventListener('pointerover', onBodyPointerOver, { passive: true });
     document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('canplay', onMediaElementLoaded, { capture: true, passive: true });
+    document.body.addEventListener('error', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('dragover', onDragover);
     document.body.addEventListener('drop', onDrop);
     document.body.addEventListener('dragenter', onDragenter);

@@ -2,7 +2,7 @@
     const CIVITAI_ORIGIN = "https://civitai.com";
 
     let isBridgeReady = false;
-    window.extension_civitaiExtensionProxyAPI_vertsion = 1;
+    window.extension_civitaiExtensionProxyAPI_vertsion = 2;
 
     // Create an invisible iframe
     const iframe = document.createElement('iframe');
@@ -36,7 +36,7 @@
     });
 
     const startTime = Date.now();
-    const TIMEOUT = 4000;
+    const TIMEOUT = 10000; // 10 sec
     const sleep = ms => new Promise(res => setTimeout(res, ms));
 
     // Proxy function
