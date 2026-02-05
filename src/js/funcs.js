@@ -527,6 +527,7 @@ class MasonryLayout {
     #onKeydown;
 
     #onElementRemove;
+    #getResizedOptions;
 
     windowHeight = 0;
     windowWidth = 0;
@@ -548,6 +549,7 @@ class MasonryLayout {
             stopThreshold: options.stopThreshold ?? 0.1,
             cooldownTime: options.cooldownTime ?? 200,
         };
+        this.#getResizedOptions = options.getResizedOptions;
         this.#onElementRemove = options.onElementRemove;
 
         if (options.progressiveGenerator) {
@@ -574,7 +576,8 @@ class MasonryLayout {
     }
 
     // if "passive: true" - do not trigger style recalculations (do not scroll the page, do not stop animations if any)
-    resize({ animate = false, passive = false } = {}) {
+    resize({ animate = false, passive = false, allowElementsReuse = true } = {}) {
+        if (!allowElementsReuse) animate = false;
         const options = this.#options;
         this.#columns = [];
         const columnsCount = Math.floor((this.windowWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
@@ -619,10 +622,9 @@ class MasonryLayout {
             const lastFocusedItem = this.#itemsById.get(this.#focusedItem);
             lastFocusedItem?.element?.setAttribute('tabIndex', -1);
             this.#items = [];
-            this.#layers = [];
             this.#inViewport = new Set();
             this.#itemsById = new Map();
-            this.#allowUseElementFromAddItems = true;
+            this.#allowUseElementFromAddItems = Boolean(allowElementsReuse);
             this.#focusedItem = null;
             this.addItems(items, true);
             this.#allowUseElementFromAddItems = false;
@@ -647,15 +649,18 @@ class MasonryLayout {
             items.forEach(item => {
                 if (!item.inDOM) return;
                 const gridItem = this.#itemsById.get(item.id);
+                if (!gridItem.element && item.element) {
+                    this.#onElementRemove?.(item.element, item.data);
+                    item.element.remove();
+                    delete item.element;
+                }
                 if (this.#inViewport.has(gridItem)) {
                     if (!passive) gridItem.element.getAnimations().forEach(a => a.cancel());
-                } else if (gridItem.element) {
-                    gridItem.element.remove();
-                    this.#onElementRemove?.(gridItem.element, gridItem.data);
-                    delete gridItem.element;
+                } else {
+                    if (gridItem.element) this.#hideItem(gridItem);
+                    else this.#queueRemove(gridItem); // If the element was visible on the previous screen, it could remain in the rendering queue
                 }
             });
-
         }
 
         this.#container.style.width = `${this.containerWidth}px`;
@@ -699,6 +704,11 @@ class MasonryLayout {
     addItems(items, dryAdd = false) {
         const options = this.#options;
         const itemsToUpdate = new Map();
+
+        const cardHeightMin = options.itemWidth * .6;
+        const cardHeightMax = this.windowHeight * .8;
+        const cardHeightClamp = cardHeight => Math.max(Math.min(cardHeight, cardHeightMax), cardHeightMin);
+
         items.forEach(item => {
             if (this.#itemsById.has(item.id)) {
                 if (!itemsToUpdate.has(item.id)) itemsToUpdate.set(item.id, item);
@@ -706,7 +716,7 @@ class MasonryLayout {
             }
 
             const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
-            const cardHeight = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
+            const cardHeight = cardHeightClamp(options.itemHeight ?? (options.itemWidth / item.aspectRatio));
 
             const gridItem = {
                 id: item.id,
@@ -724,7 +734,13 @@ class MasonryLayout {
 
             gridItem.layer = this.#addToLayer(gridItem);
 
-            if (this.#allowUseElementFromAddItems && item.element) gridItem.element = item.element;
+            if (this.#allowUseElementFromAddItems && item.element) {
+                gridItem.element = item.element;
+                if (item.stepIndex !== undefined && item.stepIndex < this.#queueGenerators.length) {
+                    gridItem.stepIndex = item.stepIndex;
+                    gridItem.renderCtx = item.renderCtx;
+                }
+            }
 
             targetColumn.height += cardHeight + options.gap;
 
@@ -791,6 +807,7 @@ class MasonryLayout {
             document.removeEventListener('resize', this.#onResize);
         }
         this.#container.removeEventListener('keydown', this.#onKeydown);
+        this.#queueClear();
         this.#items.forEach(item => {
             if (!item.element) return;
             item.inDOM = false;    
@@ -911,7 +928,6 @@ class MasonryLayout {
         const options = this.#options;
 
         const layerIndex = Math.floor(item.boundTop / (options.layerHeight ?? 1500));
-        const layerTopAnchor = layerIndex * (options.layerHeight ?? 1500);
 
         let layer = this.#layers[layerIndex];
         if (!layer) {
@@ -933,7 +949,7 @@ class MasonryLayout {
             layer.boundTop = item.boundTop;
             layer.items.forEach(item => {
                 if (!item.element) return;
-                item.element.style.top = `${item.boundTop - layer.boundTop}px`; // Change the offset of the card relative to the layer
+                item.element.style.top = `${this.#round(item.boundTop - layer.boundTop)}px`; // Change the offset of the card relative to the layer
             });
             changed = true;
         }
@@ -946,9 +962,9 @@ class MasonryLayout {
             layer.boundHeight = layer.boundBottom - layer.boundTop;
 
             if (layer.element) {
-                layer.element.style.top = `${layer.boundTop}px`;
-                layer.element.style.height = `${layer.boundHeight}px`;
-                layer.element.style.containIntrinsicSize = `${this.containerWidth}px ${layer.boundHeight}px`;
+                layer.element.style.top = `${this.#round(layer.boundTop)}px`;
+                layer.element.style.height = `${this.#round(layer.boundHeight)}px`;
+                layer.element.style.containIntrinsicSize = `${this.containerWidth}px ${this.#round(layer.boundHeight)}px`;
             }
         }
 
@@ -965,14 +981,14 @@ class MasonryLayout {
         }
 
         item.element.style.left = `${item.boundLeft}px`;
-        item.element.style.top = `${item.boundTop - item.layer.boundTop}px`;
+        item.element.style.top = `${this.#round(item.boundTop - item.layer.boundTop)}px`;
 
         if (!item.inDOM) {
             item.layer.visibleCount++;
 
             if (!item.layer.element) {
                 const layer = item.layer;
-                layer.element = createElement('div', { class: 'cards-layer', style: `top: ${layer.boundTop}px; width: ${this.containerWidth}px; height: ${layer.boundHeight}px; contain-intrinsic-size: ${this.containerWidth}px ${layer.boundHeight}px;` });
+                layer.element = createElement('div', { class: 'cards-layer', style: `top: ${this.#round(layer.boundTop)}px; width: ${this.containerWidth}px; height: ${this.#round(layer.boundHeight)}px; contain-intrinsic-size: ${this.containerWidth}px ${this.#round(layer.boundHeight)}px;` });
             }
 
             item.layer.element.appendChild(item.element);
@@ -996,8 +1012,9 @@ class MasonryLayout {
             delete item.element;
         }
 
-        item.inDOM = false;
         this.#inViewport.delete(item);
+        if (!item.inDOM) return;
+        item.inDOM = false;
 
         item.layer.visibleCount--;
         if (item.layer.visibleCount <= 0) {
@@ -1026,6 +1043,15 @@ class MasonryLayout {
     #handleReadResize(e = {}) {
         this.windowHeight = window.innerHeight;
         this.windowWidth = window.innerWidth;
+        e.optionsChanged = false;
+
+        const resizedOptions = this.#getResizedOptions?.() ?? {};
+        ['itemWidth', 'itemHeight', 'gap'].forEach(k => {
+            if (!resizedOptions[k] || resizedOptions[k] === this.#options[k]) return;
+            this.#options[k] = resizedOptions[k];
+            e.optionsChanged = true;
+        });
+
         return e;
     }
 
@@ -1078,6 +1104,7 @@ class MasonryLayout {
 
         if (forceSync) {
             while (item.stepIndex < this.#queueGenerators.length) this.#executeStep(item);
+            this.#queueRemove(item); // Clear ctx and remove from queue
             return;
         }
 
@@ -1090,6 +1117,7 @@ class MasonryLayout {
     #queueRemove(item) {
         this.#queueList.delete(item.id);
         delete item.stepIndex;
+        delete item.renderDelay;
         delete item.renderCtx;
     }
     #queueSort() {
@@ -1138,7 +1166,7 @@ class MasonryLayout {
         }
 
         const startTime = performance.now();
-        const FRAME_BUDGET = 4; // 4 ms
+        const FRAME_BUDGET = 2; // 4 ms
         const MAX_WEIGHT_PER_FRAME = 100;
 
         // If the scrolling is too fast -> lower the maximum weight
@@ -1155,7 +1183,11 @@ class MasonryLayout {
             }
 
             const step = this.#queueGenerators[item.stepIndex];
-            
+            if (!step) {
+                this.#queueRemove(item);
+                continue;
+            }
+
             if (step.weight > weightLimit) continue;
 
             if (item.renderDelay > 0) {
@@ -1186,7 +1218,6 @@ class MasonryLayout {
     #lastScrollTime = performance.now();
     #scrollDirection = 1; // 1 down, -1 up
     #scrollSpeed = 0;
-    #overscanCooldown = 0; // timer before overscan collapse
     #currentOverscan = 0; // smooth overscan that we will use
     #handleScroll(e) {
         const firstDraw = e?.firstDraw || !this.#inViewport.size; // Mark this as the first rendering (the generator can render everything at once, without delays)
@@ -1214,7 +1245,7 @@ class MasonryLayout {
         // Calculation of instantaneous speed (px/ms)
         // Add a small filter (EMA) to avoid micro-jerks in the mouse delta
         const instantSpeed = dt > 0 ? Math.abs(delta) / dt : 0;
-        this.#scrollSpeed = this.#scrollSpeed * .6 + instantSpeed * .4;
+        this.#scrollSpeed = this.#scrollSpeed * .5 + instantSpeed * .5;
 
         if (delta > 0) this.#scrollDirection = 1;
         else if (delta < 0) this.#scrollDirection = -1;
@@ -1232,25 +1263,17 @@ class MasonryLayout {
         const lookAheadTime = options.lookAheadTime ?? 300;
         const dynamicBenefit = this.#scrollSpeed * lookAheadTime;
 
-        // We limit it from above so as not to inflate the DOM to infinity (e.g. maximum 4 screens)
+        // We limit it from above so as not to inflate the DOM to infinity (e.g. maximum 3 screens)
         const maxDynamic = vh * (options.maxOverscanScreens ?? 3);
         const targetOverscan = basePadding + Math.min(dynamicBenefit, maxDynamic);
-
-        // --- Hysteresis (collapse) ---
-        const stopThreshold = .1; // px/ms
-        const cooldownTime = 500;
-        if (this.#scrollSpeed > stopThreshold) this.#overscanCooldown = 0;
-        else if (this.#overscanCooldown === 0) this.#overscanCooldown = now + cooldownTime;
-        let finalTarget = targetOverscan;
-        if (this.#overscanCooldown && now > this.#overscanCooldown) finalTarget = basePadding; // Collapse to the base
 
         // --- Smoothing ---
         // Use different coefficients for expansion and contraction
         // Expanding should be INSTANTLY (0.8), contracting slowly (0.05)
-        const isExpanding = finalTarget > (this.#currentOverscan || 0);
-        const smooth = isExpanding ? .8 : .05;
+        const isExpanding = targetOverscan > (this.#currentOverscan || 0);
+        const smooth = isExpanding ? .9 : .1;
 
-        this.#currentOverscan = this.#lerp(this.#currentOverscan || basePadding, finalTarget, smooth);
+        this.#currentOverscan = this.#lerp(this.#currentOverscan || basePadding, targetOverscan, smooth);
 
         // --- borders ---
         const leadFactor = .2; // 20% more "forward" than "backward" from current currentOverscan
@@ -1262,8 +1285,6 @@ class MasonryLayout {
         const screenTop = currentScrollTop;
         const screenBottom = currentScrollTop + vh;
 
-        let hasChanges = false;
-
         const newStartIndex = this.#findStartIndex(overscanTop);
         const newEndIndex = this.#findEndIndex(overscanBottom, newStartIndex);
 
@@ -1271,7 +1292,6 @@ class MasonryLayout {
         for (const item of this.#inViewport) {
             if (item.index < newStartIndex || item.index > newEndIndex) {
                 this.#hideItem(item);
-                hasChanges = true;
             }
         }
 
@@ -1282,7 +1302,6 @@ class MasonryLayout {
             if (!item.inDOM) {
                 const forceSync = firstDraw && item.boundTop < screenBottom && item.boundBottom > screenTop;
                 this.#drawItem(item, forceSync);
-                hasChanges = true;
             }
         }
 
@@ -1326,11 +1345,16 @@ class MasonryLayout {
         const options = this.#options;
         if (!e) this.#handleReadResize();
         const columnsCount = Math.floor((this.windowWidth - options.gap) / (options.itemWidth + options.gap)) || 1;
-        if (columnsCount !== this.#columns.length) this.resize({ animate: true });
+        if (columnsCount !== this.#columns.length || e.optionsChanged) this.resize({ animate: true, allowElementsReuse: Boolean(!e.optionsChanged) });
     }
 
     #lerp(a, b, t) {
         return a + (b - a) * t;
+    }
+
+    // 10000 - 10**4 - precision 4
+    #round(v) {
+        return Math.round(v * 10000) / 10000;
     }
 
     get id() {

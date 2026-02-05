@@ -1,8 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 29,
-    extensionVertsion: 2,
+    version: 30,
+    extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.com',
@@ -173,7 +173,7 @@ Object.entries(tryParseLocalStorageJSON('civitai-lite-viewer--settings')?.settin
 
 // Check extension version
 if (EXTENSION_INSTALLED) {
-    if (CONFIG.extensionVertsion < window.extension_civitaiExtensionProxyAPI_vertsion) {
+    if (CONFIG.extensionVertsion > window.extension_civitaiExtensionProxyAPI_vertsion) {
         document.addEventListener('DOMContentLoaded', () => {
             notify('Outdated version of the extension', 'warning');
         }, { once: true });
@@ -845,19 +845,45 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         };
     }
 
+    async fetchPostInfo(id) {
+        const input = {
+            json: {
+                // authed: true,
+                id: Number(id)
+            }
+        };
+
+        const post = (await this.#getJSON({ route: 'post.get', params: { input }, target: `post (id: ${id})` })).json;
+
+        return {
+            id: post.id,
+            availability: post.availability,
+            title: post.title,
+            user: this.#prepareUserBlock(post.user),
+            description: post.detail,
+            category: post.tags?.find(t => t.isCategory)?.name || 'misc',
+            publishedAt: post.publishedAt,
+            nsfwLevel: post.nsfwLevel,
+            collectionId: post.collectionId,
+            tags: post.tags?.map(t => t.name) ?? [],
+            tagIds: post.tags?.map(t => t.id) ?? [],
+        };
+    }
+
     // model.getCollectionShowcase -> {"json":{"id":MODEL_ID,"authed":true}}
+    // post.getResources -> {"json":{"id":POST_ID,"authed":true}}
 }
 
-// TODO: Normalize the management of the history, I don't like that inside #genImageFullPage the history are touched...
 // TODO: Prerender pages when pointerdown, and show on click
 class Controller {
     static api = EXTENSION_INSTALLED ? new CivitaiExtensionProxyAPI(CONFIG.api_url) : new CivitaiPublicAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
-    static #devicePixelRatio = +window.devicePixelRatio.toFixed(2);
+    static #devicePixelRatio = window.devicePixelRatio;
     static #errorTimer = null;
     static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
     static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
     static #activeVirtualScroll = [];
+    static #page = null;
     static #state = {};
 
     static windowWidth = 0;
@@ -867,12 +893,13 @@ class Controller {
     static #cachedUserImages = new Map(); // try to reuse user profile images
 
     static #cache = {
-        images: new Map(),          // dummy cache for transferring information about images from the list to fullscreen mode
-        posts: new Map(),           // dummy cache for transferring information about posts from the list to fullscreen mode
-        models: new Map(),          // Cache for quickly obtaining information about models
-        articles: new Map(),        // Cache for quickly obtaining information about articles
-        collections: new Map(),     // Cache for quickly obtaining information about collections (items)
-        modelVersions: new Map(),   // Cache for quickly obtaining information about model versions
+        images: new Map(),          // images
+        posts: new Map(),           // posts (in Set)
+        postsInfo: new Map(),       // posts info
+        models: new Map(),          // models
+        articles: new Map(),        // articles
+        collections: new Map(),     // collections
+        modelVersions: new Map(),   // model versions
         history: new Map()          // History cache (for fast back and forth)
     };
     static #models = {
@@ -1228,6 +1255,8 @@ class Controller {
 
                 if (params.image) return this.gotoImage(params.image, params.nsfw);
 
+                if (EXTENSION_INSTALLED && params.post) return this.gotoPost(params.post);
+
                 if (
                     params.model ||
                     params.modelversion ||
@@ -1254,6 +1283,13 @@ class Controller {
                     return {
                         key: params.collection,
                         promise: this.api.fetchCollectionInfo(params.collection)
+                    };
+                }
+
+                if (EXTENSION_INSTALLED && params.post && !this.#cache.postsInfo.has(`${params.post}`)) {
+                    return {
+                        key: params.post,
+                        promise: this.api.fetchPostInfo(params.post)
                     };
                 }
 
@@ -1325,7 +1361,10 @@ class Controller {
         // Do nothing if the transition was processed somewhere else
         if (this.#state.id && this.#state.id === savedState?.id) return;
 
-        const [ pageId, paramString ] = page?.split('?') ?? [];
+        if (!page || page[0] !== '#') page = '#home';
+        this.#page = page;
+
+        const [ pageId, paramString ] = page.split('?') ?? [];
         this.#setTitle();
 
         // Clear cache records created after the current new transition
@@ -1343,7 +1382,7 @@ class Controller {
         this.#clearVirtualScroll();
         this.#cachedUserImages = new Map(); // Clear the avatar pool during navigation (it is only needed when scrolling through the list of models)
         this.#pageNavigation = Date.now();
-        this.#devicePixelRatio = +window.devicePixelRatio.toFixed(2);
+        this.#devicePixelRatio = Math.round(window.devicePixelRatio * 100) / 100;
 
         this.appElement.querySelectorAll('video').forEach(el => el.pause());
         this.appElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
@@ -1363,6 +1402,14 @@ class Controller {
             if (result.element) {
                 this.appElement.textContent = '';
                 this.appElement.appendChild(result.element);
+
+                const header = document.getElementsByTagName('header')[0];
+                if (result.headerFormat === 'mini') header?.setAttribute('data-format', 'mini');
+                else header?.removeAttribute('data-format');
+
+                const footer = document.getElementsByTagName('footer')[0];
+                if (result.footerBehavior === 'static') footer?.setAttribute('data-behavior', 'static');
+                else footer?.removeAttribute('data-behavior');
             }
             if (result.title !== undefined) this.#setTitle(result.title);
 
@@ -1370,6 +1417,7 @@ class Controller {
 
             hideTimeError();
             cleanupDetachedObservers();
+
             document.getElementById('page-loading-bar')?.remove();
             this.appElement.classList.remove('page-loading');
             this.onScrollFromNavigation(navigationState);
@@ -1848,8 +1896,12 @@ class Controller {
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
-            generator: this.#genArticleCard.bind(this),
             progressiveGenerator: this.#genArticleCardProgressive,
+            getResizedOptions: () => ({
+                gap: CONFIG.appearance.modelCard.gap,
+                itemWidth: CONFIG.appearance.modelCard.width,
+                itemHeight: CONFIG.appearance.modelCard.height
+            }),
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
@@ -2116,8 +2168,9 @@ class Controller {
         if (cachedMedia) {
             this.#log('Loaded image info (cache)', cachedMedia);
             if (!this.#cache.images.has(`${imageId}`)) this.#cache.images.set(`${imageId}`, cachedMedia);
-            appContent.appendChild(this.#genImageFullPage(cachedMedia));
-            return { element: appContent };
+            const { element: imageFullPage, title } = this.#genImageFullPage(cachedMedia);
+            appContent.appendChild(imageFullPage);
+            return { element: appContent, title, headerFormat: 'mini', footerBehavior: 'static' };
         }
 
         const pageNavigation = this.#pageNavigation;
@@ -2128,8 +2181,9 @@ class Controller {
             this.#cache.images.set(`${imageId}`, media);
             if (!media) throw new Error('No Meta');
 
-            appContent.appendChild(this.#genImageFullPage(media));
-            return { element: appContent };
+            const { element: imageFullPage, title } = this.#genImageFullPage(media);
+            appContent.appendChild(imageFullPage);
+            return { element: appContent, title, headerFormat: 'mini', footerBehavior: 'static' };
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             console.error('Error:', error?.message ?? error);
@@ -2231,6 +2285,81 @@ class Controller {
             if (pageNavigation !== this.#pageNavigation) return;
             this.#log('Loaded collection:', data);
             const result = insertCollectionPage(data);
+            if (result.promise) return result.promise;
+            return result;
+        }).catch(error => {
+            if (pageNavigation !== this.#pageNavigation) return;
+            return this.#gotoError(error);
+        });
+
+        return { promise };
+    }
+
+    static gotoPost(id) {
+        const pageNavigation = this.#pageNavigation;
+        const navigationState = {...this.#state};
+
+        const insertPostPage = post => {
+            const title = [post.title];
+
+            const cache = this.#cache.history.get(navigationState.id) ?? {};
+            if (!cache.descriptionImages) cache.descriptionImages = new Map();
+
+            // to select the background color when correcting colors
+            const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            const fragment = new DocumentFragment();
+            const appContent = insertElement('div', fragment, { class: 'app-content app-content-small post-page' });
+            const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
+
+            // Title
+            if (post.title) insertElement('h1', appContent, { class: 'model-name' }, post.title);
+
+            // Creator
+            if (post.user) {
+                const userBLock = this.#genUserBlock(post.user);
+                if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
+                appContent.appendChild(userBLock);
+            }
+
+            // Description
+            if (post.description) {
+                const modelDescription = createElement('div', { class: 'model-description' });
+                const description = this.#analyzeModelDescriptionString(post.description);
+                const modelDescriptionFragment = safeParseHTML(description);
+                this.#analyzeModelDescription(modelDescriptionFragment, cache);
+                if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+                modelDescription.appendChild(modelDescriptionFragment);
+                if (modelDescription.childNodes.length) appContent.appendChild(modelDescription);
+            }
+
+            const itemsList = this.gotoImages({ postId: post.id });
+
+            if (itemsList.element) {
+                appContentWide.appendChild(itemsList.element);
+            }
+
+            let promise = itemsList.promise;
+
+            if (promise instanceof Promise) {
+                promise = promise.then(() => ({ element: fragment, title }));
+                return { promise };
+            } else return { element: fragment, title };
+        };
+
+        const cached = this.#cache.postsInfo.get(`${id}`) || this.#preClickResults[`${id}-result`];
+        if (cached) {
+            this.#log('Loaded post (cache):', cached);
+            return insertPostPage(cached);
+        }
+
+        const apiPromise = this.#preClickResults[id] ?? this.api.fetchPostInfo(id);
+        const promise = apiPromise
+        .then(data => {
+            if (data?.id) this.#cache.postsInfo.set(`${data.id}`, data);
+            if (pageNavigation !== this.#pageNavigation) return;
+            this.#log('Loaded post:', data);
+            const result = insertPostPage(data);
             if (result.promise) return result.promise;
             return result;
         }).catch(error => {
@@ -2377,8 +2506,12 @@ class Controller {
             gap: CONFIG.appearance.modelCard.gap,
             itemWidth: CONFIG.appearance.modelCard.width,
             itemHeight: CONFIG.appearance.modelCard.height,
-            generator: this.#genModelCard.bind(this),
             progressiveGenerator: this.#genModelCardProgressive,
+            getResizedOptions: () => ({
+                gap: CONFIG.appearance.modelCard.gap,
+                itemWidth: CONFIG.appearance.modelCard.width,
+                itemHeight: CONFIG.appearance.modelCard.height
+            }),
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
@@ -2539,7 +2672,7 @@ class Controller {
     static openFromCivitUrl(href) {
         const { localUrl } = this.parseCivUrl(href);
         if (!localUrl) return this.#gotoError(error, 'Unsupported url');
-        gotoLocalLink(localUrl);
+        this.navigate({ hash: localUrl });
     }
 
     static parseCivUrl(url) {
@@ -2559,8 +2692,8 @@ class Controller {
             }
 
             return { localUrl, params };
-        } catch (_) {
-            console.warn(_?.message ?? _);
+        } catch (error) {
+            if (!error?.message?.startsWith(`Failed to construct 'URL'`)) console.warn(error?.message ?? error);
             return { localUrl: null, params: {} };
         }
     }
@@ -2772,7 +2905,6 @@ class Controller {
         // Model sub name
         const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
         const publishedAt = new Date(modelVersion.publishedAt ?? modelVersion.createdAt);
-        insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`) }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
         const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
         const updateTags = tags => {
             modelTagsWrap.textContent = '';
@@ -2785,9 +2917,12 @@ class Controller {
             if (modelVersion.baseModel) {
                 if (!categoryLink) categoryLink = createElement('div', { class: 'badge' });
                 categoryLink.textContent = this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel;
-                categoryLink.classList.add('model-category');
+                categoryLink.classList.add('model-category', 'separated-right');
                 modelTagsWrap.prepend(categoryLink);
             }
+
+            const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`) }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+            modelTagsWrap.prepend(badgePublishedAt);
         };
         if (this.#state.model_tags || model.tags.length <= 12) updateTags(model.tags);
         else {
@@ -2843,7 +2978,7 @@ class Controller {
             // const previewImages = filteredImages.filter(it => it.ok).map(it => it.item);
             const isWideMinRatio = 1.38;
             const generateMediaPreview = media => {
-                const ratio = +(media.width/media.height).toFixed(4);
+                const ratio = this.#round(media.width/media.height);
                 const item = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
                 const itemWidth = ratio >= isWideMinRatio && CONFIG.appearance.modelPage.carouselItemsCount > 1 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
                 const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, loading: undefined, taget: 'model-preview', allowAnimated: true });
@@ -2921,6 +3056,18 @@ class Controller {
         ];
         modelVersionNameWrap.appendChild(this.#genStats(versionStatsList));
 
+        // Creator
+        if (model.creator) {
+            const userInfo = {...model.creator};
+            if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
+            if (!userInfo.userId) userInfo.userId = model.userId;
+            const userBLock = this.#genUserBlock(userInfo);
+            if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
+            modelVersionDescription.appendChild(userBLock);
+            const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
+            userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', model.creator?.username || 'user'));
+        }
+
         // Trigger words
         if (modelVersion.trainedWords?.length > 0) {
             const trainedWordsContainer = insertElement('div', modelVersionDescription, { class: 'trigger-words' });
@@ -2944,18 +3091,6 @@ class Controller {
                     console.log(`Trigger word: ${word}`);
                 });
             });
-        }
-
-        // Creator
-        if (model.creator) {
-            const userInfo = {...model.creator};
-            if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
-            if (!userInfo.userId) userInfo.userId = model.userId;
-            const userBLock = this.#genUserBlock(userInfo);
-            if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
-            modelVersionDescription.appendChild(userBLock);
-            const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
-            userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', model.creator?.username || 'user'));
         }
 
         // to select the background color when correcting colors
@@ -2997,13 +3132,11 @@ class Controller {
         const mediaById = new Map();
 
         const carouselItems = [];
-        let mediaGenerator;
+        const mediaGenerator = item => {
+            const mediaElement = this.#genMediaElement({ media: item, className: 'media-full-preview', width: item.width, target: 'full-image', autoplay: true, original: true, controls: true, decoding: 'async', playsinline: false, setMediaElementOriginalSizes: true });
+            return mediaElement;
+        };
         if (postInfo.size > 1) {
-            mediaGenerator = item => {
-                const mediaElement = this.#genMediaElement({ media: item, className: 'media-full-preview', width: item.width, target: 'full-image', autoplay: true, original: true, controls: true, loading: 'eager', playsinline: false });
-                mediaElement.style.width = `${item.width}px`;
-                return mediaElement;
-            }
             postInfo.forEach(item => {
                 mediaById.set(item.id, item);
                 carouselItems.push({ id: item.id, data: item, width: item.width, height: item.height, index: carouselItems.length });
@@ -3011,7 +3144,7 @@ class Controller {
         }
 
         const insertMeta = (media, container) => {
-            this.#setTitle((window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username));
+            const title = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username);
 
             // Creator and Created At
             const creator = this.#genUserBlock({ userId: media.userId, username: media.username, url: `#images?username=${media.username}` });
@@ -3038,7 +3171,7 @@ class Controller {
             // NSFW LEvel
             const nsfwLevel = typeof media.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(media.nsfwLevel) : media.nsfwLevel;
             if (nsfwLevel !== 'None') {
-                const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
+                const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge separated-right', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
                 statsFragment.prepend(nsfwBadge);
             }
 
@@ -3061,12 +3194,12 @@ class Controller {
             else insertElement('div', container, undefined, window.languagePack?.text?.noMeta ?? 'No generation info');
 
             insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+
+            return { title };
         };
 
         // Full image
-        const mediaElement = this.#genMediaElement({ media, width: media.width, target: 'full-image', autoplay: true, original: true, controls: true, decoding: 'async', playsinline: false });
-        mediaElement.style.width = `${media.width}px`;
-        mediaElement.classList.add('media-full-preview');
+        const mediaElement = mediaGenerator(media);
         // Try to insert a picture from the previous page, if available
         this.#genMediaPreviewFromPrevPage(mediaElement, media.id);
 
@@ -3150,12 +3283,16 @@ class Controller {
                 onScroll: id => {
                     metaContainer.textContent = '';
                     const media = mediaById.get(id);
-                    insertMeta(media, metaContainer);
+                    const { title } = insertMeta(media, metaContainer);
                     // if (media.type === 'video') {
                     //     const mediaElement = document.querySelector('.media-full-preview');
                     //     waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, false));
                     // }
-                    history.replaceState(Controller.state, '', `#images?image=${id}&nsfw=${media.nsfwLevel}`);
+                    this.navigate({
+                        hash: `#images?image=${id}&nsfw=${media.nsfwLevel}`,
+                        soft: true,
+                        title
+                    });
                 }
             });
             fragment.appendChild(carouselElement);
@@ -3163,10 +3300,10 @@ class Controller {
 
 
         const metaContainer = createElement('div', { class: 'media-full-meta' });
-        insertMeta(media, metaContainer);
+        const { title } = insertMeta(media, metaContainer);
         fragment.appendChild(metaContainer);
 
-        return fragment;
+        return { element: fragment, title };
     }
 
     static #genInfinityScroll(options) {
@@ -3401,8 +3538,11 @@ class Controller {
             state: navigationState[`virtualScrollState-images`] ?? null,
             gap: CONFIG.appearance.imageCard.gap,
             itemWidth: CONFIG.appearance.imageCard.width,
-            generator: this.#genImageCard.bind(this),
             progressiveGenerator: this.#genImageCardProgressive,
+            getResizedOptions: () => ({
+                gap: CONFIG.appearance.imageCard.gap,
+                itemWidth: CONFIG.appearance.imageCard.width
+            }),
             passive: true,
             onElementRemove: this.#onCardRemoved.bind(this)
         };
@@ -3825,7 +3965,7 @@ class Controller {
 
             if (cacheDescriptionImages.has(src)) {
                 const item = cacheDescriptionImages.get(src);
-                img.style.aspectRatio = item.ratio;
+                img.style.aspectRatio = this.#round(item.ratio);
                 img.style.height = `${item.height}px`;
                 img.setAttribute('src', src);
                 if (srcset) img.setAttribute('srcset', srcset);
@@ -3853,7 +3993,9 @@ class Controller {
                     requestAnimationFrame(() => {
                         const bounds = img.getBoundingClientRect();
                         const item = {
-                            ratio: +(img.naturalWidth / img.naturalHeight).toFixed(4),
+                            naturalWidth: img.naturalWidth,
+                            naturalHeight: img.naturalHeight,
+                            ratio: img.naturalWidth / img.naturalHeight,
                             height: bounds.height
                         };
                         cacheDescriptionImages.set(src, item);
@@ -4157,8 +4299,10 @@ class Controller {
                 weightContainer.appendChild(lastTextNode);
             }
         };
+        // 1000000 - 10**6 - precision 6
+        const round = v => Math.round(v * 1000000) / 1000000;
         const updateCurrentWeight = (weightChange, bracketItem) => {
-            bracketItem.sum = +(bracketItem.sum * weightChange).toFixed(6);
+            bracketItem.sum = round(bracketItem.sum * weightChange);
             bracketItem.strength *= weightChange;
             bracketItem.container.setAttribute('style', `--weight: ${bracketItem.sum}; --weight-strength: ${Math.round(Math.min(1, Math.sqrt(Math.abs(bracketItem.sum - 1))) * 100)}%;`);
             bracketItem.container.setAttribute('data-weight-direction', bracketItem.sum >= 1 ? 'up' : 'down');
@@ -4171,7 +4315,7 @@ class Controller {
             const currentBracket = bracketContainers.at(-1);
             const strength = bracket === '(' ? 1.1 : 1;
             const closeBracket = bracket === '(' ? ')' : null;
-            const sum = +((currentBracket?.sum ?? 1) * strength).toFixed(6);
+            const sum = round((currentBracket?.sum ?? 1) * strength);
             const container = insertElement('span', weightContainer, {
                 class: 'weight-container',
                 style: `--weight: ${sum}; --weight-strength: ${Math.round(Math.min(1, Math.sqrt(Math.abs(sum - 1))) * 100)}%;`,
@@ -4601,13 +4745,13 @@ class Controller {
             { keys: ['Size'], label: 'Size' },
             { keys: ['seed'], label: 'Seed' },
             { keys: ['steps'], label: 'Steps' },
-            { keys: ['cfgScale'], label: 'CFG', format: v => +Number(v).toFixed(4) },
+            { keys: ['cfgScale'], label: 'CFG', format: v => this.#round(+v) },
             { keys: ['sampler'], label: 'Sampler' },
             { keys: ['Schedule type', 'scheduler'], label: 'Scheduler' },
             { keys: ['Shift'], label: 'Shift' },
             { keys: ['clipSkip'], label: 'Clip Skip' },
             { keys: ['RNG'], label: 'RNG' },
-            { keys: ['Denoising strength', 'denoise'], label: 'Denoising', format: v => +Number(v).toFixed(4) },
+            { keys: ['Denoising strength', 'denoise'], label: 'Denoising', format: v => this.#round(+v) },
             // Does this make sense?
             // { 
             //     match: key => key.startsWith('Module '), 
@@ -4738,7 +4882,7 @@ class Controller {
                 titleElement.appendChild(document.createTextNode(' '));
                 if(version) insertElement('strong', titleElement, { class: 'model-version-name' }, version);
                 if (type?.toLowerCase() === 'lora' && href) { // Checking href to avoid displaying weight on errors
-                    const weightRounded = +weight.toFixed(4);
+                    const weightRounded = this.#round(weight);
                     const span = insertElement('span', titleElement, { class: 'meta-resource-weight', 'data-weight': weight === 0 ? '=0' : weight > 0 ? '>0' : '<0' }, weightRounded);
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', escapeHtml(weight));
                 }
@@ -5094,14 +5238,15 @@ class Controller {
             generator: (ctx) => {
                 const { data: article, itemWidth, itemHeight, forceAutoplay = false } = ctx;
 
+                ctx.cardSizeStyle = `width: ${itemWidth}px; height: ${itemHeight}px;`;
+
                 let cardClassName = 'card model-card';
-                const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': article.title });
+                const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: ctx.cardSizeStyle, 'data-draggable-title': article.title });
 
                 if (article.coverImage) {
                     const previewMedia = article.coverImage;
-                    const ratio = previewMedia.width / previewMedia.height;
                     if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
-                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${previewMedia.hashColor || 'transparent'};` });
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
 
                     if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
                         if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
@@ -5217,16 +5362,17 @@ class Controller {
 
                 const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
 
+                ctx.cardSizeStyle = `width: ${itemWidth}px; height: ${itemHeight}px;`;
+
                 let cardClassName = 'card model-card';
-                const card = createElement('a', { 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
+                const card = createElement('a', { 'data-id': model.id, href: `#models?model=${model.id}&version=${encodeURIComponent(modelVersion.name)}`, style: ctx.cardSizeStyle, 'data-draggable-title': `${model.name} | ${modelVersion.name}` });
 
                 // Select image
                 const previewMedia = modelVersion.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
                 if (previewMedia) {
                     ctx.previewMedia = previewMedia;
-                    const ratio = previewMedia.width / previewMedia.height;
                     if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
-                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${previewMedia.hashColor || 'transparent'};` });
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
                     if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
                         if (previewMedia.type === 'video') cardClassName += ' video-hover-play';
                         cardClassName += ' image-hover-play';
@@ -5348,7 +5494,7 @@ class Controller {
         { // base
             weight: 1,
             generator: (ctx) => {
-                const { data, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+                const { data, itemWidth, forceAutoplay = false } = ctx;
 
                 let image = data;
                 if (image instanceof Set) {
@@ -5359,8 +5505,12 @@ class Controller {
                 const ratio = image.width / image.height;
                 const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
 
+                if (!ctx.itemHeight) ctx.itemHeight = itemWidth / ratio;
+
+                ctx.cardSizeStyle = `width: ${itemWidth}px; height: ${ctx.itemHeight}px;`;
+
                 let cardClassName = 'card image-card';
-                const card = createElement('a', { 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: `width: ${itemWidth}px; height: ${itemHeight || itemWidth / ratio}px;`, 'data-draggable-title': draggableTitle });
+                const card = createElement('a', { 'data-id': image.id, href: `#images?image=${encodeURIComponent(image.id)}&nsfw=${image.browsingLevel ? this.#convertNSFWLevelToString(image.browsingLevel) : image.nsfw}`, style: ctx.cardSizeStyle, 'data-draggable-title': draggableTitle });
 
                 if (!image.hashColor && image.hash) {
                     image.hashColor = Blurhash.toHex(image.hash);
@@ -5368,7 +5518,7 @@ class Controller {
                     // The site doesn't provide blurhash for videos, it's always black
                     if (image.hashColor === '#000000' && image.type === 'video') image.hashColor = 'transparent';
                 }
-                const mediaContainer = insertElement('div', card, { class: `card-background media-container media-${image.type} loading`, style: `aspect-ratio: ${+(ratio).toFixed(4)}; background-color: ${image.hashColor || 'transparent'};` });
+                const mediaContainer = insertElement('div', card, { class: `card-background media-container media-${image.type} loading`, style: `background-color: ${image.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
 
                 if (!(forceAutoplay ?? SETTINGS.autoplay) && image.type === 'video') {
                     if (image?.type === 'video') cardClassName += ' video-hover-play';
@@ -5423,10 +5573,12 @@ class Controller {
                     const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, ctx.postSize > 99 ? '99+' : ctx.postSize);
                     metaIconContainer.appendChild(getIcon('image'));
                 }
-                if (image.meta) {
-                    const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': escapeHtml(window.languagePack?.text?.hasMeta ?? 'Generation info') });
-                    metaIconContainer.appendChild(getIcon('information'));
-                }
+
+                // A note that the image is cropped
+                // if (Math.abs(itemWidth / itemHeight - image.width / image.height) > .01) {
+                //     const metaIconContainer = insertElement('div', badgesContainer, { class: 'image-meta badge', 'lilpipe-text': 'TODO' });
+                //     metaIconContainer.appendChild(getIcon('minimize'));
+                // }
 
                 // stats
                 const stats = image.stats ?? {};
@@ -5499,9 +5651,10 @@ class Controller {
 
     static #genMediaElement(options) {
         // Note: Adds a "hashColor" field to the media object
-        const { media, autoplay = SETTINGS.autoplay, passiveHoverPlay = false, className: baseClassName = null } = options;
+        const { media, autoplay = SETTINGS.autoplay, passiveHoverPlay = false, className: baseClassName = null, width, height = undefined } = options;
         const ratio = media.width / media.height;
-        const mediaContainer = createElement('div', { 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel, style: `aspect-ratio: ${+(ratio).toFixed(4)};` });
+        const styleString = width && height ? `width: ${width}px; height: ${height}px;` : `aspect-ratio: ${this.#round(ratio)};`;
+        const mediaContainer = createElement('div', { 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel, style: styleString });
         let mediaElement;
         let className = baseClassName ? `${baseClassName} media-container loading` : 'media-container loading';
 
@@ -5547,7 +5700,7 @@ class Controller {
     }
 
     static #insertMediaElement(mediaContainer, options) {
-        const { media, width, height = undefined, allowResize = false, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true } = options;
+        const { media, width, height = undefined, allowResize = false, loading = 'auto', target = null, controls = false, original = false, autoplay = SETTINGS.autoplay, decoding = 'auto', allowAnimated = false, playsinline = true, setMediaElementOriginalSizes = false } = options;
         const ratio = media.width / media.height;
         const targetWidth = Math.round(Math.max(width, height ? (height * ratio) : 0) * this.#devicePixelRatio);
         const realWidth = this.#getNearestServerSize(targetWidth);
@@ -5556,7 +5709,7 @@ class Controller {
         const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.3;
         let paramString = target ? (`?target=${target}`) : '';
         // Crop image if result is 30% wider than required
-        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${+(width * this.#devicePixelRatio).toFixed(4)}&height=${+(height * this.#devicePixelRatio).toFixed(4)}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
+        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
         const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
         const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
@@ -5589,7 +5742,13 @@ class Controller {
 
         if (src) mediaElement.setAttribute('src', src);
 
-        mediaElement.style.aspectRatio = +(ratio).toFixed(4);
+        if (setMediaElementOriginalSizes) {
+            mediaElement.style.cssText = `width: ${media.width}px; height: ${media.height}px;`;
+        } else if (width && height) {
+            mediaElement.style.cssText = `width: ${width}px; height: ${height}px;`;
+        } else {
+            mediaElement.style.cssText = `aspect-ratio: ${this.#round(ratio)};`;
+        }
         if (resized && width && height) mediaContainer.setAttribute('data-resize', `${width}:${height}`);
         mediaContainer.prepend(mediaElement);
         return mediaElement;
@@ -5626,6 +5785,7 @@ class Controller {
 
         previewImage.classList.add('media-preview-image');
         previewImage.setAttribute('inert', '');
+        previewImage.style.cssText = fullMedia.style.cssText;
 
         const previewWrap = createElement('div', { class: 'media-preview-wrapper' });
         previewWrap.appendChild(previewImage);
@@ -6315,6 +6475,11 @@ class Controller {
         return this.#nsfwLevels.string[nsfwLevel] ?? this.#nsfwLevels.sort.find(lvl => lvl.minLevel <= nsfwLevel)?.string ?? 'true';
     }
 
+    // 10000 - 10**4 - precision 4
+    static #round(v) {
+        return Math.round(v * 10000) / 10000;
+    }
+
     static #onCardRemoved(card, item, preventRemoveItemsFromDOM) {
         const video = card.querySelector('.autoplay-observed');
         if (video) disableAutoPlayOnVisible(video);
@@ -6346,6 +6511,56 @@ class Controller {
         document.title = mainContent ? `${mainContent} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
     }
 
+    static #saveStateTimer = null;
+    static #saveStateRequestTime = null;
+    static #saveStateRequestId = null;
+    static #saveStateThrottle() {
+        const DELAY = 400;
+
+        this.#saveStateRequestTime = Date.now();
+        this.#saveStateRequestId = this.#state.id;
+
+        if (this.#saveStateTimer) return;
+
+        const check = () => {
+            const now = Date.now();
+            const timePassed = now - this.#saveStateRequestTime;
+
+            if (timePassed < DELAY) {
+                this.#saveStateTimer = setTimeout(check, DELAY - timePassed);
+            } else {
+                if (this.#saveStateRequestId === this.#state.id) this.saveState();
+                this.#saveStateTimer = null;
+            }
+        };
+
+        this.#saveStateTimer = setTimeout(check, DELAY);
+    }
+
+    static saveState() {
+        history.replaceState(this.state, '', this.#page);
+    }
+
+    static navigate({ hash, title, soft = false }) {
+        if (!hash || hash[0] !== '#') hash = '#home';
+
+        if (title !== undefined) this.#setTitle(title);
+
+        // Replace history state
+        if (soft) {
+            history.replaceState(this.state, '', hash);
+            this.#page = hash;
+            return;
+        }
+
+        this.saveState();
+
+        // Navigate to page
+        const newState = { id: Date.now() };
+        if (hash !== location.hash) history.pushState(newState, '', hash);
+        this.gotoPage(hash, newState);
+    }
+
     static #log(...args) {
         if (SETTINGS.showLogs) console.log(...args);
     }
@@ -6364,6 +6579,9 @@ class Controller {
         for (const [item, readResult] of scrollReadResults) {
             item.onScroll?.(readResult);
         }
+
+        // When navigating through history, it is not possible to save the state before navigation
+        this.#saveStateThrottle();
     }
 
     static onScrollFromNavigation(state = {}) {
@@ -6384,9 +6602,27 @@ class Controller {
     static onResize() {
         this.windowWidth = window.innerWidth;
         this.windowHeight = window.innerHeight;
+        this.#devicePixelRatio = Math.round(window.devicePixelRatio * 100) / 100;
 
-        if (this.windowWidth < 950) CONFIG.appearance = CONFIG.appearance_small;
-        else CONFIG.appearance = CONFIG.appearance_normal;
+        if (this.windowWidth < 950) CONFIG.appearance = {...CONFIG.appearance_small};
+        else CONFIG.appearance = {...CONFIG.appearance_normal};
+
+        if (this.windowWidth < 600) {
+            const stretchCard = cardInfo => {
+                cardInfo = {...cardInfo};
+
+                const ratio = cardInfo.height ? cardInfo.width / cardInfo.height : null;
+                if (this.windowWidth < cardInfo.width * 2 + cardInfo.gap) {
+                    cardInfo.width = Math.floor((Math.max(this.windowWidth, 300) - cardInfo.gap * 2) / 50) * 50; // roughen to the nearest multiple of 50
+                    if (ratio) cardInfo.height = cardInfo.width / ratio;
+                }
+
+                return cardInfo;
+            };
+
+            CONFIG.appearance.imageCard = stretchCard(CONFIG.appearance.imageCard);
+            CONFIG.appearance.modelCard = stretchCard(CONFIG.appearance.modelCard);
+        }
 
         const resizeReadResults = [];
         for (const item of this.#activeVirtualScroll) {
@@ -6396,6 +6632,9 @@ class Controller {
         for (const [item, readResult] of resizeReadResults) {
             item.onResize?.(readResult);
         }
+
+        // When navigating through history, it is not possible to save the state before navigation
+        this.#saveStateThrottle();
     }
 
     static get state() {
@@ -6740,23 +6979,14 @@ function tryClearCache() {
     }
 }
 
-function gotoLocalLink(hash) {
-    const newState = { id: Date.now() };
-    if (hash !== location.hash) {
-        history.replaceState(Controller.state, '', location.hash);
-        history.pushState(newState, '', hash);
-    }
-    Controller.gotoPage(hash, newState);
-}
-
 function onBodyClick(e) {
     if (e.altKey || SETTINGS.civitaiLinksAltClickByDefault) {
-        const href = e.target.closest('a[href]')?.getAttribute('href');
+        const href = e.target.closest('a[href]:not(.link-open-civitai)')?.getAttribute('href');
         if (href) {
             const { localUrl } = Controller.parseCivUrl(href);
             if (localUrl) {
                 e.preventDefault();
-                gotoLocalLink(localUrl);
+                Controller.navigate({ hash: localUrl });
                 return;
             }
         }
@@ -6767,7 +6997,7 @@ function onBodyClick(e) {
     const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
     if (href) {
         e.preventDefault();
-        gotoLocalLink(href);
+        Controller.navigate({ hash: href });
     }
 }
 
@@ -7144,14 +7374,14 @@ function onDrop(e) {
         try {
             const url = new URL(href);
             if (url.origin !== location.origin) throw new Error('Unsupported url');
-            gotoLocalLink(url.hash);
+            Controller.navigate({ hash: url.hash });
         } catch (_) {
             notify('Unsupported url');
         }
         return;
     }
 
-    gotoLocalLink(localUrl);
+    Controller.navigate({ hash: localUrl });
 }
 
 function onDragenter(e) {
@@ -7188,7 +7418,6 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     video.loop = true;
     if (mediaContainer.hasAttribute('data-playsinline')) video.playsinline = true;
     if (mediaContainer.hasAttribute('data-controls')) video.controls = true;
-    video.style.aspectRatio = mediaContainer.style.aspectRatio;
 
     video.setAttribute('src', src);
     video.currentTime = +timestump;
@@ -7207,6 +7436,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
 
             mediaContainer.classList.toggle('error', e.type === 'error');
             const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
+            video.style.cssText = mediaElement.style.cssText;
             mediaElement.replaceWith(video);
             resolve();
         };
@@ -7238,7 +7468,7 @@ function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
     }
 
     const canvas = createElement('canvas', { class: 'media-element', width: targetWidth, height: targetHeight });
-    canvas.style.aspectRatio = mediaContainer.style.aspectRatio;
+    canvas.style.cssText = video.style.cssText;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, offsetX, offsetY, cropWidth, cropHeight, 0, 0, targetWidth, targetHeight);
     mediaContainer.setAttribute('data-timestump', video.currentTime);
@@ -7522,9 +7752,10 @@ function init() {
     Controller.appElement = document.getElementById('app');
     loadLanguagePack(SETTINGS.language);
 
-    Controller.gotoPage(location.hash || '#home');
+    const initialHash = location.hash || '#home';
+    Controller.gotoPage(initialHash);
+    Controller.navigate({ hash: initialHash, soft: true });
     Controller.onResize();
-    history.replaceState({ id: Date.now() }, '', location.hash);
 
     if (!document.hidden) {
         tryClearCache();

@@ -682,17 +682,23 @@ class CacheManager {
         }
     }
 
-    // Check ttl
-    static #checkCacheMaxAge(cached) {
+    static #getMaxAge(cached) {
         const date = cached.headers.get('Date');
         const cacheControl = cached.headers.get('Cache-Control');
         if (!date) console.warn('No Date Header in cached response!');
         if (date && cacheControl && cacheControl !== 'no-cache') {
-            const age = (Date.now() - new Date(date).getTime()) / 1000;
-            const maxAge = parseInt(cacheControl.substring(cacheControl.indexOf('=') + 1));
-            if (age <= maxAge) return true;
+            return {
+                maxAge: parseInt(cacheControl.substring(cacheControl.indexOf('=') + 1)),
+                age: (Date.now() - new Date(date).getTime()) / 1000
+            };
         }
-        return false;
+        return { age: 1, maxAge: - 1 };
+    }
+
+    // Check ttl
+    static #checkCacheMaxAge(cached) {
+        const { age, maxAge } = this.#getMaxAge(cached);
+        return age <= maxAge;
     }
 
     // Checking whether this URL should be cached in RAM
@@ -708,9 +714,11 @@ class CacheManager {
             this.#hotCache.delete(firstKey);
         }
 
+        const { age, maxAge } = this.#getMaxAge(response);
+
         this.#hotCache.set(url, {
             response: response.clone(),
-            expireTime: Date.now() + 5 * 60 * 1000 // 5 mins // TODO: noraml time from Cache-Control header
+            expireTime: Date.now() + (maxAge - age)
         });
     }
 

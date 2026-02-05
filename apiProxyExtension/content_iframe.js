@@ -12,6 +12,8 @@ const CIVITAI_TRPC_ROUTES = [
     'model.getAll',
     'model.getById',
     'collection.getById',
+    'post.get',
+    'post.getResources', // not used now
     'model.getAssociatedResourcesCardData', // not used now
     'image.getInfinite',
     'article.getInfinite',
