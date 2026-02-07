@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 30,
+    version: 31,
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -733,11 +733,11 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             const version = item.version;
             return {
                 id: item.id,
-                availability: item.availability,
-                type: item.type,
-                creator: this.#prepareUserBlock(item.user),
-                nsfwLevel: item.nsfwLevel,
                 name: item.name,
+                type: item.type,
+                nsfwLevel: item.nsfwLevel,
+                availability: item.availability,
+                creator: this.#prepareUserBlock(item.user),
                 description: '',
                 modelVersions: [
                     {
@@ -974,6 +974,7 @@ class Controller {
             'Wan Video 2.5 T2V',
             'ZImageTurbo',
             'ZImageBase',
+            'Anima',
             'Other'
         ],
         labels: {
@@ -1102,6 +1103,7 @@ class Controller {
             'Wan Video 2.5 T2V': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
             'ZImageTurbo': ['image', 'weights', 'multilingual'],
             'ZImageBase': ['image', 'weights', 'multilingual'],
+            'Anima': ['image', 'weights', 'cosmos', 'circlestone-labs', 'uncensored'],
             'Other': ['misc']
         }
     };
@@ -1351,10 +1353,10 @@ class Controller {
     static updateMainMenu() {
         const menu = document.querySelector('#main-menu .menu');
 
-        menu.querySelector('a[href="#home"] span').textContent = window.languagePack?.text?.home ?? 'Home';
-        menu.querySelector('a[href="#models"] span').textContent = window.languagePack?.text?.models ?? 'Models';
-        menu.querySelector('a[href="#articles"] span').textContent = window.languagePack?.text?.articles ?? 'Articles';
-        menu.querySelector('a[href="#images"] span').textContent = window.languagePack?.text?.images ?? 'Images';
+        menu.querySelector('a[href="#home"]').textContent = window.languagePack?.text?.home ?? 'Home';
+        menu.querySelector('a[href="#models"]').textContent = window.languagePack?.text?.models ?? 'Models';
+        menu.querySelector('a[href="#articles"]').textContent = window.languagePack?.text?.articles ?? 'Articles';
+        menu.querySelector('a[href="#images"]').textContent = window.languagePack?.text?.images ?? 'Images';
     }
 
     static gotoPage(page, savedState) {
@@ -1397,15 +1399,25 @@ class Controller {
         document.querySelector('#main-menu .menu a.active')?.classList.remove('active');
         if (pageId) document.querySelector(`#main-menu .menu a[href="${pageId}"]`)?.classList.add('active');
 
-        // TODO: add animation
+        // TODO: add transition animation
         const processNavigation = (result, loaded = false) => {
             if (result.element) {
                 this.appElement.textContent = '';
                 this.appElement.appendChild(result.element);
 
                 const header = document.getElementsByTagName('header')[0];
+                const dataFormatStart = header?.getAttribute('data-format') ?? null;
                 if (result.headerFormat === 'mini') header?.setAttribute('data-format', 'mini');
                 else header?.removeAttribute('data-format');
+
+                if (header && dataFormatStart !== (result.headerFormat ?? null) && !document.body.classList.contains('page-scrolled')) {
+                    const keyframes = result.headerFormat === 'mini' ? { transform: [ 'translateY(1em)', 'translateY(0)' ] } : { transform: [ 'translateY(-1em)', 'translateY(0)' ] };
+                    animateElement(header, {
+                        keyframes,
+                        duration: 200,
+                        easing: 'ease-out'
+                    });
+                }
 
                 const footer = document.getElementsByTagName('footer')[0];
                 if (result.footerBehavior === 'static') footer?.setAttribute('data-behavior', 'static');
@@ -2056,7 +2068,6 @@ class Controller {
 
             const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
             const publishedAt = new Date(article.publishedAt);
-            insertElement('span', modelSubNameWrap, { class: 'model-updated-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
             const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
             const updateTags = tags => {
                 modelTagsWrap.textContent = '';
@@ -2068,6 +2079,9 @@ class Controller {
                 if (!categoryLink) categoryLink = createElement('div', { class: 'badge' }, article.category);
                 categoryLink.classList.add('model-category');
                 modelTagsWrap.prepend(categoryLink);
+
+                const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+                modelTagsWrap.prepend(badgePublishedAt);
             };
             if (this.#state.article_tags || article.tags.length <= 12) updateTags(article.tags);
             else {
@@ -3164,7 +3178,7 @@ class Controller {
                 { iconString: '😭', value: stats.cryCount, unit: 'cry' },
                 { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
                 { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
-                { icon: 'chat', value: stats.commentCount, unit: 'comment' },
+                { iconString: '💬', value: stats.commentCount, unit: 'comment' },
             ];
             const statsFragment = this.#genStats(statsList, true);
 
@@ -4187,11 +4201,13 @@ class Controller {
             {
                 exact: [ 'positive prompt', 'positive:' ],
                 startsWith: [ '+prompt', '+ prompt', 'positive prompt' ],
+                endsWith: [ 'positive prompt' ],
                 type: 'positive'
             },
             {
                 exact: [ 'negative prompt', 'negative:', 'nprompt:', 'n prompt:' ],
                 startsWith: [ '-prompt', '- prompt', 'negative prompt' ],
+                endsWith: [ 'negative prompt' ],
                 type: 'negative'
             }
         ];
@@ -4223,7 +4239,7 @@ class Controller {
             const code = pre.querySelector('code');
             if (!code) return;
 
-            const type = promptTitles.find(r => r.exact.includes(text) || r.startsWith.some(t => text.startsWith(t)))?.type;
+            const type = promptTitles.find(r => r.exact.includes(text) || r.startsWith.some(t => text.startsWith(t)) || r.endsWith.some(t => text.endsWith(t)))?.type;
             if (type) code.classList.add('prompt', `prompt-${type}`);
         });
 
@@ -4580,7 +4596,6 @@ class Controller {
         /* ---------- DOM ---------- */
 
         const cache = new Map();
-        const colorRe = /rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\s*\)/;
         const blend = (fg, bg, alpha) => {
             return {
                 r: Math.round(fg.r * alpha + bg.r * (1 - alpha)),
@@ -4610,17 +4625,17 @@ class Controller {
                 return;
             }
 
-            const m = color.match(colorRe);
-            if (!m) return;
-            const rgb = { r: +m[1], g: +m[2], b: +m[3] };
+            const rgb = Color.convert(color, 'rgba', true);
+            if (!rgb) return;
 
-            let finalBg = bgRGB
-            const mBg = bgColor?.match(colorRe);
-            if (mBg) {
-                const bgAlpha = mBg[4] !== undefined ? parseFloat(mBg[4]) : 1;
-                if (bgAlpha === 0) finalBg = bgRGB;
-                else if (bgAlpha < 1) finalBg = blend({ r: +mBg[1], g: +mBg[2], b: +mBg[3] }, bgRGB, bgAlpha);
-                else finalBg = { r: +mBg[1], g: +mBg[2], b: +mBg[3] };
+            let finalBg = bgRGB;
+            if (bgColor) {
+                finalBg = Color.convert(bgColor, 'rgba', true);
+                if (finalBg && finalBg.a !== 0) {
+                    if (finalBg.a < 1) {
+                        finalBg = blend(finalBg, bgRGB, finalBg.a);
+                    }
+                } else finalBg = bgRGB;
             }
 
             const corrected = correctColor(rgb, finalBg, targetLС);
@@ -4630,7 +4645,7 @@ class Controller {
             }
 
             let correctedBg = null;
-            if (mBg && Math.abs(apca(corrected, finalBg)) < TARGET_LC_MIN) {
+            if (bgColor && Math.abs(apca(corrected, finalBg)) < TARGET_LC_MIN) {
                 correctedBg = correctBackground(finalBg, corrected, targetLС);
             }
 
@@ -4678,14 +4693,15 @@ class Controller {
                     { iconString: '👎', value: stats.dislikeCount, unit: 'dislike' },
                     { iconString: '😭', value: stats.cryCount, unit: 'cry' },
                     { iconString: '❤️', value: stats.heartCount, unit: 'heart' },
-                    { iconString: '🤣', value: stats.laughCount, unit: 'laugh' }
+                    { iconString: '🤣', value: stats.laughCount, unit: 'laugh' },
+                    { iconString: '💬', value: stats.commentCount, unit: 'comment' },
                 ];
 
                 const statsFragment = this.#genStats(statsList, true);
 
                 // NSFW LEvel
                 if (media.nsfwLevel !== 'None') {
-                    const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+                    const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge separated-right', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
                     statsFragment.prepend(nsfwBadge);
                 }
 
@@ -5453,8 +5469,10 @@ class Controller {
                         modelName = model.modelUpdatedRecently.name;
                     }
                     if (date) {
-                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><span class="dark-text">${escapeHtml(timeAgo(Math.round((Date.now() - date)/1000)))}</span>`;
+                        const updatedAtString = timeAgo(Math.round((Date.now() - date)/1000));
+                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><span class="dark-text">${escapeHtml(updatedAtString)}</span>`;
                         badge.setAttribute('lilpipe-text', lilpipeText);
+                        if (forceAutoplay) insertElement('div', cardContentTop, { class: 'dark-text' }, updatedAtString);
                     }
                 }
 
@@ -7753,6 +7771,10 @@ function init() {
     loadLanguagePack(SETTINGS.language);
 
     const initialHash = location.hash || '#home';
+
+    // TEMP // TODO: normal solution
+    if (initialHash.startsWith('#images') && initialHash.includes('image=')) document.getElementsByTagName('header')[0]?.setAttribute('data-format', 'mini');
+
     Controller.gotoPage(initialHash);
     Controller.navigate({ hash: initialHash, soft: true });
     Controller.onResize();
