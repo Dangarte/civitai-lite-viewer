@@ -2498,8 +2498,7 @@ code.prompt-positive::before {
     color: var(--c-text-light);
 }
 
-.badges,
-.model-sub-name {
+.badges {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -2507,8 +2506,8 @@ code.prompt-positive::before {
     gap: .25em;
 }
 
-.model-sub-name {
-    flex-wrap: nowrap;
+.model-tags {
+    width: 100%;
 }
 
 .model-versions .badge {

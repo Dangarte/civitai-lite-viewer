@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 31,
+    version: 32,
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -491,6 +491,12 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
             if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
 
+            // Hide broken images
+            if (!item.width || !item.height) {
+                console.warn('The API returned a broken image, it has no dimensions...', item);
+                return null;
+            }
+
             return {
                 id: item.id,
                 hash: item.hash,
@@ -923,6 +929,7 @@ class Controller {
             'Imagen4',
             'Kolors',
             'LTXV',
+            'LTXV2',
             'Lumina',
             'Mochi',
             'Nano Banana',
@@ -959,9 +966,13 @@ class Controller {
             'SVD',
             'SVD XT',
             'Seedream',
+            'Seedance',
+            'Seedance 1.5',
+            'Seedance 2.0',
             'Sora 2',
             'Stable Cascade',
             'Veo 3',
+            'Vidu Q1',
             'Wan Video',
             'Wan Video 1.3B t2v',
             'Wan Video 14B i2v 480p',
@@ -975,6 +986,7 @@ class Controller {
             'ZImageTurbo',
             'ZImageBase',
             'Anima',
+            'Kling',
             'Other'
         ],
         labels: {
@@ -1104,6 +1116,12 @@ class Controller {
             'ZImageTurbo': ['image', 'weights', 'multilingual'],
             'ZImageBase': ['image', 'weights', 'multilingual'],
             'Anima': ['image', 'weights', 'cosmos', 'circlestone-labs', 'uncensored'],
+            'Kling': ['video', 'closed', 'kuaishou', 'multilingual', 'censored'],
+            'Vidu Q1': ['video', 'closed', 'shengshu', 'multilingual', 'censored'],
+            'Seedance': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
+            'Seedance 1.5': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
+            'Seedance 2.0': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
+            'LTXV2': ['video', 'weights', 'lightricks', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -2066,9 +2084,8 @@ class Controller {
             const statsFragment = this.#genStats(statsList);
             modelNameH1.appendChild(statsFragment);
 
-            const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
             const publishedAt = new Date(article.publishedAt);
-            const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
+            const modelTagsWrap = insertElement('div', page, { class: 'badges model-tags' });
             const updateTags = tags => {
                 modelTagsWrap.textContent = '';
                 let categoryLink;
@@ -2083,9 +2100,9 @@ class Controller {
                 const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
                 modelTagsWrap.prepend(badgePublishedAt);
             };
-            if (this.#state.article_tags || article.tags.length <= 12) updateTags(article.tags);
+            if (this.#state.article_tags || article.tags.join('').length <= 80) updateTags(article.tags);
             else {
-                updateTags(article.tags.slice(0, 12));
+                updateTags(article.tags.reduce((acc, tag) => (acc.join('').length + tag.length <= 80 ? [...acc, tag] : acc), []));
                 const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
                 showMore.appendChild(getIcon('arrow_down'));
                 insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${article.tags.length - 12}`);
@@ -2917,9 +2934,8 @@ class Controller {
         });
 
         // Model sub name
-        const modelSubNameWrap = insertElement('div', page, { class: 'model-sub-name' });
         const publishedAt = new Date(modelVersion.publishedAt ?? modelVersion.createdAt);
-        const modelTagsWrap = insertElement('div', modelSubNameWrap, { class: 'badges model-tags' });
+        const modelTagsWrap = insertElement('div', page, { class: 'badges model-tags' });
         const updateTags = tags => {
             modelTagsWrap.textContent = '';
             let categoryLink;
@@ -2938,9 +2954,9 @@ class Controller {
             const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`) }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
             modelTagsWrap.prepend(badgePublishedAt);
         };
-        if (this.#state.model_tags || model.tags.length <= 12) updateTags(model.tags);
+        if (this.#state.model_tags || model.tags.join('').length <= 80) updateTags(model.tags);
         else {
-            updateTags(model.tags.slice(0, 12));
+            updateTags(model.tags.reduce((acc, tag) => (acc.join('').length + tag.length <= 80 ? [...acc, tag] : acc), []));
             const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
             showMore.appendChild(getIcon('arrow_down'));
             insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - 12}`);
@@ -5261,7 +5277,7 @@ class Controller {
 
                 if (article.coverImage) {
                     const previewMedia = article.coverImage;
-                    if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
+                    if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);
                     ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
 
                     if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
@@ -5429,7 +5445,7 @@ class Controller {
                     const noMedia = insertElement('div', mediaContainer, { class: 'media-element nsfw-filter' });
                     const nsfwLabel = this.#convertNSFWLevelToString(closestMedia.nsfwLevel);
                     insertElement('div', noMedia, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLabel }, nsfwLabel);
-                    this.#insertMediaBlurhash(mediaContainer, { media: closestMedia });
+                    if (closestMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: closestMedia });
                 } else {
                     const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
                     const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
