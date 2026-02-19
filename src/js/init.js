@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 32,
+    version: 33,
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -351,10 +351,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     }
 
     // "1de4c2db-54a0-4fed-994f-45604bbdf0bc" --> url
-    #convertUrlIdToUrl({ urlId, itemId, width = 450 }) {
+    #convertUrlIdToUrl({ urlId, itemId, type = 'image', width = 450 }) {
         if (!urlId) return '';
         if (urlId.startsWith('http')) return urlId;
-        return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}`;
+        return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}${type === 'image' ? '.jpeg' : '.mp4'}`; // .jpeg or .mp4 - otherwise cf will return "cf-cache-status DYNAMIC"
     }
 
     #prepareUserBlock(user = {}) {
@@ -375,7 +375,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             userId: user.id,
             isModerator: user.isModerator || false,
             username: user.username || '[username]',
-            image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
+            image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, type: 'image', itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
             imageMeta: user.profilePicture ? {
                 hash: user.profilePicture.hash ?? null,
                 width: user.profilePicture.width ?? null,
@@ -399,7 +399,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (!media || typeof media !== 'object') return null;
 
         return {
-            url: !media.url || media.url?.startsWith('https:') ? media.url : this.#convertUrlIdToUrl({ urlId: media.url, width: 450, itemId: media.id }),
+            url: !media.url || media.url?.startsWith('https:') ? media.url : this.#convertUrlIdToUrl({ urlId: media.url, type: media.type, width: 450, itemId: media.id }),
             hash: media.hash,
             width: media.width,
             height: media.height,
@@ -514,7 +514,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 username: item.user?.username || '[username]',
                 tags: [],
                 tagIds: item.tagIds || item.tags || [],
-                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, itemId: item.id, width: 450 }),
+                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, type: item.type, itemId: item.id, width: 450 }),
                 width: item.width,
                 height: item.height,
                 nsfwLevel: item.nsfwLevel,
@@ -7168,12 +7168,12 @@ function languageToggleClick(e) {
     }
 }
 
-const pendingMedia = new Set();
+const pendingMedia = new Map();
 let batchTimer = null;
 function markMediaAsLoadedWhenReady(el, isOk = true) {
-    if (!el.parentElement?.classList.contains('loading')) return;
+    if (!el.parentElement?.classList.contains('loading') && !el.parentElement?.classList.contains('error')) return;
 
-    pendingMedia.add(el);
+    pendingMedia.set(el, isOk);
 
     if (batchTimer) return;
     batchTimer = requestAnimationFrame(() => {
@@ -7181,20 +7181,23 @@ function markMediaAsLoadedWhenReady(el, isOk = true) {
         const readyImages = [];
         const instantMedia = [];
 
-        for (const media of pendingMedia) {
-            if (!document.body.contains(media)) continue;
-            if (media.tagName === 'IMG') readyImages.push(media);
-            else instantMedia.push(media);
+        for (const [media, ok] of pendingMedia) {
+            if (!media.isConnected) continue;
+            if (media.tagName === 'IMG') readyImages.push([media, ok]);
+            else instantMedia.push([media, ok]);
         }
         pendingMedia.clear();
 
         // videos
-        for (const media of instantMedia) {
-            media.parentElement.classList.toggle('error', !isOk);
-            media.parentElement.classList.remove('loading');
-            if (isOk) {
-                // media.parentElement.style.backgroundColor = '';
-                media.parentElement.style.backgroundImage = '';
+        for (const [media, ok] of instantMedia) {
+            const parent = media.parentElement;
+            if (!parent) continue;
+
+            parent.classList.remove('loading');
+            parent.classList.toggle('error', !ok);
+            if (ok) {
+                // parent.style.backgroundColor = '';
+                parent.style.backgroundImage = '';
             }
         }
 
@@ -7202,14 +7205,19 @@ function markMediaAsLoadedWhenReady(el, isOk = true) {
         if (readyImages.length) {
             setTimeout(() => {
                 requestAnimationFrame(() => {
-                    readyImages.filter(img => document.body.contains(img)).forEach(img => {
-                        img.parentElement.classList.remove('loading');
-                        img.parentElement.classList.toggle('error', !isOk);
-                        if (isOk) {
-                            // img.parentElement.style.backgroundColor = '';
-                            img.parentElement.style.backgroundImage = '';
+                    for (const [img, ok] of readyImages) {
+                        if (!img.isConnected) continue;
+
+                        const parent = img.parentElement;
+                        if (!parent) continue;
+
+                        parent.classList.remove('loading');
+                        parent.classList.toggle('error', !ok);
+                        if (ok) {
+                            // parent.style.backgroundColor = '';
+                            parent.style.backgroundImage = '';
                         }
-                    });
+                    }
                 });
             }, 180);
         }
@@ -7822,13 +7830,13 @@ function init() {
     document.body.addEventListener('pointerdown', onBodyPointerDown, { passive: true });
     document.body.addEventListener('focus', onBodyFocus, { capture: true, passive: true });
     document.body.addEventListener('pointerover', onBodyPointerOver, { passive: true });
-    document.body.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
-    document.body.addEventListener('canplay', onMediaElementLoaded, { capture: true, passive: true });
-    document.body.addEventListener('error', onMediaElementLoaded, { capture: true, passive: true });
     document.body.addEventListener('dragover', onDragover);
     document.body.addEventListener('drop', onDrop);
     document.body.addEventListener('dragenter', onDragenter);
     document.body.addEventListener('dragleave', onDragleave);
+    document.addEventListener('load', onMediaElementLoaded, { capture: true, passive: true });
+    document.addEventListener('canplay', onMediaElementLoaded, { capture: true, passive: true });
+    document.addEventListener('error', onMediaElementLoaded, { capture: true, passive: true });
     document.addEventListener("visibilitychange", onVisibilityChange, { passive: true });
     document.addEventListener('dragstart', onDragstart);
     document.addEventListener('scroll', onScroll, { passive: true });
