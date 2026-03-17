@@ -1,6 +1,8 @@
 (function initCivitaiExtensionProxyAPI() {
     const CIVITAI_ORIGIN = "https://civitai.com";
 
+    window.dispatchEvent(new CustomEvent('ACTIVATE_CIVITAI_BRIDGE'));
+
     let isBridgeReady = false;
     window.extension_civitaiExtensionProxyAPI_vertsion = 3;
 

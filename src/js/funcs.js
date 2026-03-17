@@ -145,31 +145,48 @@ function parseParams(paramString) {
     }
 }
 
+const TIME_UNITS = [
+    [31536000, 'year'],
+    [2592000,  'month'],
+    [604800,   'week'],
+    [86400,    'day'],
+    [3600,     'hour'],
+    [60,       'minute'],
+    [1,        'second'],
+];
+function pluralIndex(n) {
+    const n10 = n % 10;
+    const n100 = n % 100;
+    return (n10 === 1 && n100 !== 11) ? 0 : (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) ? 1 : 2;
+}
 function timeAgo(seconds) {
-    const ago = [
-        [ 31536000, 'year' ],
-        [ 2592000, 'month' ],
-        [ 604800, 'week' ],
-        [ 86400, 'day' ],
-        [ 3600, 'hour' ],
-        [ 60, 'minute' ],
-        [ 1, 'second' ],
-    ];
-    const baseString = seconds < 0 ? (window.languagePack?.time?.unitAfter ?? 'in %n %unit') : (window.languagePack?.time?.unitAgo ?? '%n %unit ago');
-    if (seconds < 0) seconds = Math.abs(seconds);
-    const i = seconds > 31536000 ? 0 : seconds > 2592000 ? 1 : seconds > 604800 ? 2 : seconds > 86400 ? 3 : seconds > 3600 ? 4 : seconds > 60 ? 5 : 6;
-    const n = Math.floor(seconds / ago[i][0]);
-    if (n === 0) return window.languagePack?.time?.now ?? 'now';
-    const unit = window.languagePack?.units?.[ago[i][1]]?.[(n % 10 === 1 && n % 100 !== 11 ? 0 : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 1 : 2)] ?? ago[i][1];
-    return baseString.replace('%n', n).replace('%unit', unit);
+    const lang = window.languagePack?.time;
+
+    if (seconds === 0) return lang?.now ?? 'now';
+
+    const future = seconds < 0;
+    let s = future ? -seconds : seconds;
+
+    const base = future ? (lang?.unitAfter ?? 'in %n %unit') : (lang?.unitAgo ?? '%n %unit ago');
+
+    for (let i = 0; i < TIME_UNITS.length; i++) {
+        const [step, key] = TIME_UNITS[i];
+        if (s >= step) {
+            const n = Math.floor(s / step);
+            const forms = window.languagePack?.units?.[key];
+            const unit = forms?.[pluralIndex(n)] ?? key;
+
+            return base.replace('%n', n).replace('%unit', unit);
+        }
+    }
+
+    return lang?.now ?? 'now';
 }
 
 function pluralize(count, [one, few, many]) {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-
-    if (mod10 === 1 && mod100 !== 11) return one;
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+    const i = pluralIndex[count];
+    if (i === 0) return one;
+    if (i === 1) return few;
     return many;
 }
 
@@ -267,6 +284,182 @@ function tryParseLocalStorageJSON(key, errorValue, fromSessionStorage = false) {
         return JSON.parse((fromSessionStorage ? sessionStorage : localStorage).getItem(key)) ?? errorValue;
     } catch(_) {
         return errorValue;
+    }
+}
+
+class Ticker {
+    static #heap = [];
+    static #timer = null;
+    static #paused = false;
+    static #next = null;
+
+    // ---------- public API ----------
+
+    static add(callback, options) {
+        const item = this.#createItem(callback, options);
+        this.#heapPush(item);
+        if (!this.#paused) this.#schedule();
+        return item;
+    }
+
+    static remove(item) {
+        item.cancelled = true;
+        delete item.callback;
+    }
+
+    static update(item, options) {
+        options = this.#parseOptions(options);
+        if (!options) throw new Error("Ticker: invalid options");
+
+        const { step, next } = options;
+        const newItem = { callback: item.callback, step, next, cancelled: false };
+
+        this.remove(item);
+        this.#heapPush(newItem);
+        if (!this.#paused) this.#schedule();
+        return newItem;
+    }
+
+    static pause() {
+        if (this.#paused) return;
+        this.#paused = true;
+        if (this.#timer !== null) {
+            clearTimeout(this.#timer);
+            this.#timer = null;
+        }
+    }
+
+    static resume() {
+        if (!this.#paused) return;
+        this.#paused = false;
+        this.#run(Date.now()); // catch-up
+    }
+
+    // ---------- internal ----------
+
+    static #parseOptions(options) {
+        if (!options || typeof options !== "object") return null;
+
+        const now = Date.now();
+
+        let next;
+        if ("every" in options) {
+            const step = options.every;
+            if ( typeof step !== "number" || !Number.isFinite(step) || step <= 0) return null;
+
+            next = now - (now % step) + step;
+            return { step, next };
+        }
+
+        if ("at" in options) {
+            next = options.at;
+            if (typeof next !== "number" || !Number.isFinite(next)) return null;
+
+            return { step: 0, next };
+        }
+
+        return null;
+    }
+
+    static #createItem(callback, options) {
+        options = this.#parseOptions(options);
+        if (!options) throw new Error("Ticker: invalid options");
+
+        const { step, next } = options;
+        return { callback, step, next, cancelled: false };
+    }
+
+    static #schedule() {
+        if (this.#paused) return;
+
+        const item = this.#heapPeek();
+        if (!item) return;
+
+        if (this.#timer !== null) {
+            if (item.next >= this.#next) return;
+            clearTimeout(this.#timer)
+            this.#timer = null;
+        }
+
+        this.#next = item.next;
+
+        const now = Date.now();
+        const delay = Math.max(100, item.next - now);
+
+        this.#timer = setTimeout(() => {
+            this.#timer = null;
+            this.#run(Date.now());
+        }, delay);
+    }
+
+    static #run(now) {
+        while (true) {
+            const item = this.#heapPeek();
+            if (!item || item.next > now) break;
+
+            this.#heapPop();
+
+            if (item.cancelled) continue;
+
+            let next = item.callback(now) ?? null;
+
+            if (next === null && item.step > 0) {
+                // interval: recalculation taking into account the missed
+                const missed = Math.floor((now - item.next) / item.step) + 1;
+                next = item.next + missed * item.step;
+            }
+
+            if (next !== null) {
+                item.next = Math.max(next, now + 1);
+                this.#heapPush(item);
+            }
+        }
+
+        this.#schedule();
+    }
+
+    // ---------- min-heap ----------
+
+    static #heapPeek() {
+        return this.#heap[0];
+    }
+
+    static #heapPush(item) {
+        const h = this.#heap;
+        h.push(item);
+        let i = h.length - 1;
+
+        while (i > 0) {
+            const p = (i - 1) >> 1;
+            if (h[p].next <= item.next) break;
+            h[i] = h[p];
+            i = p;
+        }
+
+        h[i] = item;
+    }
+
+    static #heapPop() {
+        const h = this.#heap;
+        const top = h[0];
+        const last = h.pop();
+        if (!h.length) return top;
+
+        let i = 0;
+        while (true) {
+            let l = i * 2 + 1;
+            let r = l + 1;
+            if (l >= h.length) break;
+
+            let c = r < h.length && h[r].next < h[l].next ? r : l;
+            if (h[c].next >= last.next) break;
+
+            h[i] = h[c];
+            i = c;
+        }
+
+        h[i] = last;
+        return top;
     }
 }
 
@@ -1006,9 +1199,9 @@ class MasonryLayout {
         return layer;
     }
 
-    #drawItem(item, isFirstDraw = false) {
+    #drawItem(item, forceSync = false) {
         if (!item.element) {
-            this.#queueAdd(item, isFirstDraw); // gen element
+            this.#queueAdd(item, forceSync); // gen element
 
             item.element.setAttribute('tabIndex', -1);
             item.element.setAttribute('data-visc-id', item.id);
@@ -1407,181 +1600,306 @@ class MasonryLayout {
 }
 
 class InfiniteCarousel {
-    #currentIndex = 0;
-    #generator;
-    #isAnimating = false;
-    #items = [];
-    #visibleItems = new Set();
-    #options = {};
-    #carouselWrap;
-    #itemsListWrap;
-    #onScroll;
-    #onElementRemove;
-    #carouselCurrentIndexElement;
+    #options;
+    #currentIndex;
+    #len;
+    #items;
+    #renderedItems;
+    #height;
+    #totalWidth;
+    #widths;
+    #prefix;
+    #offsetCorrection;
+    #container;
+    #track;
+    #counter;
 
     constructor(list, options) {
-        this.#options.itemWidth = options.itemWidth || 450;
-        this.#options.visibleCount = options.visibleCount || 1;
-        this.#options.gap = options.gap ?? 12;
+        this.#options = {
+            gap: options.gap ?? 12,
+            viewportWidth: options.viewportWidth ?? 800,
+            visibleCount: options.visibleCount ?? 3,
+            onElementRemove: options.onElementRemove,
+            onScroll: options.onScroll,
+            generator: options.generator
+        };
         this.#currentIndex = options.active ?? 0;
-        this.#onScroll = options.onScroll;
-        this.#onElementRemove = options.onElementRemove;
-        this.#generator = options.generator;
-
-        list.forEach(({ id = this.#items.length, data, element, width, height, isWide = false }) => {
-            const aspectRatio = width / height;
-            const item = {
-                id,
-                data,
-                aspectRatio,
-                isWide,
-                inDOM: false
-            };
-
-            if (element) {
-                const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
-                const itemHeight = itemWidth / aspectRatio;
-                item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px; height: ${itemHeight}px; contain-intrinsic-size: ${itemWidth}px ${itemHeight}px;` });
-                item.element.appendChild(element);
-            }
-
-            this.#items.push(item);
+        this.#renderedItems = new Map();
+        this.#items = list.map(item => {
+            const ratio = Math.max(0.5, Math.min(2.0, item.aspectRatio));
+            return { ...item, ratio };
         });
+        this.#len = this.#items.length;
 
-        const carouselCells = this.#items.reduce((sum, item) => sum + (item.isWide ? 2 : 1), 0);
-        const carouselWidth = Math.min(this.#options.visibleCount, carouselCells) * (this.#options.itemWidth + this.#options.gap) - this.#options.gap;
-        this.#carouselWrap = createElement('div', { class: 'carousel', style: `width: ${carouselWidth}px;` });
-        this.#itemsListWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-items', style: `--gap: ${this.#options.gap}px;` });
+        const n = this.#options.visibleCount;
+        const totalGaps = (n - 1) * this.#options.gap;
+        const availableWidth = this.#options.viewportWidth - totalGaps;
 
-        if (carouselCells > this.#options.visibleCount) {
-            const carouselPrev = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'prev' });
-            const carouselNext = insertElement('button', this.#carouselWrap, { class: 'carousel-button', 'data-direction': 'next' });
-            carouselPrev.appendChild(getIcon('arrow_left'));
-            carouselNext.appendChild(getIcon('arrow_right'));
-            carouselPrev.addEventListener('click', () => this.scrollTo(-1), { passive: true });
-            carouselNext.addEventListener('click', () => this.scrollTo(1), { passive: true });
-            const indexElementWrap = insertElement('div', this.#carouselWrap, { class: 'carousel-button carousel-current-index' });
-            this.#carouselCurrentIndexElement = insertElement('span', indexElementWrap);
-            this.#carouselCurrentIndexElement.textContent = this.#getVisibleIndexes(this.#currentIndex).map(i => i + 1).join(',');
-            indexElementWrap.appendChild(document.createTextNode(' / '));
-            insertElement('span', indexElementWrap, undefined, this.#items.length);
+        let sum = 0;
+        for (let i = 0; i < n; i++) {
+            sum += this.#items[i % this.#len].ratio;
         }
 
-        this.updateVisibleElements(this.#currentIndex, this.#options.visibleCount);
+        let maxSum = sum;
 
-        return this.#carouselWrap;
+        for (let i = 1; i < this.#len; i++) {
+            sum += this.#items[(i + n - 1) % this.#len].ratio;
+            sum -= this.#items[i - 1].ratio;
+            if (sum > maxSum) maxSum = sum;
+        }
+
+        this.#height = availableWidth / maxSum;
+        this.#widths = this.#items.map(it => this.#height * it.ratio);
+        this.#prefix = [0];
+        for (let i = 0; i < this.#len; i++) {
+            this.#prefix[i + 1] = this.#prefix[i] + this.#widths[i] + this.#options.gap;
+        }
+        this.#totalWidth = this.#prefix[this.#len];
+
+        this.#items.forEach((item, i) => {
+            item.width = this.#widths[i];
+            item.height = this.#height;
+        });
+
+        // init
+        this.#container = createElement('div', { class: 'carousel' });
+        this.#container.style.width = this.#options.viewportWidth + 'px';
+        this.#container.style.height = this.#height + 'px';
+
+        this.#track = insertElement('div', this.#container, { class: 'carousel-items' });
+        this.#counter = insertElement('div', this.#container, { class: 'carousel-counter' });
+
+        const prev = insertElement('button', this.#container, { class: 'carousel-button prev' });
+        prev.appendChild(getIcon('arrow_left'));
+        prev.onclick = () => this.move(-1);
+
+        const next = insertElement('button', this.#container, { class: 'carousel-button next' });
+        next.appendChild(getIcon('arrow_right'));
+        next.onclick = () => this.move(1);
+
+        this.update(true);
     }
 
-    updateVisibleElements(startIndex, itemsCount, direction = null) {
-        const itemsToDisplay = [];
-        const totalItems = this.#items.length;
-        let displayedCells = 0;
-        let i = 0;
+    get element() {
+        return this.#container;
+    }
 
-        // Collect elements by number of cells
-        while (displayedCells < itemsCount && i < totalItems * 2) {
-            const index = (startIndex + i) % totalItems;
-            const item = this.#items[index];
+    #getCircularIndex(i) {
+        return ((i % this.#len) + this.#len) % this.#len;
+    }
 
-            if (!itemsToDisplay.includes(item)) {
-                itemsToDisplay.push(item);
-                displayedCells += item.isWide ? 2 : 1;
-            }
+    #getX(i) {
+        const cycle = Math.floor(i / this.#len);
+        const idx = this.#getCircularIndex(i);
+        return cycle * this.#totalWidth + this.#prefix[idx];
+    }
 
+    move(step) {
+        this.#currentIndex += step;
+
+        // normalization
+        if (Math.abs(this.#currentIndex) > this.#len * 100) {
+            const posBefore = this.#getX(this.#currentIndex);
+
+            this.#currentIndex = this.#getCircularIndex(this.#currentIndex);
+
+            const posAfter = this.#getX(this.#currentIndex);
+            const delta = posBefore - posAfter;
+
+            this.#track.style.transition = 'none';
+            this.#offsetCorrection = (this.#offsetCorrection || 0) + delta;
+
+            this.#track.offsetHeight; // reflow
+            this.#track.style.transition = '';
+        }
+
+        this.update();
+    }
+
+    update(initial = false) {
+        const options = this.#options;
+        const baseOffset = -this.#getX(this.#currentIndex);
+
+        const offset = baseOffset + (this.#offsetCorrection || 0);
+        this.#track.style.transform = `translateX(${offset}px)`;
+
+        const visible = new Set();
+
+        // --- right ---
+        let x = 0, i = this.#currentIndex;
+        while (x < options.viewportWidth * 2) {
+            visible.add(i);
+            x += this.#widths[this.#getCircularIndex(i)] + options.gap;
             i++;
         }
 
-        // Remove those that should no longer be there
-        for (const item of this.#visibleItems) {
-            if (!itemsToDisplay.includes(item)) {
-                this.#removeItemFromDOM(item);
-                this.#visibleItems.delete(item);
+        // --- left ---
+        x = 0; i = this.#currentIndex - 1;
+        while (x < options.viewportWidth) {
+            visible.add(i);
+            x += this.#widths[this.#getCircularIndex(i)] + options.gap;
+            i--;
+        }
+
+        // --- remove ---
+        for (const [idx, item] of this.#renderedItems) {
+            if (!visible.has(idx)) {
+                options.onElementRemove?.(item.element, item.data);
+                item.wrapper.remove();
+                this.#renderedItems.delete(idx);
             }
         }
 
-        // Add the missing ones in the correct order
-        const usePrepend = direction && direction < 0;
-        if (usePrepend) itemsToDisplay.reverse();
-
-        itemsToDisplay.forEach(item => {
-            if (!this.#visibleItems.has(item)) {
-                this.#addItemToDOM(item, usePrepend);
-                this.#visibleItems.add(item);
+        // --- render ---
+        for (const idx of visible) {
+            if (!this.#renderedItems.has(idx)) {
+                this.#renderItem(idx);
             }
-        });
-    }
-
-    #addItemToDOM(item, usePrepend = false) {
-        if (!item.element) {
-            const itemWidth = item.isWide ? this.#options.itemWidth * 2 + this.#options.gap : this.#options.itemWidth;
-            const itemHeight = itemWidth / item.aspectRatio;
-            item.element = createElement('div', { class: 'carousel-item', style: `width: ${itemWidth}px; height: ${itemHeight}px; contain-intrinsic-size: ${itemWidth}px ${itemHeight}px;` });
-            item.element.appendChild(this.#generator(item.data));
-        }
-        if (usePrepend) this.#itemsListWrap.prepend(item.element);
-        else this.#itemsListWrap.appendChild(item.element);
-        item.inDOM = true;
-    }
-
-    #removeItemFromDOM(item) {
-        item.inDOM = false;
-        item.element.remove();
-        this.#onElementRemove?.(item.element, item.data);
-        delete item.element;
-    }
-
-    #getVisibleIndexes(startIndex) {
-        const visibleIndexes = [];
-        const totalItems = this.#items.length;
-        for (let i = 0; i < this.#options.visibleCount; i++) {
-            const index = (startIndex + i) % totalItems;
-            if (this.#items[index].isWide) i++;
-            visibleIndexes.push(index);
-        }
-        return visibleIndexes;
-    }
-
-    scrollTo(direction, animation = true) {
-        if (this.#isAnimating) return;
-
-        const totalItems = this.#items.length;
-        const newIndex = (totalItems + this.#currentIndex + direction) % totalItems;
-        const visibleIndexes = this.#getVisibleIndexes(this.#currentIndex);
-        const newVisibleIndexes = this.#getVisibleIndexes(newIndex);
-        if (this.#carouselCurrentIndexElement) this.#carouselCurrentIndexElement.textContent = newVisibleIndexes.map(i => i + 1).join(',');
-
-        if (animation) {
-            this.#isAnimating = true;
-            const startIndex = direction > 0 ? this.#currentIndex : newIndex;
-
-            let addedCells = 0;
-            let removedCells = 0;
-            for (const i of visibleIndexes) {
-                if (!newVisibleIndexes.includes(i)) removedCells += (this.#items[i].isWide ? 2 : 1);
-            }
-            for (const i of newVisibleIndexes) {
-                if (!visibleIndexes.includes(i)) addedCells += (this.#items[i].isWide ? 2 : 1);
-            }
-            const shiftedCells = !addedCells || !removedCells ? Math.max(addedCells, removedCells) : Math.min(addedCells, removedCells);
-            const shiftX = shiftedCells * (this.#options.itemWidth + this.#options.gap);
-
-            this.updateVisibleElements(startIndex, this.#options.visibleCount + shiftedCells, direction);
-            animateElement(this.#itemsListWrap, {
-                keyframes: {
-                    transform: direction > 0 ? [ 'translateX(0px)', `translateX(${- shiftX}px)` ] : [ `translateX(${- shiftX}px)`, 'translateX(0px)' ]
-                },
-                duration: 300,
-                easing: 'cubic-bezier(0.33, 1, 0.68, 1)'
-            }).then(() => {
-                this.updateVisibleElements(newIndex, this.#options.visibleCount);
-                this.#isAnimating = false;
-            });
-        } else {
-            this.updateVisibleElements(newIndex, this.#options.visibleCount);
         }
 
-        this.#currentIndex = newIndex;
-        const newItem = this.#items[this.#currentIndex];
-        this.#onScroll?.(newItem.id);
+        // --- counter ---
+        const visibleReal = [];
+        const viewportStart = this.#getX(this.#currentIndex);
+        const viewportEnd = viewportStart + options.viewportWidth;
+        for (const idx of visible) {
+            const realIndex = this.#getCircularIndex(idx);
+            const itemStart = this.#getX(idx);
+            const itemEnd = itemStart + this.#widths[realIndex];
+            const isVisible = itemEnd > viewportStart && itemStart < viewportEnd;
+            if (isVisible) visibleReal.push(realIndex);
+        }
+
+        const parts = [];
+        let segmentStart = visibleReal[0];
+        let prev = visibleReal[0];
+        for (let i = 1; i < visibleReal.length; i++) {
+            const curr = visibleReal[i];
+            if (curr !== prev + 1) {
+                parts.push([segmentStart, prev]);
+                segmentStart = curr;
+            }
+            prev = curr;
+        }
+        parts.push([segmentStart, prev]);
+        const format = ([s, e]) => s === e ? `${s + 1}` : `${s + 1}–${e + 1}`;
+
+        this.#counter.textContent = parts.map(format).join(', ') + ` / ${this.#len}`;
+
+        // --- onScroll ---
+        const realIndex = this.#getCircularIndex(this.#currentIndex);
+        options.onScroll?.(this.#items[realIndex]?.id);
+    }
+
+    #renderItem(virtualIndex) {
+        const realIndex = this.#getCircularIndex(virtualIndex);
+        const item = this.#items[realIndex];
+        const x = this.#getX(virtualIndex);
+
+        const wrapper = createElement('div', { class: 'carousel-item' });
+        wrapper.style.width = this.#widths[realIndex] + 'px';
+        wrapper.style.height = this.#height + 'px';
+        wrapper.style.containIntrinsicSize = `${this.#widths[realIndex]}px ${this.#height}px`;
+        wrapper.style.transform = `translateX(${x}px)`;
+        const content = this.#options.generator(item);
+        wrapper.appendChild(content);
+        this.#track.appendChild(wrapper);
+
+        this.#renderedItems.set(virtualIndex, { wrapper, element: content, data: item });
     }
 }
+
+// ========================
+//     Custom elements
+// ========================
+
+class RelativeTime extends HTMLElement {
+    static observedAttributes = ["datetime"];
+
+    #target;
+    #tickHandle;
+
+    constructor(datetime = null) {
+        super();
+        this.#target = null;
+        if (datetime !== null) this.setAttribute('datetime', datetime);
+    }
+
+    #tick(now) {
+        if (!this.isConnected) {
+            this.#clear();
+            return null;
+        }
+
+        return this.#update(now);
+    }
+
+    #clear() {
+        if (this.#tickHandle) Ticker.remove(this.#tickHandle);
+        this.#tickHandle = null;
+    }
+
+    connectedCallback() {
+        this.#parse();
+        this.#clear();
+        this.#tickHandle = Ticker.add(now => this.#tick(now), { every: 1000 });
+    }
+
+    disconnectedCallback() {
+        this.#clear();
+    }
+
+    attributeChangedCallback(name) {
+        if (name === "datetime") {
+            this.#parse();
+            const next = this.#update(Date.now());
+            if (this.#tickHandle) {
+                if (next !== null && this.#tickHandle.next !== next) this.#tickHandle = Ticker.update(this.#tickHandle, { at: next });
+                else if (next === null && this.#tickHandle.step !== 1000) this.#tickHandle = Ticker.update(this.#tickHandle, { every: 1000 });
+            } if (this.isConnected) {
+                this.#tickHandle = Ticker.add(now => this.#tick(now), next !== null ? { at: next } : { every: 1000 });
+            }
+        }
+    }
+
+    #parse() {
+        const value = this.getAttribute("datetime");
+        const t = value ? Date.parse(value) : NaN;
+        this.#target = Number.isFinite(t) ? t : null;
+    }
+
+    #update(now) {
+        if (this.#target === null) {
+            this.textContent = "—";
+            this.#clear();
+            return null;
+        }
+
+        const diffMs = this.#target - now;
+        const absMs = Math.abs(diffMs);
+        const nowSec = (now / 1000) | 0;
+        const targetSec = (this.#target / 1000) | 0;
+        const s = targetSec - nowSec;
+        this.textContent = timeAgo(-s);
+
+        // <= 1 minute -> refresh every second
+        if (absMs <= 60000) return null;
+
+        if (absMs >= 86400000) {
+            this.#clear();
+            return null;
+        }
+
+        const unitMs = absMs >= 86400000 ? 86400000 : absMs >= 3600000 ? 3600000 : 60000;
+        const rem = absMs % unitMs;
+        const stepMs = rem === 0 ? unitMs : rem;
+        const next = now + stepMs;
+
+        return next > now ? next : now + 1000;
+    }
+
+    get datetimeAsNumber() {
+        return this.#target;
+    }
+}
+
+customElements.define('relative-time', RelativeTime);

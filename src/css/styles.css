@@ -607,11 +607,13 @@ body.prevent-all::before {
 .icon polyline,
 .icon polygon,
 .icon path {
+    display: block;
     stroke: var(--icon-color-stroke, none);
     fill: var(--icon-color-fill, none);
 }
 
 .icon use {
+    display: block;
     pointer-events: none;
 }
 
@@ -658,11 +660,11 @@ body.prevent-all::before {
 }
 
 .cards-loading,
-.page-loading {
+#app.page-loading {
     opacity: .5;
     pointer-events: none;
     user-select: none;
-    transition: 200ms 150ms ease-out;
+    transition: opacity 200ms 150ms ease-out;
 }
 
 #page-loading-bar {
@@ -1133,6 +1135,8 @@ footer a {
     margin-inline: auto;
     border-radius: var(--radius);
     overflow: hidden;
+
+    --controls-padding: 8px;
 }
 
 .carousel-items {
@@ -1140,8 +1144,12 @@ footer a {
     gap: var(--gap, 12px);
     flex-direction: row;
     max-width: 100%;
-    transition: 0s !important; /* TEMP */
-    /* transition: transform .3s ease; */
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    will-change: transform;
+    transition: transform .4s cubic-bezier(.27, 0, .27, 1);
 }
 
 .carousel-items::-webkit-scrollbar {
@@ -1149,9 +1157,13 @@ footer a {
 }
 
 .carousel-item {
-    position: relative;
-    flex-shrink: 0;
-    max-width: 100%;
+    position: absolute;
+    top: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
     contain: strict;
     border-radius: var(--radius);
 }
@@ -1162,26 +1174,9 @@ footer a {
     user-select: none;
 }
 
-.carousel-button.carousel-current-index {
-    position: absolute;
-    pointer-events: none;
-    user-select: none;
-    top: unset;
-    inset-block-end: .5em;
-    font-size: 1em;
-    height: 1em;
-    line-height: 1;
-    padding-block: .25em;
-    padding-inline: .5em;
-    inset-inline: 0;
-    color: var(--c-text-dark);
-    width: -moz-fit-content;
-    width: fit-content;
-    margin-inline: auto;
-}
-
+.carousel-counter,
 .carousel-button {
-    background-color: var(--c-bg);
+    background-color: var(--c-bg-gl);
     border-radius: var(--radius);
     position: absolute;
     display: block;
@@ -1194,27 +1189,37 @@ footer a {
     z-index: 272;
 }
 
-.carousel-button[data-direction]::after {
+.carousel-counter {
+    position: absolute;
+    top: unset;
+    right: var(--controls-padding);
+    bottom: var(--controls-padding);
+    font-size: .9em;
+    padding-block: .5em;
+    padding-inline: .75em;
+    font-family: monospace;
+    pointer-events: none;
+}
+
+.carousel-button.prev {
+    left: var(--controls-padding);
+}
+
+.carousel-button.next {
+    right: var(--controls-padding);
+}
+
+.carousel-button::after {
     content: '';
     position: absolute;
-    inset: -.5em;
-    inset-block: -4em;
-    z-index: -1;
-}
-
-.carousel-button[data-direction="prev"] {
-    left: .25em;
-}
-
-.carousel-button[data-direction="next"] {
-    right: .25em;
+    inset: calc(-1 * var(--controls-padding));
 }
 
 .carousel:hover .carousel-button {
     opacity: .7;
 }
 
-.carousel:hover .carousel-button.carousel-current-index {
+.carousel:hover .carousel-counter {
     opacity: 1;
 }
 
@@ -1324,13 +1329,39 @@ footer a {
     text-decoration: underline;
 }
 
-.model-description a:has(>img:only-child) {
+.model-description a.only-image {
     line-height: 0;
     font-size: 0;
+    position: relative;
 }
 
-.model-description a:has(>img:only-child)::after {
-    display: none;
+.model-description a.only-image::after {
+    position: absolute;
+    display: block;
+    margin: 0;
+    transform: none;
+    font-size: 24px;
+    inset-inline-end: .5em;
+    inset-block-start: .5em;
+    padding: .25em;
+    text-align: center;
+    background-color: var(--c-bg-dark-gl50);
+    border-radius: var(--radius);
+    width: 1em;
+    height: 1em;
+    opacity: .4;
+    transition: .1s ease-out;
+}
+
+.model-description a.only-image:focus-visible::after,
+.model-description a.only-image:hover::after {
+    opacity: 1;
+    background-color: var(--c-bg-light-gl);
+}
+
+.model-description a.only-image:focus-visible::after,
+.model-description a.only-image:focus-visible img {
+    outline: 2px solid var(--c-main-text);
 }
 
 .model-description code {
@@ -1417,6 +1448,10 @@ footer a {
     background-color: var(--c-bg);
     padding: 1em;
     max-width: calc(100% - 2em);
+}
+
+.model-version-description-wrap {
+    margin-block-start: 1em;
 }
 
 .model-version-description .badges {
@@ -1787,6 +1822,10 @@ hr.description-xl-item {
     color: var(--c-text);
 }
 
+.card .user-info {
+    display: flex;
+}
+
 .card .model-name,
 .card .user-info span {
     color: #fff;
@@ -1799,6 +1838,7 @@ hr.description-xl-item {
 
 .model-card .model-published-time,
 .image-card .image-created-time {
+    display: block;
     color: #e1e1e1;
     font-size: .9em;
     width: -moz-fit-content;
@@ -2432,7 +2472,7 @@ code.prompt-positive::before {
 }
 
 #load-more.inviewport-observed {
-    bottom: 80vh; /* An offset to trigger slightly earlier than the end of the list */
+    bottom: min(40%, 80vh); /* An offset to trigger slightly earlier than the end of the list */
 }
 
 #load-more.inviewport-observed .media-loading-indicator {
@@ -2547,6 +2587,7 @@ code.prompt-positive::before {
 
 .model-tags .model-category {
     background-color: transparent;
+    overflow: visible !important;
 }
 
 .model-tags .badge {
@@ -3415,7 +3456,7 @@ p .link-with-favicon .icon {
         opacity: .7;
     }
 
-    .carousel .carousel-button.carousel-current-index {
+    .carousel .carousel-button.carousel-counter {
         opacity: 1;
     }
 

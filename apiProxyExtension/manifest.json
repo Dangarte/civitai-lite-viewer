@@ -3,13 +3,28 @@
     "name": "CivitAI API Bridge Extension",
     "version": "1.0",
     "permissions": [
-        "declarativeNetRequest",
-        "webRequestBlocking"
+        "declarativeNetRequest"
     ],
     "host_permissions": [
-        "https://*civitai.com/*"
+        "https://civitai.com/*",
+        "https://*.civitai.com/*"
     ],
+    "background": {
+        "service_worker": "service_worker.js",
+        "type": "module"
+    },
     "content_scripts": [
+        {
+            "matches": [
+                "https://dangarte.github.io/civitai-lite-viewer/*"
+            ],
+            "world": "ISOLATED",
+            "run_at": "document_start",
+            "js": [
+                "content_main_isolated.js"
+            ],
+            "all_frames": false
+        },
         {
             "matches": [
                 "https://dangarte.github.io/civitai-lite-viewer/*"

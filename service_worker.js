@@ -133,7 +133,16 @@ function onFetch(e) { // Request interception
         const response = CacheManager.get(e.request, cacheName);
         return e.respondWith(response);
     }
-    if (!e.request.url.startsWith('https:') || e.request.destination === 'video') return; // Allow only from https and skip video
+
+    // Allow only from https
+    if (!e.request.url.startsWith('https:')) return;
+
+    // Skip video
+    if (e.request.destination === 'video') {
+        const request = clearRequestFromLocalParams(e.request);
+        e.respondWith(fetch(request));
+        return;
+    }
 
     // search in specific cache
     let response;
@@ -189,6 +198,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
     //     return CacheManager.get(editedRequest);
     // }
 
+    let originalResponse;
     try {
         const before = sParams.size;
         for (const key of SW_CONFIG.local_params) sParams.delete(key); // Removing unnecessary parameters
@@ -196,6 +206,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         const modified = before !== after;
         const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
         const fetchResponse = await specialFetch(modified ? requestWithoutLocalParams : request);
+        originalResponse = fetchResponse;
         if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
 
         let blob = await fetchResponse.blob();
@@ -245,7 +256,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
             CacheManager.put(request, response.clone(), cacheName);
             return response;
         }
-        return new Response('', { status: 500, statusText: 'Network Error' });
+        return originalResponse || new Response('', { status: 500, statusText: 'Network Error' });
     }
 }
 
@@ -518,12 +529,23 @@ function blurhashToPixelsBGRA(hash, width = 32, height = 32, punch = 1) {
     return pixels;
 }
 
+function clearRequestFromLocalParams(request) {
+    const url = new URL(request.url);
+    const sParams = url.searchParams;
+    const before = sParams.size;
+    for (const key of SW_CONFIG.local_params) sParams.delete(key); // Removing unnecessary parameters
+    const after = sParams.size;
+
+    if (before === after) return request;
+    return cloneRequestWithModifiedUrl(request, url.toString());
+}
+
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
-    const { method, headers, credentials, cache, redirect, referrer, integrity, keepalive } = originalRequest;
+    const { method, headers, credentials, cache, redirect, referrer, referrerPolicy, destination, integrity, keepalive } = originalRequest;
     let { mode } = originalRequest;
     if (mode === 'navigate') mode = 'same-origin'; // fix: Cannot construct a Request with a RequestInit whose mode member is set as 'navigate'.
 
-    const init = { method, headers, mode, credentials, cache, redirect, referrer, integrity, keepalive };
+    const init = { method, headers, mode, credentials, cache, redirect, referrer, referrerPolicy, destination, integrity, keepalive };
     if (method !== 'GET' && method !== 'HEAD') {
         init.body = originalRequest.body;
         init.duplex = 'half';

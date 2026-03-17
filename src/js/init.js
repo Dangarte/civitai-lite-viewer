@@ -1,7 +1,7 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 33,
+    version: 34,
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -60,6 +60,9 @@ const CONFIG = {
         models: 60,
         images: 180,
         articles: 60,
+    },
+    timers: {
+        cacheWaitMax: 100, // If an infinite feed returns a promise, wait at most N ms before rendering the loading indicator (to avoid flickering when using the network cache instead of the tab cache)
     },
     filters: {
         minPromptLength: 10,
@@ -126,7 +129,9 @@ const SETTINGS = {
     colorCorrection: true,
     showLogs: true,
     civitaiLinksAltClickByDefault: false,
-    disableRemixAutoload: false,    // Completely disables automatic loading of remix image
+    disableCrossorigin: false,      // disable adding crossorigin attr to img elements (opaque responses, impossible to scale)
+    disableRemixAutoload: false,    // Completely disables automatic loading of remix image (image full page)
+    disablePostAutoload: true,      // Completely disables automatic loading of post images (image full page)
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
     assumeListSameAsImage: true,    // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
@@ -967,8 +972,6 @@ class Controller {
             'SVD XT',
             'Seedream',
             'Seedance',
-            'Seedance 1.5',
-            'Seedance 2.0',
             'Sora 2',
             'Stable Cascade',
             'Veo 3',
@@ -1119,8 +1122,6 @@ class Controller {
             'Kling': ['video', 'closed', 'kuaishou', 'multilingual', 'censored'],
             'Vidu Q1': ['video', 'closed', 'shengshu', 'multilingual', 'censored'],
             'Seedance': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
-            'Seedance 1.5': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
-            'Seedance 2.0': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
             'LTXV2': ['video', 'weights', 'lightricks', 'multilingual'],
             'Other': ['misc']
         }
@@ -1193,6 +1194,7 @@ class Controller {
         urlCollections: /\/collections\/(\d+)/i,    // get collection id from civ url
         urlParamWidth: /\/width=\d+\//,             // /width=NUMBER/
         urlParamAnimFalse: /anim=false,?/,          // anim=false, or anim=false
+        urlEndsOnMp4: /.mp4$/,                      // ends on .mp4
     };
 
     static #pages = [
@@ -1420,6 +1422,7 @@ class Controller {
         // TODO: add transition animation
         const processNavigation = (result, loaded = false) => {
             if (result.element) {
+                document.getElementById('tooltip')?.remove();
                 this.appElement.textContent = '';
                 this.appElement.appendChild(result.element);
 
@@ -2038,6 +2041,23 @@ class Controller {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
             firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
+
+            if (!this.#isAppEmpty()) {
+                const promise = Promise.race([
+                    infinityScroll.promise,
+                    new Promise(r => setTimeout(r, CONFIG.timers.cacheWaitMax))
+                ])
+                .then(() => ({
+                    element: fragment,
+                    promise: infinityScroll.promise
+                }));
+
+                return {
+                    title: window.languagePack?.text?.articles ?? 'Articles',
+                    promise
+                };
+            }
+
         }
 
         return { 
@@ -2097,7 +2117,7 @@ class Controller {
                 categoryLink.classList.add('model-category');
                 modelTagsWrap.prepend(categoryLink);
 
-                const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+                const badgePublishedAt = createElement('relative-time', { class: 'badge model-category separated-right', 'lilpipe-text': publishedAt.toLocaleString(), datetime: publishedAt.toISOString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
                 modelTagsWrap.prepend(badgePublishedAt);
             };
             if (this.#state.article_tags || article.tags.join('').length <= 80) updateTags(article.tags);
@@ -2127,7 +2147,7 @@ class Controller {
             // Article cover
             if (article.coverImage) {
                 const modelPreviewWrap = insertElement('div', page, { class: 'model-preview article-preview' });
-                const mediaElement = this.#genMediaElement({ media: article.coverImage, width: Math.min(CONFIG.appearance.appWidth, this.windowWidth), taget: 'model-preview', allowAnimated: true });
+                const mediaElement = this.#genMediaElement({ media: article.coverImage, width: Math.min(CONFIG.appearance.appWidth, this.windowWidth), target: 'model-preview', allowAnimated: true });
                 modelPreviewWrap.appendChild(mediaElement);
                 this.#genMediaPreviewFromPrevPage(mediaElement, article.coverImage.id);
             }
@@ -2210,21 +2230,23 @@ class Controller {
             if (pageNavigation !== this.#pageNavigation) return;
             this.#log('Loaded image info', media);
             this.#cache.images.set(`${imageId}`, media);
-            if (!media) throw new Error('No Meta');
+            if (!media) throw new Error('No Meta.');
+            if (String(media.id) !== String(imageId)) throw new Error(`Invalid id, should be ${imageId}, but returned ${media.id}.`);
 
             const { element: imageFullPage, title } = this.#genImageFullPage(media);
             appContent.appendChild(imageFullPage);
             return { element: appContent, title, headerFormat: 'mini', footerBehavior: 'static' };
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
+            console.error(error);
             console.error('Error:', error?.message ?? error);
             appContent.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
 
-            if (error?.message === 'No Meta') {
-                appContent.style.flexDirection = 'column';
-                insertElement('p', appContent, { class: 'error-text' }, 'Some images cannot be retrieved via API, you can try opening this image on the original site');
-                insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
-            }
+            if (error?.message === 'No Meta.') insertElement('p', appContent, { class: 'error-text' }, 'Some images cannot be retrieved via API, you can try opening this image on the original site');
+            if (error?.message.startsWith('Invalid id,')) insertElement('p', appContent, { class: 'error-text' }, 'The API returned the wrong image, you can try opening this image on the original site');
+            appContent.style.display = 'flex';
+            appContent.style.flexDirection = 'column';
+            insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
             return { element: appContent };
         });
 
@@ -2238,6 +2260,22 @@ class Controller {
         const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId, modelVersionId, collectionId, username, userId, postId });
         appContentWide.appendChild(imagesList);
         appContentWide.appendChild(this.#genScrollToTopButton());
+
+        if (imagesListPromise instanceof Promise && !this.#isAppEmpty()) {
+            const promise = Promise.race([
+                imagesListPromise,
+                new Promise(r => setTimeout(r, CONFIG.timers.cacheWaitMax))
+            ])
+            .then(() => ({
+                element: appContentWide,
+                promise: imagesListPromise
+            }));
+
+            return {
+                title: window.languagePack?.text?.images ?? 'Images',
+                promise
+            };
+        }
 
         return {
             element: appContentWide,
@@ -2291,14 +2329,15 @@ class Controller {
 
             })[collection.type]?.bind(this)({ collectionId: collection.id }) ?? null;
 
-            if (itemsList.element) {
-                appContentWide.appendChild(itemsList.element);
-            }
+            if (itemsList.element) appContentWide.appendChild(itemsList.element);
 
             let promise = itemsList.promise;
 
             if (promise instanceof Promise) {
-                promise = promise.then(() => ({ element: fragment, title }));
+                promise = promise.then(result => {
+                    if (result.element) appContentWide.appendChild(result.element);
+                    return { element: fragment, title };
+                });
                 return { promise };
             } else return { element: fragment, title };
         };
@@ -2366,14 +2405,15 @@ class Controller {
 
             const itemsList = this.gotoImages({ postId: post.id });
 
-            if (itemsList.element) {
-                appContentWide.appendChild(itemsList.element);
-            }
+            if (itemsList.element) appContentWide.appendChild(itemsList.element);
 
             let promise = itemsList.promise;
 
             if (promise instanceof Promise) {
-                promise = promise.then(() => ({ element: fragment, title }));
+                promise = promise.then(result => {
+                    if (result.element) appContentWide.appendChild(result.element);
+                    return { element: fragment, title };
+                });
                 return { promise };
             } else return { element: fragment, title };
         };
@@ -2677,6 +2717,22 @@ class Controller {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
             firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
+
+            if (!this.#isAppEmpty()) {
+                const promise = Promise.race([
+                    infinityScroll.promise,
+                    new Promise(r => setTimeout(r, CONFIG.timers.cacheWaitMax))
+                ])
+                .then(() => ({
+                    element: fragment,
+                    promise: infinityScroll.promise
+                }));
+
+                return {
+                    title: window.languagePack?.text?.models ?? 'Models',
+                    promise
+                };
+            }
         }
 
         return {
@@ -2951,7 +3007,7 @@ class Controller {
                 modelTagsWrap.prepend(categoryLink);
             }
 
-            const badgePublishedAt = createElement('div', { class: 'badge model-category separated-right', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`) }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+            const badgePublishedAt = createElement('relative-time', { class: 'badge model-category separated-right', 'lilpipe-text': escapeHtml(`${window.languagePack?.text?.Updated ?? 'Updated'}: ${publishedAt.toLocaleString()}`), datetime: publishedAt.toISOString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
             modelTagsWrap.prepend(badgePublishedAt);
         };
         if (this.#state.model_tags || model.tags.join('').length <= 80) updateTags(model.tags);
@@ -3006,14 +3062,12 @@ class Controller {
             // const rawImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
             // const filteredImages = this.#filterImages(rawImages, { results: true });
             // const previewImages = filteredImages.filter(it => it.ok).map(it => it.item);
-            const isWideMinRatio = 1.38;
-            const generateMediaPreview = media => {
-                const ratio = this.#round(media.width/media.height);
-                const item = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
-                const itemWidth = ratio >= isWideMinRatio && CONFIG.appearance.modelPage.carouselItemsCount > 1 ? CONFIG.appearance.modelPage.carouselItemWidth * 2 : CONFIG.appearance.modelPage.carouselItemWidth;
-                const mediaElement = this.#genMediaElement({ media, width: itemWidth, height: undefined, loading: undefined, taget: 'model-preview', allowAnimated: true });
-                item.appendChild(mediaElement);
-                return item;
+            const generateMediaPreview = item => {
+                const media = item.data;
+                const element = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
+                const mediaElement = this.#genMediaElement({ media, width: item.width, height: item.height, loading: undefined, target: 'model-preview', allowAnimated: true });
+                element.appendChild(mediaElement);
+                return element;
             };
             const onCarouselScroll = currentId => {
                 // In this place, often, the images do not have normal ids...
@@ -3024,9 +3078,7 @@ class Controller {
             const previewList = previewImages.map((media, index) => {
                 const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
                 if (!media.id && id) media.id = id;
-                const element = index < CONFIG.appearance.modelPage.carouselItemsCount ? generateMediaPreview(media) : null;
-                const isWide = media.width/media.height >= isWideMinRatio && CONFIG.appearance.modelPage.carouselItemsCount > 1;
-                return { id: media.id, data: media, element, width: media.width, height: media.height, isWide };
+                return { id: media.id, data: media, aspectRatio: this.#round(media.width/media.height) };
             });
 
             // Try to insert a picture from the previous page, if available
@@ -3038,16 +3090,16 @@ class Controller {
 
 
             const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
-            const carouselWrap = new InfiniteCarousel(previewList, {
+            const carousel = new InfiniteCarousel(previewList, {
                 gap: CONFIG.appearance.modelPage.carouselGap,
-                itemWidth: CONFIG.appearance.modelPage.carouselItemWidth,
+                viewportWidth: CONFIG.appearance.modelPage.carouselItemWidth * CONFIG.appearance.modelPage.carouselItemsCount,
                 generator: generateMediaPreview,
                 active: carouselCurrentId !== -1 ? carouselCurrentId : 0,
                 onElementRemove: this.#onCardRemoved.bind(this),
                 onScroll: onCarouselScroll,
                 visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
             });
-            modelPreviewWrap.appendChild(carouselWrap);
+            modelPreviewWrap.appendChild(carousel.element);
         }
 
         const hideLongDescription = (descriptionId, el) => {
@@ -3128,12 +3180,13 @@ class Controller {
 
         // Version description
         if (modelVersion.description) {
+            const modelVersionWrap = insertElement('div', modelVersionDescription, { class: 'model-version-description-wrap' });
             const description = this.#analyzeModelDescriptionString(modelVersion.description);
             const modelVersionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelVersionFragment, cache);
             if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
-            modelVersionDescription.appendChild(modelVersionFragment);
-            hideLongDescription('modelVersion', modelVersionDescription);
+            modelVersionWrap.appendChild(modelVersionFragment);
+            hideLongDescription('modelVersion', modelVersionWrap);
         }
 
         // Model descrition
@@ -3163,13 +3216,14 @@ class Controller {
 
         const carouselItems = [];
         const mediaGenerator = item => {
-            const mediaElement = this.#genMediaElement({ media: item, className: 'media-full-preview', width: item.width, target: 'full-image', autoplay: true, original: true, controls: true, decoding: 'async', playsinline: false, setMediaElementOriginalSizes: true });
+            const media = item.data;
+            const mediaElement = this.#genMediaElement({ media, className: 'media-full-preview', width: media.width, target: 'full-image', autoplay: true, original: true, controls: true, decoding: 'async', playsinline: false, setMediaElementOriginalSizes: true });
             return mediaElement;
         };
         if (postInfo.size > 1) {
             postInfo.forEach(item => {
                 mediaById.set(item.id, item);
-                carouselItems.push({ id: item.id, data: item, width: item.width, height: item.height, index: carouselItems.length });
+                carouselItems.push({ id: item.id, data: item, aspectRatio: this.#round(item.width/item.height), index: carouselItems.length });
             });
         }
 
@@ -3180,7 +3234,7 @@ class Controller {
             const creator = this.#genUserBlock({ userId: media.userId, username: media.username, url: `#images?username=${media.username}` });
             if (media.createdAt) {
                 const createdAt = new Date(media.createdAt);
-                insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
+                insertElement('relative-time', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString(), datetime: createdAt.toISOString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
             }
             const draggableTitleBase = window.languagePack?.text?.images_from ?? 'Images from {username}';
             creator.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', media.username || 'user'));
@@ -3210,9 +3264,22 @@ class Controller {
             // Post link
             if (!cachedPostInfo || cachedPostInfo.size > 1) {
                 const postLink = insertElement('a', container, { class: 'image-post badge', href: `#images?post=${media.postId}` });
-                if (cachedPostInfo) postLink.appendChild(document.createTextNode(cachedPostInfo.size));
                 postLink.appendChild(getIcon('image'));
                 postLink.appendChild(document.createTextNode(window.languagePack?.text?.view_post ?? 'View Post'));
+                if (cachedPostInfo) postLink.prepend(document.createTextNode(cachedPostInfo.size));
+                else if (!SETTINGS.disablePostAutoload) {
+                    const textNode = document.createTextNode('?');
+                    postLink.prepend(textNode);
+                    this.api.fetchImages({ postId: media.postId, period: 'AllTime' }).then(data => {
+                        if (!data.items.length) {
+                            textNode.nodeValue = '?';
+                            return;
+                        }
+                        const post = new Set(data.items);
+                        this.#cache.posts.set(`${media.postId}`, post);
+                        textNode.nodeValue = post.size;
+                    });
+                }
             }
 
             // Generation info
@@ -3229,7 +3296,7 @@ class Controller {
         };
 
         // Full image
-        const mediaElement = mediaGenerator(media);
+        const mediaElement = mediaGenerator(carouselItems[0] || { id: media.id, data: media });
         // Try to insert a picture from the previous page, if available
         this.#genMediaPreviewFromPrevPage(mediaElement, media.id);
 
@@ -3299,34 +3366,34 @@ class Controller {
         };
         // if (media.type === 'video') waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, true));
 
-        if (carouselItems.length > 1) {
-            const item = carouselItems.find(item => item.id === media.id);
-            const itemWidth = Math.min(carouselItems.reduce((w, it) => it.width < w ? it.width : w, carouselItems[0].width), 800);
-            item.element = mediaElement;
-            const carouselElement = new InfiniteCarousel(carouselItems, {
-                gap: 0,
-                visibleCount: 1,
-                active: item.index,
-                itemWidth,
-                generator: mediaGenerator,
-                onElementRemove: this.#onCardRemoved.bind(this),
-                onScroll: id => {
-                    metaContainer.textContent = '';
-                    const media = mediaById.get(id);
-                    const { title } = insertMeta(media, metaContainer);
-                    // if (media.type === 'video') {
-                    //     const mediaElement = document.querySelector('.media-full-preview');
-                    //     waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, false));
-                    // }
-                    this.navigate({
-                        hash: `#images?image=${id}&nsfw=${media.nsfwLevel}`,
-                        soft: true,
-                        title
-                    });
-                }
-            });
-            fragment.appendChild(carouselElement);
-        } else fragment.appendChild(mediaElement);
+        // if (carouselItems.length > 1) {
+        //     const item = carouselItems.find(item => item.id === media.id);
+        //     const itemWidth = Math.min(carouselItems.reduce((w, it) => it.width < w ? it.width : w, carouselItems[0].width), 800);
+        //     item.element = mediaElement;
+        //     const carousel = new InfiniteCarousel(carouselItems, {
+        //         gap: 0,
+        //         visibleCount: 1,
+        //         active: item.index,
+        //         generator: mediaGenerator,
+        //         onElementRemove: this.#onCardRemoved.bind(this),
+        //         onScroll: id => {
+        //             metaContainer.textContent = '';
+        //             const media = mediaById.get(id);
+        //             const { title } = insertMeta(media, metaContainer);
+        //             // if (media.type === 'video') {
+        //             //     const mediaElement = document.querySelector('.media-full-preview');
+        //             //     waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, false));
+        //             // }
+        //             this.navigate({
+        //                 hash: `#images?image=${id}&nsfw=${media.nsfwLevel}`,
+        //                 soft: true,
+        //                 title
+        //             });
+        //         }
+        //     });
+        //     fragment.appendChild(carousel.element);
+        // } else fragment.appendChild(mediaElement);
+        fragment.appendChild(mediaElement);
 
 
         const metaContainer = createElement('div', { class: 'media-full-meta' });
@@ -3368,6 +3435,7 @@ class Controller {
                 }).catch(error => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     document.getElementById('page-loading-bar')?.remove();
+                    console.error(error);
                     console.error('Failed to fetch items:', error?.message ?? error);
                     element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
@@ -3402,7 +3470,7 @@ class Controller {
                 if (hiddenItems) {
                     const hiddenTextBase = labels.hiddenItems ?? 'Some elements were hidden due to the selected filter settings ({count})';
                     const units = labels.units ?? ["element", "elements", "elements"];
-                    const text = hiddenTextBase.replace('{count}', `${hiddenItems} ${escapeHtml(pluralize(hiddenItems, units))}`);
+                    const text = hiddenTextBase.replace('{count}', `${hiddenItems} ${escapeHtml(units[pluralIndex(hiddenItems)])}`);
                     insertElement('span', loadNoMore, { class: 'darker-text' }, text);
                 }
             }
@@ -3726,24 +3794,37 @@ class Controller {
                 else items.push({ id: image.id, aspectRatio, data: image });
             }
 
-            // Select image with the most reactions in each group
+            // Select most relevant image in each group
+            const rateFns = {
+                'Most Reactions': img => {
+                    const s = img.stats;
+                    return s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
+                },
+                'Most Comments': img => img.stats.commentCount,
+                'Most Collected': img => img.stats.collectedCount,
+                'Newest': img => img.publishedAt,
+                'Oldest': img => img.publishedAt,
+            };
+            const getRate = rateFns[SETTINGS.sort_images] || (() => 0);
+            const compareRate = SETTINGS.sort_images === 'Oldest' ? (a, b) => a < b : (a, b) => a > b;
             items.forEach(item => {
-                if (item.data instanceof Set && item.data.size > 1) {
-                    const arr = [...item.data];
-                    const maxImg = arr.reduce((max, img) => {
-                        const s = img.stats;
-                        const rate = s.likeCount + s.dislikeCount + s.cryCount + s.heartCount + s.laughCount;
-                        if (rate > max.rate) {
-                            max.rate = rate;
-                            max.img = img;
-                        }
-                        return max;
-                    }, { rate: -1, img: arr[0] }).img;
+                // if () return; // TODO: prevent card resizing and content jumping (don't change the first element)
+                if (!(item.data instanceof Set) || item.data.size <= 1) return;
 
-                    const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
-                    item.data = newData;
-                    item.aspectRatio = maxImg.width / maxImg.height;
+                const arr = [...item.data];
+                let best = null;
+                let bestRate;
+
+                for (const img of arr) {
+                    const rate = getRate(img);
+                    if (best === null || compareRate(rate, bestRate)) {
+                        best = img;
+                        bestRate = rate;
+                    }
                 }
+
+                item.data = new Set([best, ...arr.filter(img => img !== best)]);
+                item.aspectRatio = best.width / best.height;
             });
 
             return { items, hidden: hiddenImages - hiddenBefore };
@@ -3817,7 +3898,7 @@ class Controller {
             const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
             if (unit) {
                 const units = window.languagePack?.units?.[unit];
-                badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+                badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(units[pluralIndex(value)])}` : lilpipeValue);
             } else badge.setAttribute('lilpipe-text', lilpipeValue);
             if (icon) badge.prepend(getIcon(icon));
             else className += ' badge-textonly';
@@ -3964,9 +4045,20 @@ class Controller {
             }
         });
 
-        // Add loading lazy, decoding async and srcset
+        // Add loading lazy, decoding async, srcset and remove unnecessary wrappers
         const regexUrlWidth = /width=(\d+)/;
+        const INLINE_WRAPPERS = new Set([ 'SPAN', 'STRONG', 'B', 'I', 'EM', 'U', 'SMALL', 'MARK', 'SUB', 'SUP' ]);
         description.querySelectorAll('img').forEach(img => {
+            // Remove unnecessary wrappers from images
+            let current = img;
+            while (true) {
+                const parent = current.parentElement;
+                if (!parent || parent === description) break;
+                if (!INLINE_WRAPPERS.has(parent.tagName)) break;
+                if (parent.children.length !== 1) break;
+                parent.replaceWith(current);
+            }
+
             let src = img.getAttribute('src');
             img.removeAttribute('src');
             img.setAttribute('decoding', 'async');
@@ -4195,6 +4287,9 @@ class Controller {
                 a.classList.add('link-warning');
                 if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
             }
+
+            // Mark that there is only 1 img inside
+            if (a.children.length === 1 && a.children[0].tagName === 'IMG') a.classList.add('only-image');
         });
 
         // Remove underscores that are too large (they don't make sense if they're on multiple lines)
@@ -5255,7 +5350,7 @@ class Controller {
         if (collection.metadata && collection.metadata.challengeDate && collection.metadata.endsAt) {
             const challengeDate = new Date(collection.metadata.challengeDate);
             const endsAt = new Date(collection.metadata.endsAt);
-            insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': `${challengeDate.toLocaleString()} — ${endsAt.toLocaleString()}` }, timeAgo(Math.round((Date.now() - challengeDate)/1000)));
+            insertElement('relative-time', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': `${challengeDate.toLocaleString()} — ${endsAt.toLocaleString()}`, datetime: challengeDate.toISOString() }, timeAgo(Math.round((Date.now() - challengeDate)/1000)));
         }
 
         // Collection Name
@@ -5332,7 +5427,7 @@ class Controller {
 
                 // publishedAt
                 const publishedAt = new Date(article.publishedAt);
-                insertElement('div', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': publishedAt.toLocaleString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
+                insertElement('relative-time', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': publishedAt.toLocaleString(), datetime: publishedAt.toISOString() }, timeAgo(Math.round((Date.now() - publishedAt)/1000)));
 
                 // Article Name
                 insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
@@ -5350,7 +5445,7 @@ class Controller {
                         const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
                         if (unit) {
                             const units = Array.isArray(unit) ? unit : window.languagePack?.units?.[unit];
-                            badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(pluralize(value, units))}` : lilpipeValue);
+                            badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(units[pluralIndex(value)])}` : lilpipeValue);
                         } else badge.setAttribute('lilpipe-text', lilpipeValue);
                         badge.prepend(getIcon(icon));
                         badge.className = className;
@@ -5486,9 +5581,10 @@ class Controller {
                     }
                     if (date) {
                         const updatedAtString = timeAgo(Math.round((Date.now() - date)/1000));
-                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><span class="dark-text">${escapeHtml(updatedAtString)}</span>`;
+                        const updatedAtISO = date.toISOString();
+                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><relative-time class="dark-text" datetime="${updatedAtISO}">${escapeHtml(updatedAtString)}</relative-time>`;
                         badge.setAttribute('lilpipe-text', lilpipeText);
-                        if (forceAutoplay) insertElement('div', cardContentTop, { class: 'dark-text' }, updatedAtString);
+                        if (forceAutoplay) insertElement('relative-time', cardContentTop, { class: 'dark-text', datetime: updatedAtISO }, updatedAtString);
                     }
                 }
 
@@ -5595,7 +5691,7 @@ class Controller {
                 const creator = this.#genUserBlock({ userId: image.userId, username: image.username, group: image.usergroup ?? null });
                 if (image.createdAt) {
                     const createdAt = new Date(image.createdAt);
-                    insertElement('span', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
+                    insertElement('relative-time', creator, { class: 'image-created-time', 'lilpipe-text': createdAt.toLocaleString(), datetime: createdAt.toISOString() }, timeAgo(Math.round((Date.now() - createdAt)/1000)));
                 }
                 cardContentTop.appendChild(creator);
 
@@ -5665,7 +5761,10 @@ class Controller {
                     pool.delete(img);
                 }
 
-                if (img === null) img = createElement('img', { class: 'image-possibly-animated', crossorigin: 'anonymous', alt: userInfo.username?.substring(0, 2) ?? 'NM', decoding: 'async', fetchPriority: 'low', src });
+                if (img === null) {
+                    img = createElement('img', { class: 'image-possibly-animated', alt: userInfo.username?.substring(0, 2) ?? 'NM', decoding: 'async', fetchPriority: 'low', src });
+                    if (!SETTINGS.disableCrossorigin) img.setAttribute('crossorigin', 'anonymous');
+                }
 
                 container.appendChild(img);
             }
@@ -5747,7 +5846,8 @@ class Controller {
         const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
         const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
-        const mediaElement = createElement('img', { alt: ' ', crossorigin: 'anonymous' });
+        const mediaElement = createElement('img', { alt: ' ' });
+        if (!SETTINGS.disableCrossorigin) mediaElement.setAttribute('crossorigin', 'anonymous');
         let className = 'media-element';
         let src;
 
@@ -5758,7 +5858,7 @@ class Controller {
         } else if (media.type === 'video') {
             // Video does not need any local parameters (video elements are skipped in sw)
             const source = original ? urlBase : urlBase.replace('anim=false', 'anim=false,transcode=true');
-            const poster = src = `${source}${paramString}`;
+            const poster = src = `${source.replace(this.#regex.urlEndsOnMp4, '.jpeg')}${paramString}`;
             const videoSrc = source.replace(this.#regex.urlParamAnimFalse, '');
 
             mediaContainer.setAttribute('data-src', videoSrc);
@@ -6170,6 +6270,10 @@ class Controller {
             document.documentElement.scrollTo({ top: scrollTop, behavior: 'smooth' });
         }, { passive: true });
         return button;
+    }
+
+    static #isAppEmpty() {
+        return !this.appElement.textContent.trim();
     }
 
     // TODO: not boring loading indicator
@@ -6623,7 +6727,7 @@ class Controller {
 
         // The scroller may attempt to restore scrolling to its original target, taking into account possible window resizing
         const scrollDeltaMax = this.#activeVirtualScroll.map(item => {
-            const scrollTopRelative = state[`scrollTopRelative-${item.id}`] || 0;
+            const scrollTopRelative = state[`scrollTopRelative-${item.id}`];
             const virtualScrollState = state[`virtualScrollState-${item.id}`] || {};
             const scrollTopRelativeNew = item.onScroll({ scrollTop, scrollTopRelative, ...virtualScrollState });
             const delta = scrollTopRelativeNew - scrollTopRelative;
@@ -6681,6 +6785,26 @@ class Controller {
         }
 
         return stateCopy;
+    }
+
+    static async dev_checkNewModels() {
+        try {
+            console.log('[DEV] Loading list of available models');
+            const response = await fetch('https://civitai.com/api/v1/models?limit=1&baseModels=New').then(response => response.text())
+            const zodErrorString = JSON.parse(response).error.message;
+            const zodError = JSON.parse(zodErrorString);
+            const values = zodError[0].errors[0][0].values;
+            const selectorList = this.#models.options;
+
+            const missingInSelector = values.filter(v => !selectorList.includes(v));
+            const extraInSelector = selectorList.filter(v => !values.includes(v));
+
+            if (missingInSelector.length) console.warn('[DEV] The selector is missing models:', missingInSelector);
+            if (extraInSelector.length) console.warn('[DEV] There are extra models in the selector:', extraInSelector);
+            if (!missingInSelector.length && !extraInSelector.length) console.log('[DEV] All models are in the selector');
+        } catch (error) {
+            console.error(error);
+        }
     }
 }
 
@@ -7181,6 +7305,17 @@ function markMediaAsLoadedWhenReady(el, isOk = true) {
         const readyImages = [];
         const instantMedia = [];
 
+        const markMediaElement = (media, ok) => {
+            const parent = media.parentElement;
+            if (!parent) return;
+            parent.classList.remove('loading');
+            parent.classList.toggle('error', !ok);
+            if (ok) {
+                parent.style.backgroundColor = '';
+                parent.style.backgroundImage = '';
+            }
+        };
+
         for (const [media, ok] of pendingMedia) {
             if (!media.isConnected) continue;
             if (media.tagName === 'IMG') readyImages.push([media, ok]);
@@ -7190,36 +7325,17 @@ function markMediaAsLoadedWhenReady(el, isOk = true) {
 
         // videos
         for (const [media, ok] of instantMedia) {
-            const parent = media.parentElement;
-            if (!parent) continue;
-
-            parent.classList.remove('loading');
-            parent.classList.toggle('error', !ok);
-            if (ok) {
-                // parent.style.backgroundColor = '';
-                parent.style.backgroundImage = '';
-            }
+            markMediaElement(media, ok);
         }
 
         // images (Waiting to eliminate possible flickering)
         if (readyImages.length) {
-            setTimeout(() => {
-                requestAnimationFrame(() => {
-                    for (const [img, ok] of readyImages) {
-                        if (!img.isConnected) continue;
-
-                        const parent = img.parentElement;
-                        if (!parent) continue;
-
-                        parent.classList.remove('loading');
-                        parent.classList.toggle('error', !ok);
-                        if (ok) {
-                            // parent.style.backgroundColor = '';
-                            parent.style.backgroundImage = '';
-                        }
-                    }
-                });
-            }, 180);
+            setTimeout(() => requestAnimationFrame(() => {
+                for (const [img, ok] of readyImages) {
+                    if (!img.isConnected) continue;
+                    markMediaElement(img, ok);
+                }
+            }), 180);
         }
     });
 }
@@ -7454,7 +7570,8 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     const src = mediaContainer.getAttribute('data-src');
     const timestump = mediaContainer.getAttribute('data-timestump');
 
-    const video = createElement('video', { class: 'media-element',  muted: '', loop: '', crossorigin: 'anonymous', draggable: 'true' });
+    const video = createElement('video', { class: 'media-element',  muted: '', loop: '', draggable: 'true' });
+    if (!SETTINGS.disableCrossorigin) video.setAttribute('crossorigin', 'anonymous');
     video.volume = 0;
     video.muted = true;
     video.loop = true;
