@@ -1,7 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 34,
+    version: 35,
+    updated: '2026-03-19T12:00:00.000Z',
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -119,6 +120,7 @@ const SETTINGS = {
     nsfwLevel: 'Mature',
     browsingLevel: 4,
     groupImagesByPost: true,
+    sortImagesInPost: true,
     showCurrentModelVersionStats: true,
     hideFurry: false,
     hideGay: false,
@@ -374,11 +376,13 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             };
         }
 
+        const hasModeratorCosmetics = user.cosmetics?.some(c => c.cosmeticId === 5);
+
         const urlId = user.profilePicture?.url || user.image;
 
         return {
             userId: user.id,
-            isModerator: user.isModerator || false,
+            isModerator: user.isModerator || hasModeratorCosmetics || false,
             username: user.username || '[username]',
             image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, type: 'image', itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
             imageMeta: user.profilePicture ? {
@@ -1748,9 +1752,7 @@ class Controller {
         }
         insertElement('p', appContent, undefined, tempHome.p1?.goodluck);
 
-        insertElement('br', appContent);
         insertElement('hr', appContent);
-        insertElement('br', appContent);
 
         insertElement('h2', appContent, undefined, tempHome.settingsDescription ?? 'Settings');
 
@@ -1898,6 +1900,21 @@ class Controller {
                 });
             }
         });
+
+        insertElement('hr', appContent);
+
+        // version
+        const versionList = [];
+        if (DEVMODE) versionList.push(`Version: ${CONFIG.version}`);
+        try {
+            versionList.push(`Updated: ${new Date(CONFIG.updated).toLocaleDateString()}`);
+        } catch (error) {
+            versionList.push('Updated: {Invalid Date}');
+        }
+        if (EXTENSION_INSTALLED) versionList.push(`API-Bridge: Installed`);
+        if (DEVMODE) versionList.push(`Devmode: Enabled`);
+        const versionWrap = insertElement('div', appContent, { class: 'badges', style: 'justify-content: center; gap: .5em;' });
+        versionList.forEach(line => insertElement('div', versionWrap, { class: 'badge' }, line));
 
         return {
             element: fragment,
@@ -3773,6 +3790,7 @@ class Controller {
             }
 
             const usedPosts = new Set();
+            const skipSort = new Set();
             const items = [];
             for (const image of images) {
                 if (imagesMetaById.has(image.id)) continue;
@@ -3781,15 +3799,20 @@ class Controller {
                 // Mark user as model uploader
                 if (opCreator && image.username === opCreator) image.usergroup = 'OP';
     
-                if (!postsById.has(image.postId)) postsById.set(image.postId, new Set());
+                let isPostNew = false;
+                if (!postsById.has(image.postId)) {
+                    postsById.set(image.postId, new Set());
+                    isPostNew = true;
+                }
                 postsById.get(image.postId).add(image);
 
                 if (groupingByPost) {
                     if (usedPosts.has(image.postId)) continue;
                     usedPosts.add(image.postId);
+                    if (!isPostNew) skipSort.add(image.postId);
                 }
 
-                const aspectRatio = image.width / image.height;
+                const aspectRatio = this.#round(image.width / image.height);
                 if (groupingByPost) items.push({ id: image.postId, aspectRatio, data: postsById.get(image.postId) });
                 else items.push({ id: image.id, aspectRatio, data: image });
             }
@@ -3808,8 +3831,14 @@ class Controller {
             const getRate = rateFns[SETTINGS.sort_images] || (() => 0);
             const compareRate = SETTINGS.sort_images === 'Oldest' ? (a, b) => a < b : (a, b) => a > b;
             items.forEach(item => {
-                // if () return; // TODO: prevent card resizing and content jumping (don't change the first element)
                 if (!(item.data instanceof Set) || item.data.size <= 1) return;
+
+                if (!SETTINGS.sortImagesInPost || skipSort.has(item.id)) {
+                    // Recalculate the aspect ratio to the current one (the first image, instead of the last one added)
+                    const image = item.data.values().next().value;
+                    item.aspectRatio = this.#round(image.width / image.height);
+                    return;
+                }
 
                 const arr = [...item.data];
                 let best = null;
@@ -3824,7 +3853,7 @@ class Controller {
                 }
 
                 item.data = new Set([best, ...arr.filter(img => img !== best)]);
-                item.aspectRatio = best.width / best.height;
+                item.aspectRatio = this.#round(best.width / best.height);
             });
 
             return { items, hidden: hiddenImages - hiddenBefore };
@@ -5778,6 +5807,10 @@ class Controller {
         if (userInfo.group) {
             if (userInfo.group === 'OP') insertElement('div', usernameText, { class: 'badge user-group', 'data-group': 'OP' }, 'OP');
         }
+        if (userInfo.isModerator) {
+            const badge = insertElement('div', container, { class: 'user-badge' });
+            badge.appendChild(getIcon('civitai'));
+        }
 
         return container;
     }
@@ -6083,6 +6116,10 @@ class Controller {
                     groupImagesByPost ? { type: 'boolean',
                         key: 'groupImagesByPost',
                         label: window.languagePack?.text?.group_posts ?? 'Group posts'
+                    } : null,
+                    groupImagesByPost && DEVMODE ? { type: 'boolean',
+                        key: 'sortImagesInPost',
+                        label: window.languagePack?.text?.sortImagesInPost ?? 'Sort images in posts'
                     } : null,
                     { type: 'boolean',
                         key: 'hideImagesWithoutPositivePrompt',
@@ -6409,7 +6446,14 @@ class Controller {
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
         const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
-        const searchQueryRegex = /[ \|-]/g;
+        const normalizeTag = str => {
+            let s = str.toLowerCase();
+            // Tags generally don't have these symbols, it's just insurance
+            if (s.includes(' ')) s = s.replaceAll(' ', '_');
+            if (s.includes('|')) s = s.replaceAll('|', '_');
+            if (s.includes('-')) s = s.replaceAll('-', '_');
+            return s;
+        };
         options.forEach((key, index) => {
             const element = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key });
             const span = insertElement('span', element, undefined, list[key]);
@@ -6418,7 +6462,7 @@ class Controller {
             const tagLabels = {};
             const searchTags = [];
             optionTags.forEach(label => {
-                const tag = label.toLowerCase().replace(searchQueryRegex, '_');
+                const tag = normalizeTag(label);
                 tagLabels[tag] = label;
                 searchTags.push(tag);
             });
@@ -6429,7 +6473,7 @@ class Controller {
         listElements[currentValue]?.element.classList.add('option-selected');
 
         const searchForText = (q = '') => {
-            q = q.toLowerCase().replace(searchQueryRegex, '_');
+            q = normalizeTag(q);
             searchInput.toggleAttribute('hidden', !q);
             const currentIndex = listElements[displayedList[focusIndex]]?.index ?? null;
             if (q) {
@@ -6908,13 +6952,15 @@ function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
 // Messages from SW
 function onMessage(e) {
     const data = e.data ?? {};
-    if (
-        data.type === 'CACHE_UPDATED'
-        && (data.url === `${location.origin}/` || data.url === `${location.origin}/index.html`)
-        && sessionStorage.getItem('civitai-lite-viewer--versionChanged') !== 'true'
-    ) {
-        sessionStorage.setItem('civitai-lite-viewer--versionChanged', 'true');
-        location.reload();
+    if (data.type === 'CACHE_UPDATED') {
+        const origin = `${location.origin}${location.pathname}`;
+        if (
+            (data.url === origin || data.url === `${origin}index.html`)
+            && sessionStorage.getItem('civitai-lite-viewer--versionChanged') !== 'true'
+        ) {
+            sessionStorage.setItem('civitai-lite-viewer--versionChanged', 'true');
+            location.reload();
+        }
     }
 }
 
@@ -7311,7 +7357,7 @@ function markMediaAsLoadedWhenReady(el, isOk = true) {
             parent.classList.remove('loading');
             parent.classList.toggle('error', !ok);
             if (ok) {
-                parent.style.backgroundColor = '';
+                // parent.style.backgroundColor = '';
                 parent.style.backgroundImage = '';
             }
         };
@@ -7879,6 +7925,10 @@ function startLilpipeEvent(e, options = { fromFocus: false, type: null, element:
     if (options.fromFocus) target.addEventListener('blur', onpointerleave, { passive: true,  once: true, capture: true });
     else target.addEventListener('pointerleave', onpointerleave, { passive: true,  once: true });
     window.addEventListener('scroll', onpointerleave, { passive: true, once: true });
+}
+
+function dev_enable_devmode() {
+    localStorage.setItem('civitai-lite-viewer--devmode', 'true');
 }
 
 // Start loading what will be needed for display before the body is ready

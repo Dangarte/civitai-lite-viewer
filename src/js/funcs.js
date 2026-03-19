@@ -1394,15 +1394,15 @@ class MasonryLayout {
         }
 
         const startTime = performance.now();
-        const FRAME_BUDGET = 2; // 4 ms
-        const MAX_WEIGHT_PER_FRAME = 100;
+        const FRAME_BUDGET = 2;             // 2 ms
+        const MAX_WEIGHT_PER_FRAME = 60;    // 6 large images or 12 blurhashes
 
         // If the scrolling is too fast -> lower the maximum weight
         const weightLimit = startTime - this.#lastScrollTime < 10 && this.#scrollSpeed > (this.windowHeight / 50) ? this.#scrollSpeed > (this.windowHeight / 25) ? 4 : 9 : 100;
 
         let consumedWeight = 0;
         for (const itemId of this.#queueList) {
-            if (performance.now() - startTime > FRAME_BUDGET || consumedWeight > MAX_WEIGHT_PER_FRAME) break;
+            if (performance.now() - startTime > FRAME_BUDGET || consumedWeight >= MAX_WEIGHT_PER_FRAME) break;
 
             const item = this.#itemsById.get(itemId);
             if (!item) {
@@ -1497,7 +1497,7 @@ class MasonryLayout {
 
         // --- Smoothing ---
         // Use different coefficients for expansion and contraction
-        // Expanding should be INSTANTLY (0.8), contracting slowly (0.05)
+        // Expanding should be INSTANTLY (.9), contracting slowly (.1)
         const isExpanding = targetOverscan > (this.#currentOverscan || 0);
         const smooth = isExpanding ? .9 : .1;
 
@@ -1648,8 +1648,8 @@ class InfiniteCarousel {
             if (sum > maxSum) maxSum = sum;
         }
 
-        this.#height = availableWidth / maxSum;
-        this.#widths = this.#items.map(it => this.#height * it.ratio);
+        this.#height = Math.round(availableWidth / maxSum);
+        this.#widths = this.#items.map(it => Math.round(this.#height * it.ratio));
         this.#prefix = [0];
         for (let i = 0; i < this.#len; i++) {
             this.#prefix[i + 1] = this.#prefix[i] + this.#widths[i] + this.#options.gap;
@@ -1665,6 +1665,7 @@ class InfiniteCarousel {
         this.#container = createElement('div', { class: 'carousel' });
         this.#container.style.width = this.#options.viewportWidth + 'px';
         this.#container.style.height = this.#height + 'px';
+        this.#container.style.setProperty('--gap', this.#options.gap + 'px');
 
         this.#track = insertElement('div', this.#container, { class: 'carousel-items' });
         this.#counter = insertElement('div', this.#container, { class: 'carousel-counter' });
@@ -1698,7 +1699,7 @@ class InfiniteCarousel {
         this.#currentIndex += step;
 
         // normalization
-        if (Math.abs(this.#currentIndex) > this.#len * 100) {
+        if (Math.abs(this.#currentIndex) > this.#len * 10) {
             const posBefore = this.#getX(this.#currentIndex);
 
             this.#currentIndex = this.#getCircularIndex(this.#currentIndex);
@@ -1721,7 +1722,7 @@ class InfiniteCarousel {
         const baseOffset = -this.#getX(this.#currentIndex);
 
         const offset = baseOffset + (this.#offsetCorrection || 0);
-        this.#track.style.transform = `translateX(${offset}px)`;
+        this.#track.style.transform = `translateX(${Math.round(offset)}px)`;
 
         const visible = new Set();
 
@@ -1799,7 +1800,7 @@ class InfiniteCarousel {
         wrapper.style.width = this.#widths[realIndex] + 'px';
         wrapper.style.height = this.#height + 'px';
         wrapper.style.containIntrinsicSize = `${this.#widths[realIndex]}px ${this.#height}px`;
-        wrapper.style.transform = `translateX(${x}px)`;
+        wrapper.style.left = `${Math.round(x)}px`;
         const content = this.#options.generator(item);
         wrapper.appendChild(content);
         this.#track.appendChild(wrapper);

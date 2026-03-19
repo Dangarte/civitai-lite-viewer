@@ -413,9 +413,9 @@ input:invalid {
 }
 
 hr {
-    border: 2px solid var(--c-text-darker);
+    border: 1px solid var(--c-text-darker);
     border-radius: 2px;
-    opacity: .6;
+    opacity: .5;
     margin-block: 1em;
 }
 
@@ -1148,8 +1148,7 @@ footer a {
     top: 0;
     left: 0;
     height: 100%;
-    will-change: transform;
-    transition: transform .4s cubic-bezier(.27, 0, .27, 1);
+    transition: transform .4s cubic-bezier(.2, .8, .2, 1);
 }
 
 .carousel-items::-webkit-scrollbar {
@@ -1793,6 +1792,8 @@ hr.description-xl-item {
     color: var(--c-error) !important;
 }
 
+.user-moderator a,
+.user-moderator span,
 .user-civbot a,
 .user-civbot span {
     color: var(--c-main-text) !important;
@@ -1831,6 +1832,8 @@ hr.description-xl-item {
     color: #fff;
 }
 
+.model-card .user-moderator span,
+.image-card .user-moderator span,
 .model-card .user-civbot span,
 .image-card .user-civbot span {
     color: var(--c-main-text-card) !important;
@@ -1853,6 +1856,15 @@ hr.description-xl-item {
     line-height: 1;
     letter-spacing: 1px;
     -webkit-text-stroke: transparent;
+}
+
+.user-info .user-badge {
+    width: 1.5em;
+    height: 1.5em;
+}
+
+.user-info .user-badge .icon {
+    font-size: 1.5em;
 }
 
 .image-card .badges {
@@ -3304,8 +3316,8 @@ a.link-button.link-open-civitai::after {
 
 .drag-ghost-img {
     font-size: 4em;
-    width: 1em;
-    height: 1em;
+    width: 1em !important;
+    height: 1em !important;
     object-fit: cover;
     border-radius: var(--radius);
     flex-shrink: 0;
