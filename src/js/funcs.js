@@ -1618,6 +1618,7 @@ class InfiniteCarousel {
         this.#options = {
             gap: options.gap ?? 12,
             viewportWidth: options.viewportWidth ?? 800,
+            viewportMaxHeight: options.viewportMaxHeight ?? 1000,
             visibleCount: options.visibleCount ?? 3,
             onElementRemove: options.onElementRemove,
             onScroll: options.onScroll,
@@ -1632,23 +1633,37 @@ class InfiniteCarousel {
         this.#len = this.#items.length;
 
         const n = this.#options.visibleCount;
-        const totalGaps = (n - 1) * this.#options.gap;
-        const availableWidth = this.#options.viewportWidth - totalGaps;
+        const gap = this.#options.gap;
+        const vw = this.#options.viewportWidth;
+        const wideAspectRatio = 1.25;
 
-        let sum = 0;
-        for (let i = 0; i < n; i++) {
-            sum += this.#items[i % this.#len].ratio;
+        let minHeight = this.#options.viewportMaxHeight;
+        for (let i = 0; i < this.#len; i++) {
+            let sumRatio = 0;
+            let occupiedSlots = 0;
+            let itemsInWindow = 0;
+
+            while (occupiedSlots < n) {
+                const item = this.#items[(i + itemsInWindow) % this.#len];
+                const itemSlots = (n > 1 && item.ratio >= wideAspectRatio) ? 2 : 1;
+
+                if (occupiedSlots + itemSlots > n) break;
+
+                sumRatio += item.ratio;
+                occupiedSlots += itemSlots;
+                itemsInWindow++;
+
+                if (itemsInWindow === this.#len) break;
+            }
+
+            if (itemsInWindow > 0) {
+                const currentGapsWidth = (itemsInWindow - 1) * gap;
+                const currentHeight = (vw - currentGapsWidth) / sumRatio;
+                if (currentHeight < minHeight) minHeight = currentHeight;
+            }
         }
+        this.#height = Math.round(minHeight);
 
-        let maxSum = sum;
-
-        for (let i = 1; i < this.#len; i++) {
-            sum += this.#items[(i + n - 1) % this.#len].ratio;
-            sum -= this.#items[i - 1].ratio;
-            if (sum > maxSum) maxSum = sum;
-        }
-
-        this.#height = Math.round(availableWidth / maxSum);
         this.#widths = this.#items.map(it => Math.round(this.#height * it.ratio));
         this.#prefix = [0];
         for (let i = 0; i < this.#len; i++) {

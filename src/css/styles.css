@@ -1259,12 +1259,6 @@ footer a {
     border-radius: var(--radius);
 }
 
-.model-preview .carousel-item img {
-    color: transparent;
-    display: block;
-    height: auto;
-}
-
 .model-description {
     max-width: 100%;
     width: var(--app-width-small);
@@ -3260,7 +3254,6 @@ a.link-button.link-open-civitai::after {
     width: 2.5em;
     height: 2.5em;
     object-fit: cover;
-    background: none;
     border: none;
 }
 

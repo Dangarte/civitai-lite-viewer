@@ -1,8 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 35,
-    updated: '2026-03-19T12:00:00.000Z',
+    version: 36,
+    updated: '2026-03-20T12:00:00.000Z',
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -745,6 +745,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
             if (Math.round(item.nsfwLevel/2) > browsingLevel) return null; // Hide all above current browsingLevel level // kinda strange lvls in models (60? what?)
 
+            const isUpdate = (Date.parse(item.lastVersionAt) - Date.parse(item.publishedAt)) > 60000;
+
             const version = item.version;
             return {
                 id: item.id,
@@ -767,10 +769,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                         nsfwLevel: version.nsfwLevel,
                         trainedWords: version.trainedWords || [],
                     },
-                    item.publishedAt === item.lastVersionAt ? null : {
+                    isUpdate ? {
                         publishedAt: item.publishedAt,
                         name: `[Fake name, the API says there should be something here, but it didn't return anything]`
-                    }
+                    } : null
                 ].filter(Boolean),
                 userId: item.user?.id,
                 tagIds: item.tags ?? [],
@@ -3109,7 +3111,8 @@ class Controller {
             const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
             const carousel = new InfiniteCarousel(previewList, {
                 gap: CONFIG.appearance.modelPage.carouselGap,
-                viewportWidth: CONFIG.appearance.modelPage.carouselItemWidth * CONFIG.appearance.modelPage.carouselItemsCount,
+                viewportWidth: (CONFIG.appearance.modelPage.carouselItemWidth + CONFIG.appearance.modelPage.carouselGap) * CONFIG.appearance.modelPage.carouselItemsCount - CONFIG.appearance.modelPage.carouselGap,
+                viewportMaxHeight: Math.round(this.windowHeight * .8),
                 generator: generateMediaPreview,
                 active: carouselCurrentId !== -1 ? carouselCurrentId : 0,
                 onElementRemove: this.#onCardRemoved.bind(this),
@@ -3383,33 +3386,6 @@ class Controller {
         };
         // if (media.type === 'video') waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, true));
 
-        // if (carouselItems.length > 1) {
-        //     const item = carouselItems.find(item => item.id === media.id);
-        //     const itemWidth = Math.min(carouselItems.reduce((w, it) => it.width < w ? it.width : w, carouselItems[0].width), 800);
-        //     item.element = mediaElement;
-        //     const carousel = new InfiniteCarousel(carouselItems, {
-        //         gap: 0,
-        //         visibleCount: 1,
-        //         active: item.index,
-        //         generator: mediaGenerator,
-        //         onElementRemove: this.#onCardRemoved.bind(this),
-        //         onScroll: id => {
-        //             metaContainer.textContent = '';
-        //             const media = mediaById.get(id);
-        //             const { title } = insertMeta(media, metaContainer);
-        //             // if (media.type === 'video') {
-        //             //     const mediaElement = document.querySelector('.media-full-preview');
-        //             //     waitVideoCreation(mediaElement).then(video => setVolume(video, volume, muted, false));
-        //             // }
-        //             this.navigate({
-        //                 hash: `#images?image=${id}&nsfw=${media.nsfwLevel}`,
-        //                 soft: true,
-        //                 title
-        //             });
-        //         }
-        //     });
-        //     fragment.appendChild(carousel.element);
-        // } else fragment.appendChild(mediaElement);
         fragment.appendChild(mediaElement);
 
 
@@ -5338,7 +5314,7 @@ class Controller {
 
     // used only in link previews
     static #genCollectionCard(collection, options) {
-        const { itemWidth, itemHeight, forceAutoplay = false } = options ?? {};
+        const { itemWidth, itemHeight, forceAutoplay } = options ?? {};
 
         const card = createElement('a', { 'data-id': collection.id, href: `#images?collection=${collection.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': collection.name });
         let cardClassName = 'card model-card';
@@ -5392,7 +5368,7 @@ class Controller {
         { // base
             weight: 1,
             generator: (ctx) => {
-                const { data: article, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+                const { data: article, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 ctx.cardSizeStyle = `width: ${itemWidth}px; height: ${itemHeight}px;`;
 
@@ -5419,7 +5395,7 @@ class Controller {
         { // blurhash
             weight: 5,
             generator: (ctx) => {
-                const { data: article, mediaContainer, forceAutoplay = false } = ctx;
+                const { data: article, mediaContainer, forceAutoplay } = ctx;
 
                 if (article.coverImage) {
                     const previewMedia = article.coverImage;
@@ -5441,7 +5417,7 @@ class Controller {
         { // full
             weight: 10,
             generator: (ctx) => {
-                const { mediaContainer, card, data: article, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+                const { mediaContainer, card, data: article, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 // card content
                 const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -5514,7 +5490,7 @@ class Controller {
         { // base
             weight: 1,
             generator: (ctx) => {
-                const { data: model, itemWidth, itemHeight, version, forceAutoplay = false } = ctx;
+                const { data: model, itemWidth, itemHeight, version, forceAutoplay } = ctx;
 
                 const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
 
@@ -5555,7 +5531,7 @@ class Controller {
         { // blurhash
             weight: 5,
             generator: (ctx) => {
-                const { data: model, mediaContainer, card, previewMedia, closestMedia, forceAutoplay = false } = ctx;
+                const { data: model, mediaContainer, card, previewMedia, closestMedia, forceAutoplay } = ctx;
 
                 if (previewMedia) {
                     if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
@@ -5581,7 +5557,7 @@ class Controller {
         { // full
             weight: 10,
             generator: (ctx) => {
-                const { mediaContainer, card, data: model, modelVersion, previewMedia, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+                const { mediaContainer, card, data: model, modelVersion, previewMedia, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 // card content
                 const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -5653,7 +5629,7 @@ class Controller {
         { // base
             weight: 1,
             generator: (ctx) => {
-                const { data, itemWidth, forceAutoplay = false } = ctx;
+                const { data, itemWidth, forceAutoplay } = ctx;
 
                 let image = data;
                 if (image instanceof Set) {
@@ -5695,7 +5671,7 @@ class Controller {
         { // blurhash
             weight: 5,
             generator: (ctx) => {
-                const { image, mediaContainer, forceAutoplay = false } = ctx;
+                const { image, mediaContainer, forceAutoplay } = ctx;
 
                 // blurhash
                 if (image.hash) this.#insertMediaBlurhash(mediaContainer, { media: image });
@@ -5710,7 +5686,7 @@ class Controller {
         { // full
             weight: 10,
             generator: (ctx) => {
-                const { mediaContainer, card, image, itemWidth, itemHeight, forceAutoplay = false } = ctx;
+                const { mediaContainer, card, image, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 // card content
                 const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -5791,7 +5767,7 @@ class Controller {
                 }
 
                 if (img === null) {
-                    img = createElement('img', { class: 'image-possibly-animated', alt: userInfo.username?.substring(0, 2) ?? 'NM', decoding: 'async', fetchPriority: 'low', src });
+                    img = createElement('img', { alt: userInfo.username?.substring(0, 2) ?? 'NM', decoding: 'async', fetchPriority: 'low', src });
                     if (!SETTINGS.disableCrossorigin) img.setAttribute('crossorigin', 'anonymous');
                 }
 
@@ -5875,7 +5851,7 @@ class Controller {
         const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.3;
         let paramString = target ? (`?target=${target}`) : '';
         // Crop image if result is 30% wider than required
-        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.88&fit=crop${allowAnimated ? '' : '&format=webp'}`;
+        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.92&fit=crop${allowAnimated ? '' : '&format=webp'}`;
         const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
         const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
@@ -5886,13 +5862,15 @@ class Controller {
 
         if (media.type === 'image') {
             src = original ? url : (autoplay || allowAnimated ? url.replace(this.#regex.urlParamAnimFalse, '') : url);
-
-            if (!autoplay && !original) className += ' image-possibly-animated';
         } else if (media.type === 'video') {
-            // Video does not need any local parameters (video elements are skipped in sw)
             const source = original ? urlBase : urlBase.replace('anim=false', 'anim=false,transcode=true');
-            const poster = src = `${source.replace(this.#regex.urlEndsOnMp4, '.jpeg')}${paramString}`;
+
+            // Video does not need any local parameters (video elements are skipped in sw)
             const videoSrc = source.replace(this.#regex.urlParamAnimFalse, '');
+
+            // Force the poster to be resized to what the server should return anyway (it doesn't always return the correct size)
+            if (!resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${realWidth}&quality=.92&format=webp`;
+            const poster = src = `${source.replace(this.#regex.urlEndsOnMp4, '.jpeg')}${paramString}`;
 
             mediaContainer.setAttribute('data-src', videoSrc);
             mediaContainer.setAttribute('data-poster', poster);
@@ -6952,6 +6930,7 @@ function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
 // Messages from SW
 function onMessage(e) {
     const data = e.data ?? {};
+
     if (data.type === 'CACHE_UPDATED') {
         const origin = `${location.origin}${location.pathname}`;
         if (
@@ -6961,7 +6940,16 @@ function onMessage(e) {
             sessionStorage.setItem('civitai-lite-viewer--versionChanged', 'true');
             location.reload();
         }
+
+        return;
     }
+
+    // if (data.type === 'HAS_ANIMATED_VARIANT') {
+    //     const img = document.querySelector(`img[src="${data.url}"]:not(.image-animated)`);
+    //     if (img) img.classList.add('image-animated');
+
+    //     return;
+    // }
 }
 
 
@@ -7257,7 +7245,6 @@ function onBodyPointerOver(e) {
     if (videoPLayback) startVideoPlayEvent(videoPLayback);
 
     // images
-    // TODO: Right now it just tries to load the animated version anyway, even when it's useless... add some checks
     // const imageAnimationPLay = e.target.closest('.image-hover-play');
     // if (imageAnimationPLay) showOriginalImage(imageAnimationPLay);
 }
@@ -7681,7 +7668,7 @@ function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
 }
 
 function showOriginalImage(target) {
-    const images = target.querySelectorAll('img.image-possibly-animated:not([data-original-active])');
+    const images = target.querySelectorAll('img.image-animated:not([data-original-active])');
     if (!images.length) return;
 
     const hideOriginalImage = () => {

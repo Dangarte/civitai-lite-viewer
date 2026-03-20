@@ -39,6 +39,14 @@ const SW_CONFIG = {
         'lite-viewer-core': 3 * 60,         // Main file from the repo (index.html)      3 mins
         'blurhash': 30 * 60                 // blurhash                                 30 mins
     },
+    fileLimits: {
+        card: {
+            image: {
+                mimeTypes: [ 'image/webp', 'image/jpeg' ],
+                maxFileSize: 1 * 1024 * 1024, // 1 mb
+            },
+        }
+    },
     api_key: null,
     task_time_limit: 60000, // 1 minute
 };
@@ -99,7 +107,7 @@ class TaskController {
 
 const taskController = new TaskController();
 
-function onMessage(e) { // Messages
+function onMessage(e) {
     const sendSuccess = response => {
         if (e.ports?.[0]) e.ports[0].postMessage({ ok: true, response });
     };
@@ -127,7 +135,7 @@ function onMessage(e) { // Messages
     return true;
 }
 
-function onFetch(e) { // Request interception
+function onFetch(e) {
     if (e.request.url.startsWith(SW_CONFIG.local_urls.base)) {
         const cacheName = e.request.url.startsWith(SW_CONFIG.local_urls.blurhash) ? SW_CONFIG.cache.blurhash : null;
         const response = CacheManager.get(e.request, cacheName);
@@ -151,7 +159,7 @@ function onFetch(e) { // Request interception
     else if (e.request.url.startsWith(SW_CONFIG.images_url)) {
         const target = getTargetFromUrl(e.request.url);
         const cacheName = SW_CONFIG.validTargets.has(target) ? SW_CONFIG.cache[SW_CONFIG.cacheByTarget[target] ?? 'media'] : SW_CONFIG.cache.media;
-        response = CacheManager.get(e.request, cacheName);
+        response = CacheManager.get(e.request, cacheName, { event: e });
     } else response = CacheManager.get(e.request);
 
     e.respondWith(response);
@@ -170,6 +178,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
     const url = new URL(request.url);
     const sParams = url.searchParams;
     const params = Object.fromEntries(url.searchParams.entries());
+    if (params.target && !SW_CONFIG.validTargets.has(params.target)) delete params.target;
     let specialFetch = fetch;
 
     if (request.url.startsWith(SW_CONFIG.base_url)) {
@@ -188,12 +197,13 @@ async function cacheFetch(request, cacheControl = { public: true }) {
             }
         }
     } else if (request.url.startsWith(SW_CONFIG.images_url)) {
-        cacheName = SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'] : SW_CONFIG.cache.media;
+        cacheName = SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'];
     }
 
     // if (params.original) {
+    //     console.error('This should not be called! (cacheFetch: params.original)');
     //     const u = new URL(url, self.location.origin);
-    //     u.searchParams.delete("original");
+    //     u.searchParams.delete('original');
     //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
     //     return CacheManager.get(editedRequest);
     // }
@@ -218,29 +228,45 @@ async function cacheFetch(request, cacheControl = { public: true }) {
                 else cacheControl.noCache = true;
             }
             else if (blob.size < 15000000) {
-                const maxAge = SW_CONFIG.validTargets.has(params.target) ? SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown : SW_CONFIG.ttl.unknown;
+                const maxAge = SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown;
                 cacheControl.maxAge = maxAge;
             } else cacheControl.maxAge = SW_CONFIG.ttl['large-file'];
         }
 
-        const forceDisableAnimation = request.url.includes(',anim=false,');
-        if (blob.type.startsWith('image/') && (params.width || params.height || params.format || forceDisableAnimation)) {
-            // Store original
-            // if (await isImageAnimated(blob)) {
-            //     const originalResponse = responseFromBlob(blob, cacheControl);
-            //     const editedUrl = request.url.includes('?') ? `${request.url}&original=true` : `${request.url}?original=true`;
-            //     const editedRequest = cloneRequestWithModifiedUrl(request, editedUrl);
-            //     if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(editedRequest, originalResponse, cacheName);
-            //     customHeaders.push([ 'X-Animated', true ]);
-            // }
+        if (blob.type.startsWith('image/')) {
+            const fileLimits = params.target?.endsWith('-card') ? SW_CONFIG.fileLimits.card.image : null;
+            const disableAnimation = (/[,/]anim=false[,/]/).test(request.url);
+            const requestedWidth = request.url.match(/[,/]width=(\d+)[,/]/)?.[1] || null;
+            const isHuge = fileLimits && fileLimits.maxFileSize < blob.size;
+            const isWrongFormat = fileLimits && !fileLimits.mimeTypes.includes(blob.type);
+            const isAnimated = (disableAnimation || params.format) && (await isImageAnimated(blob));
 
-            const { width, height , format, quality, fit } = params;
-            const forceFormat = forceDisableAnimation && !format ? await isImageAnimated(blob) : false;
-            const options = { width, height, quality, format: format || (forceFormat ? 'webp' : undefined), fit };
-            const resizedBlob = (await ImageResizeQueue.run(blob, options));
-            // const resizedBlob = (await resizeBlobImage(blob, options));
-            blob = resizedBlob || blob;
+            if (isHuge && requestedWidth && !params.width && !params.height) params.width = requestedWidth;
+
+            if (!params.format && (
+                isWrongFormat
+                || isHuge
+                || disableAnimation && isAnimated
+            )) params.format = 'webp';
+
+            if (params.width || params.height || params.format) {
+                const { width, height , format, quality, fit, position, smoothing } = params;
+                const options = { width, height, quality, format, fit, position, smoothing };
+
+                // Store original
+                // if (isAnimated) {
+                //     const originalResponse = responseFromBlob(blob, cacheControl);
+                //     const u = new URL(request.url, self.location.origin);
+                //     u.searchParams.append('original', 'true');
+                //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
+                //     if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(editedRequest, originalResponse, cacheName);
+                //     customHeaders.push([ 'X-Animated', true ]);
+                // }
+
+                blob = (await ImageResizeQueue.run(blob, options)) || blob;
+            }
         }
+
 
         if (!cacheControl.noCache) cacheControl.immutable = SW_CONFIG.immutableCaches.includes(cacheName);
         const response = responseFromBlob(blob, cacheControl);
@@ -261,10 +287,10 @@ async function cacheFetch(request, cacheControl = { public: true }) {
 }
 
 // bs:
-    //   to get an image you need to know its nsfw level,
-    //   but to find out this level you need to get an image...
-    //   result: you need to spam requests with all possible options...
-    //   what nonsense...
+//   to get an image you need to know its nsfw level,
+//   but to find out this level you need to get an image...
+//   result: you need to spam requests with all possible options...
+//   what nonsense...
 async function fetchImageWithUnknownNSFW(request) {
     // const nsfwLevels = [ 'None', 'Soft', 'Mature', 'X' ];
     const nsfwLevels = ['None', 'X'];
@@ -319,48 +345,99 @@ function createBlurhashResponse(hash, width, height, punch) {
     return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Content-Length': totalSize, 'Cache-Control': `public, max-age=${SW_CONFIG.ttl['blurhash']}, immutable`, 'Date': new Date().toUTCString() } });
 }
 
-async function resizeBlobImage(blob, options) { // Resize image blob
-    const { width: targetWidth, height: targetHeight, format: targetFormat, quality: targetQuality = 0.97, fit = 'crop', position = 'center', smoothing = 'low' } = options; // fit: contain|scale-up|fill|crop; smoothing: none|low|medium|high;
-    const types = { jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png', avif: 'image/avif' };
-    if (
-        blob.type === 'image/svg+xml'
-        || (
-            !targetFormat
-            && ((await isImageAnimated(blob)) || (!targetWidth && !targetHeight))
-        )
-    ) return null;
-    try {
-        const bmp = await createImageBitmap(blob);
-        const { width, height } = bmp;
-        const originalRatio = width / height;
-        let cropWidth = width, cropHeight = height, offsetX = 0, offsetY = 0, newWidth = targetWidth ?? (targetHeight ? Math.round(targetHeight * originalRatio) : width), newHeight = targetHeight ?? (targetWidth ? Math.round(targetWidth / originalRatio) : height);
+async function resizeBlobImage(blob, options) {
+    const {
+        width: targetWidth,
+        height: targetHeight,
+        format: targetFormat,
+        quality: targetQuality = 0.9,
+        fit = 'crop',          // contain | cover | fill | crop
+        position = 'center',   // CSS position
+        smoothing = 'low'      // none | low | medium | high
+    } = options;
 
-        if ((fit === 'scale-up' || fit === 'contain') && targetWidth && targetHeight) {
-            const scaleX = targetWidth / width;
-            const scaleY = targetHeight / height;
-            const scale = fit === 'scale-up' ? Math.max(1, Math.min(scaleX, scaleY)) : Math.min(scaleX, scaleY);
-            newWidth = Math.round(width * scale);
+    const types = { jpeg: 'image/jpeg', jpg: 'image/jpeg', webp: 'image/webp', png: 'image/png', avif: 'image/avif' };
+
+    if (blob.type === 'image/svg+xml' || (!targetFormat && (await isImageAnimated(blob)))) return null;
+
+    try {
+        const bmpSrc = await createImageBitmap(blob);
+        const { width, height } = bmpSrc;
+
+        const ratio = width / height;
+
+        let newWidth, newHeight;
+        if (targetWidth && targetHeight) {
+            newWidth = targetWidth;
+            newHeight = targetHeight;
+        } else if (targetWidth) {
+            newWidth = targetWidth;
+            newHeight = Math.round(targetWidth / ratio);
+        } else if (targetHeight) {
+            newHeight = targetHeight;
+            newWidth = Math.round(targetHeight * ratio);
+        } else {
+            bmpSrc.close();
+            return blob;
+        }
+
+        if (fit === 'contain' || fit === 'cover') {
+            const sx = targetWidth ? targetWidth / width : Infinity;
+            const sy = targetHeight ? targetHeight / height : Infinity;
+
+            const scale = fit === 'cover' ? Math.max(sx, sy) : Math.min(sx, sy);
+
+            newWidth  = Math.round(width  * scale);
             newHeight = Math.round(height * scale);
         }
 
-        const newRatio = newWidth / newHeight;
-        if (fit !== 'fill' && (targetWidth || targetHeight) && Math.abs(originalRatio - newRatio) >= .001) {
-            cropWidth = Math.min(width, Math.round(height * newRatio));
-            cropHeight = Math.min(height, Math.round(width / newRatio));
-            offsetX = Math.round((width - cropWidth) / 2);
-            offsetY = Math.round((height - cropHeight) / 2);
+        let cropW = width, cropH = height, offsetX = 0, offsetY = 0;
+
+        if (fit === 'crop' || fit === 'cover') {
+            const newRatio = newWidth / newHeight;
+
+            if (Math.abs(ratio - newRatio) > 0.001) {
+                if (ratio > newRatio) cropW = Math.round(height * newRatio);
+                else cropH = Math.round(width / newRatio);
+
+                const kw = { left: 0, top: 0, center: 0.5, right: 1, bottom: 1 };
+                const parts = String(position).trim().split(/\s+/);
+
+                let xVal = parts[0] || 'center';
+                let yVal = parts[1] || 'center';
+
+                if (!parts[1] && (xVal === 'top' || xVal === 'bottom')) {
+                    yVal = xVal;
+                    xVal = 'center';
+                }
+
+                const calc = (v, full, crop) => {
+                    if (v in kw) return Math.round((full - crop) * kw[v]);
+                    if (v.endsWith('%')) return Math.round((full - crop) * (parseFloat(v)/100));
+                    if (v.endsWith('px')) return Math.round(parseFloat(v));
+                    const n = parseFloat(v);
+                    return isNaN(n) ? Math.round((full - crop) / 2) : Math.round(n);
+                };
+
+                offsetX = calc(xVal, width,  cropW);
+                offsetY = calc(yVal, height, cropH);
+
+                offsetX = Math.max(0, Math.min(offsetX, width  - cropW));
+                offsetY = Math.max(0, Math.min(offsetY, height - cropH));
+            }
         }
 
         const canvas = new OffscreenCanvas(newWidth, newHeight);
         const ctx = canvas.getContext('2d');
-        if (smoothing === 'none') {
-            ctx.imageSmoothingEnabled = false;
-        } else {
+
+        if (smoothing !== 'none') {
             ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = [ 'low', 'medium', 'high' ].includes(smoothing) ? smoothing : 'low';
-        }
-        ctx.drawImage(bmp, offsetX, offsetY, cropWidth, cropHeight, 0, 0, newWidth, newHeight);
-        bmp.close();
+            ctx.imageSmoothingQuality = smoothing === 'medium' || smoothing === 'high' ? smoothing : 'low';
+        } else ctx.imageSmoothingEnabled = false;
+
+        ctx.drawImage(bmpSrc, offsetX, offsetY, cropW, cropH, 0, 0, newWidth, newHeight);
+
+        bmpSrc.close();
 
         return await canvas.convertToBlob({ type: types[targetFormat] ?? blob.type, quality: targetQuality });
     } catch (error) {
@@ -371,30 +448,43 @@ async function resizeBlobImage(blob, options) { // Resize image blob
 
 async function isImageAnimated(blob) {
     if (blob.type === 'image/apng') return true;
-    if (!([ 'image/avif', 'image/gif', 'image/webp' ].includes(blob.type))) return false;
+    if (blob.type !== 'image/webp' && blob.type !== 'image/gif' && blob.type !== 'image/avif') return false;
+
     const buffer = await blob.slice(0, 512).arrayBuffer();
     const bytes = new Uint8Array(buffer);
     const decoder = new TextDecoder();
 
-    if (blob.type === 'image/webp' && decoder.decode(bytes.slice(0, 4)) === 'RIFF' && decoder.decode(bytes.slice(8, 12)) === 'WEBP') {
-        for (let i = 12; i < bytes.length - 4; i++) {
-            const chunk = String.fromCharCode(...bytes.slice(i, i + 4));
-            if (chunk === "ANIM" || chunk === "ANMF") return true;
+    if (blob.type === 'image/webp') {
+        if (decoder.decode(bytes.slice(0, 4)) !== 'RIFF' || decoder.decode(bytes.slice(8, 12)) !== 'WEBP') return false;
+
+        for (let i = 12; i < bytes.length - 3; i++) {
+            if (bytes[i] !== 65 || bytes[i+1] !== 78) continue;       // AN
+            if (bytes[i+2] === 73 && bytes[i+3] === 77) return true;  // + IN
+            if (bytes[i+2] === 77 && bytes[i+3] === 70) return true;  // + MF
         }
+
         return false;
     }
-    if (blob.type === 'image/avif' && decoder.decode(bytes.slice(0, 4)) === 'ftyp' && decoder.decode(bytes.slice(4, 8)) === 'avif') {
+
+    if (blob.type === 'image/avif') {
+        if (decoder.decode(bytes.slice(0, 4)) !== 'ftyp' || decoder.decode(bytes.slice(4, 8)) !== 'avif') return false;
+
         const avifFlags = bytes.slice(12, 16);
         if (avifFlags[0] === 0x01) return true;
+
         return false;
     }
-    if (blob.type === 'image/gif' && decoder.decode(bytes.slice(0, 3)) === 'GIF') {
+
+    if (blob.type === 'image/gif') {
+        if (decoder.decode(bytes.slice(0, 3)) !== 'GIF') return false;
+
         const gifHeader = decoder.decode(bytes.slice(3, 6));
-        if (gifHeader === '89a') {
-            const logicalScreenDescriptor = bytes.slice(6, 13);
-            const gifFlags = logicalScreenDescriptor[4];
-            if ((gifFlags & 0b10000000) !== 0) return true;
-        }
+        if (gifHeader !== '89a') return false;
+
+        const logicalScreenDescriptor = bytes.slice(6, 13);
+        const gifFlags = logicalScreenDescriptor[4];
+        if ((gifFlags & 0b10000000) !== 0) return true;
+
         return false;
     }
     return false;
@@ -594,6 +684,7 @@ class ImageResizeQueue {
 class CacheManager {
     static #cacheMap = new Map(); // stores open Cache objects
     static #hotCaches = [ SW_CONFIG.cache.blurhash, SW_CONFIG.cache.static ]; // cacheName
+    static #xAnimated = [ SW_CONFIG.cache.mediathumbs, SW_CONFIG.cache.media ];
     static #hotCache = new Map(); // RAM cache (only for blurhash)
 
     // Get cache by name, open if not already open
@@ -650,6 +741,17 @@ class CacheManager {
         }
 
         if (isHotCache) this.#putInHotCache(request.url, response);
+
+        // if (this.#xAnimated.includes(cacheName) && response.headers.has('X-Animated')) {
+        //     (async () => {
+        //         const clientId = options?.event?.clientId ?? null;
+        //         if (options?.silent || clientId === null) return;
+
+        //         const client = await self.clients.get(clientId);
+        //         if (!client) return;
+        //         client.postMessage({ type: 'HAS_ANIMATED_VARIANT', url: request.url });
+        //     })();
+        // }
 
         return response;
     }
