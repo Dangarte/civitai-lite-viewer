@@ -54,25 +54,24 @@ function toClipBoard(text) {
     navigator.clipboard.writeText(text);
 }
 
+const FILESIZE_UNITS = [
+    [1024 ** 4, 'tb'],
+    [1024 ** 3, 'gb'],
+    [1024 ** 2, 'mb'],
+    [1024, 'kb'],
+    [1, 'b'],
+];
 function filesizeToString(size) {
     const l = window.languagePack?.fileSize ?? {};
-    const units = [
-        { suffix: l['b'] ?? 'B', factor: 1 },
-        { suffix: l['kb'] ?? 'KB', factor: 1024 },
-        { suffix: l['mb'] ?? 'MB', factor: 1024 ** 2 },
-        { suffix: l['gb'] ?? 'GB', factor: 1024 ** 3 },
-        { suffix: l['tb'] ?? 'TB', factor: 1024 ** 4 }
-    ];
-
-    for (let i = units.length - 1; i >= 0; i--) {
-        const { suffix, factor } = units[i];
+    for (let i = 0; i < FILESIZE_UNITS.length; i++) {
+        const [factor, key] = FILESIZE_UNITS[i];
         if (size >= factor) {
             const value = size / factor;
-            const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
-            return `${value.toFixed(decimals)} ${suffix}`;
+            const roundTo = value < 10 ? 100 : value < 100 ? 10 : 1;
+            return `${Math.round(value*roundTo)/roundTo} ${l[key] ?? key}`;
         }
     }
-    return `0 ${l['b'] ?? 'B'}`;
+    return `0 ${l.b ?? 'b'}`;
 }
 
 function safeParseHTML(html) {

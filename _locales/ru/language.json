@@ -1,5 +1,7 @@
 {
     "text": {
+        "Published": "Опубликовано",
+        "Created": "Создано",
         "Updated": "Обновленно",
         "EarlyAccess": "Ранний доступ",
         "New": "Новое",
@@ -26,6 +28,11 @@
         "hideImagesWithoutResources": "Скрыть без ресурсов",
         "resurces_used": "Использованные ресурсы",
         "openOnCivitAI": "Открыть на CivitAI",
+        "loadTags": "Загрузить теги",
+        "loadComments": "Загрузить комментарии",
+        "repliesWithCount": "Ответы ({count})",
+        "loadMore": "Загрузить ещё",
+        "dragAndDrop": "Отпустите ссылку CivitAI здесь, чтобы открыть в лайт-режиме",
         "sort": "Сортировка",
         "hasMeta": "Инфо о генерации",
         "noMeta": "Нет информации о генерации",

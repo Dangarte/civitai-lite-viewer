@@ -438,6 +438,11 @@ button:hover {
     color: var(--c-text-light);
 }
 
+button[inert] {
+    pointer-events: none;
+    opacity: .4;
+}
+
 #drop-link-container {
     display: none;
     position: fixed;
@@ -1148,7 +1153,7 @@ footer a {
     top: 0;
     left: 0;
     height: 100%;
-    transition: transform .4s cubic-bezier(.2, .8, .2, 1);
+    transition: transform .25s cubic-bezier(.2, .6, .2, 1);
 }
 
 .carousel-items::-webkit-scrollbar {
@@ -1287,7 +1292,7 @@ footer a {
   pointer-events: none;
 }
 
-.model-version-description.hide-long-description::after {
+.model-version-description .hide-long-description::after {
     --c-bg-gradient-end: var(--c-bg);
 }
 
@@ -1780,6 +1785,7 @@ hr.description-xl-item {
     justify-content: flex-start;
     gap: .5em;
     font-weight: 500;
+    --image-size: 48px;
 }
 
 .user-deleted span {
@@ -1797,9 +1803,9 @@ hr.description-xl-item {
 
 .user-info .no-media,
 .user-info img {
-    width: 48px;
-    height: 48px;
-    font-size: 24px;
+    width: var(--image-size);
+    height: var(--image-size);
+    font-size: calc(var(--image-size)/2);
     border-radius: var(--radius);
     margin: 0;
     pointer-events: none;
@@ -1914,6 +1920,15 @@ hr.description-xl-item {
     align-items: start;
 }
 
+.image-tags .media-loading-indicator {
+    position: unset;
+    margin-inline: auto;
+}
+
+.image-tags .badge {
+    padding: .25em;
+}
+
 .media-full-preview {
     max-width: calc(100vw - 500px - 3.5em);
     max-height: calc(100vh - 4.5em);
@@ -1925,12 +1940,12 @@ hr.description-xl-item {
 .media-full-preview .media-element {
     max-width: 100%;
     max-height: 100%;
-}
-
-.media-full-preview img,
-.media-full-preview video {
     pointer-events: all !important;
     user-select: unset !important;
+}
+
+.media-full-preview.error .media-element {
+    display: block;
 }
 
 .full-image-page .carousel-item .media-full-preview {
@@ -1969,9 +1984,10 @@ hr.description-xl-item {
     border-radius: 50%;
     opacity: 1;
     transition: 0s;
-    border: 3px solid transparent;
-    border-left: 3px solid #999;
-    border-bottom: 3px solid #999;
+    border: 3px solid #444;
+    border-left: 3px solid #ccc;
+    border-bottom: 3px solid #ccc;
+    box-sizing: border-box;
     animation: loading-indicator .72s ease infinite;
 }
 
@@ -2133,6 +2149,7 @@ div.meta-resource {
     color: var(--c-text);
 }
 
+.meta-resource .meta-resource-type[lilpipe-text]::after,
 .meta-resource-weight[lilpipe-text]::after {
     content: '*';
     color: var(--c-main-text);
@@ -3288,6 +3305,100 @@ a.link-button.link-open-civitai::after {
 .config-container .config-description blockquote,
 .config-container .config-description p {
     color: var(--c-text-dark);
+}
+
+.mention {
+    background-color: var(--c-bg-light);
+    border-radius: var(--radius);
+    color: var(--c-main-text);
+    font-weight: 500;
+    padding-inline: .5ch;
+}
+
+.comments-list {
+    max-width: min(var(--app-width-small), 100%);
+    margin-inline: auto;
+    margin-block: .5em;
+    display: flex;
+    flex-direction: column;
+    gap: 1em;
+}
+
+.comment {
+    display: flex;
+    flex-direction: column;
+    gap: .75em;
+    background-color: var(--c-bg);
+    border-radius: var(--radius);
+    padding: .75em;
+}
+
+.comment-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: .5em;
+}
+
+.comment-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-size: .9em;
+    cursor: default;
+    color: var(--c-text-darker);
+}
+
+.comment-content {
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.comment-footer {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 1em;
+    font-size: .9em;
+}
+
+.comment-footer .badges {
+    gap: .75ch;
+}
+
+.comment-footer .badge {
+    padding: .25em;
+    background: none;
+}
+
+.replies-toggle {
+    color: var(--c-main-text);
+    font-size: .9em;
+}
+
+.replies-list {
+    margin-inline-start: 1em;
+    padding-inline-start: .5em;
+    min-height: 2em;
+    border-inline-start: 2px solid var(--c-bg-lighter);
+    display: flex;
+    flex-direction: column;
+    gap: .5em;
+    margin-block-start: .5em;
+}
+
+.comments-list .media-loading-indicator {
+    position: unset;
+    margin-inline: auto;
+}
+
+.replies-empty {
+    color: var(--c-text-darker);
+    font-style: italic;
+    font-size: 0.9em;
+    padding: 0;
+    padding-block: 0.5em;
 }
 
 .drag-ghost-container {

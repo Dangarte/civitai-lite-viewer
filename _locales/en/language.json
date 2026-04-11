@@ -1,5 +1,7 @@
 {
     "text": {
+        "Published": "Published",
+        "Created": "Created",
         "Updated": "Updated",
         "EarlyAccess": "Early Access",
         "New": "New",
@@ -26,6 +28,11 @@
         "hideImagesWithoutResources": "Hide without resources",
         "resurces_used": "Resources Used",
         "openOnCivitAI": "Open on CivitAI",
+        "loadTags": "Load tags",
+        "loadComments": "Load comments",
+        "repliesWithCount": "Replies ({count})",
+        "loadMore": "Load more",
+        "dragAndDrop": "Drop a CivitAI link here to open in lite mode",
         "sort": "Sort",
         "hasMeta": "Generation info",
         "noMeta": "No generation info",

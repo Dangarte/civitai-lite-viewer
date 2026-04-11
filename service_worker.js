@@ -43,7 +43,12 @@ const SW_CONFIG = {
         card: {
             image: {
                 mimeTypes: [ 'image/webp', 'image/jpeg' ],
-                maxFileSize: 1 * 1024 * 1024, // 1 mb
+                maxFileSize: 900 * 1024, // 900 kb
+                maxFileSizes: [
+                    { width: 512, maxFileSize: 400 * 1024 },            // 400 kb
+                    { width: 1024, maxFileSize: 900 * 1024 },           // 900 kb
+                    { width: 1536, maxFileSize: 1.6 * 1024 * 1024 },    // 1.6 mb
+                ]
             },
         }
     },
@@ -215,9 +220,19 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         const after = sParams.size;
         const modified = before !== after;
         const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
+
         const fetchResponse = await specialFetch(modified ? requestWithoutLocalParams : request);
         originalResponse = fetchResponse;
-        if (!fetchResponse.ok) return fetchResponse; // Don't try to cache the response with an error
+
+        // Don't try to cache the response with an error
+        if (!fetchResponse.ok) return fetchResponse;
+
+        // Stop downloading if the server decides to return the video to the image
+        if (request.destination === 'image' && fetchResponse.headers?.get('content-type')?.startsWith('video/')) {
+            fetchResponse.body?.cancel();
+            console.warn('A video response was received in the image element, download canceled.', request.url);
+            return new Response(null, { status: 415, statusText: 'Unsupported Media Type' });
+        }
 
         let blob = await fetchResponse.blob();
         const customHeaders = [];
@@ -236,8 +251,19 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         if (blob.type.startsWith('image/')) {
             const fileLimits = params.target?.endsWith('-card') ? SW_CONFIG.fileLimits.card.image : null;
             const disableAnimation = (/[,/]anim=false[,/]/).test(request.url);
-            const requestedWidth = request.url.match(/[,/]width=(\d+)[,/]/)?.[1] || null;
-            const isHuge = fileLimits && fileLimits.maxFileSize < blob.size;
+            const requestedWidth = Number(request.url.match(/[,/]width=(\d+)[,/]/)?.[1]) || null;
+
+            let effectiveMaxFileSize = null;
+            if (fileLimits) {
+                if (requestedWidth && fileLimits.maxFileSizes?.length) {
+                    const match = fileLimits.maxFileSizes.sort((a, b) => a.width - b.width).find(item => requestedWidth <= item.width);
+                    effectiveMaxFileSize = match?.maxFileSize ?? fileLimits.maxFileSize;
+                } else {
+                    effectiveMaxFileSize = fileLimits.maxFileSize;
+                }
+            }
+
+            const isHuge = effectiveMaxFileSize && blob.size > effectiveMaxFileSize;
             const isWrongFormat = fileLimits && !fileLimits.mimeTypes.includes(blob.type);
             const isAnimated = (disableAnimation || params.format) && (await isImageAnimated(blob));
 
@@ -619,15 +645,21 @@ function blurhashToPixelsBGRA(hash, width = 32, height = 32, punch = 1) {
     return pixels;
 }
 
-function clearRequestFromLocalParams(request) {
-    const url = new URL(request.url);
+function clearUrlFromParams(url, paramsToRemove) {
+    if (!(url instanceof URL)) url = new URL(url);
     const sParams = url.searchParams;
     const before = sParams.size;
-    for (const key of SW_CONFIG.local_params) sParams.delete(key); // Removing unnecessary parameters
+    for (const key of paramsToRemove) sParams.delete(key);
     const after = sParams.size;
 
-    if (before === after) return request;
-    return cloneRequestWithModifiedUrl(request, url.toString());
+    if (before !== after) return url;
+    return null;
+}
+
+function clearRequestFromLocalParams(request) {
+    const modifiedUrl = clearUrlFromParams(request.url, SW_CONFIG.local_params); // Removing unnecessary parameters
+    if (!modifiedUrl) return request;
+    return cloneRequestWithModifiedUrl(request, modifiedUrl.toString());
 }
 
 function cloneRequestWithModifiedUrl(originalRequest, newUrl) {
@@ -728,13 +760,10 @@ class CacheManager {
                 (async () => {
                     const responseOld = response.clone();
                     const responseNew = await cacheFetch(request);
-                    const clientId = options?.event?.clientId ?? null;
-                    if (options?.silent || clientId === null) return;
+                    if (options?.silent || !options?.event) return;
                     if (await this.#compareResponses(responseOld, responseNew)) return;
 
-                    const client = await self.clients.get(clientId);
-                    if (!client) return;
-                    client.postMessage({ type: 'CACHE_UPDATED', url: request.url });
+                    this.#sendMessage(options.event, { type: 'CACHE_UPDATED', url: request.url });
                 })();
                 return response;
             }
@@ -742,15 +771,8 @@ class CacheManager {
 
         if (isHotCache) this.#putInHotCache(request.url, response);
 
-        // if (this.#xAnimated.includes(cacheName) && response.headers.has('X-Animated')) {
-        //     (async () => {
-        //         const clientId = options?.event?.clientId ?? null;
-        //         if (options?.silent || clientId === null) return;
-
-        //         const client = await self.clients.get(clientId);
-        //         if (!client) return;
-        //         client.postMessage({ type: 'HAS_ANIMATED_VARIANT', url: request.url });
-        //     })();
+        // if (!options?.silent && options?.event) {
+        //     if (this.#xAnimated.includes(cacheName) && response.headers.has('X-Animated')) this.#sendMessage(options.event, { type: 'HAS_ANIMATED_VARIANT', url: request.url });
         // }
 
         return response;
@@ -776,6 +798,16 @@ class CacheManager {
         if (!url.hash) return request;
         url.hash = '';
         return cloneRequestWithModifiedUrl(request, url.toString());
+    }
+
+    static async #sendMessage(e, message) {
+        const clientId = e.clientId ?? null;
+        if (clientId === null) return;
+
+        const client = await self.clients.get(clientId);
+        if (!client) return;
+
+        client.postMessage(message);
     }
 
 

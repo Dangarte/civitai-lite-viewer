@@ -1,5 +1,7 @@
 {
     "text": {
+        "Published": "已发布",
+        "Created": "创建",
         "Updated": "已更新",
         "EarlyAccess": "抢先体验",
         "New": "新",
@@ -26,6 +28,11 @@
         "hideImagesWithoutResources": "隐藏无资源",
         "resurces_used": "使用的资源",
         "openOnCivitAI": "在 CivitAI 上打开",
+        "loadTags": "加载标签",
+        "loadComments": "加载评论",
+        "repliesWithCount": "回复 ({count})",
+        "loadMore": "加载更多",
+        "dragAndDrop": "将 CivitAI 链接拖放到此处以轻量模式打开",
         "sort": "排序",
         "hasMeta": "生成信息",
         "noMeta": "没有生成信息",

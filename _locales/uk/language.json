@@ -1,5 +1,7 @@
 {
     "text": {
+        "Published": "Опубліковано",
+        "Created": "Створено",
         "Updated": "Оновлено",
         "EarlyAccess": "Ранній доступ",
         "New": "Нове",
@@ -26,6 +28,11 @@
         "hideImagesWithoutResources": "Приховати без ресурсів",
         "resurces_used": "Використані ресурси",
         "openOnCivitAI": "Відкрити на CivitAI",
+        "loadTags": "Завантажити теги",
+        "loadComments": "Завантажити коментарі",
+        "repliesWithCount": "Відповіді ({count})",
+        "loadMore": "Завантажити ще",
+        "dragAndDrop": "Перетягніть посилання CivitAI сюди, щоб відкрити в легкому режимі",
         "sort": "Сортування",
         "hasMeta": "Інфо про генерацію",
         "noMeta": "Немає інформації про генерацію",
