@@ -1382,9 +1382,18 @@ class MasonryLayout {
         const step = this.#queueGenerators[item.stepIndex];
         if (!step) return;
 
-        const result = step.generator(item.renderCtx);
-        if (result?.element) item.element = result.element;
-        item.stepIndex++;
+        try {
+            const result = step.generator(item.renderCtx);
+            if (result?.element) item.element = result.element;
+            item.stepIndex++;
+        } catch (error) {
+            console.error(error);
+            console.error('Queue step failed:', item);
+
+            this.#queueRemove(item);
+
+            item.element?.classList.add('error');
+        }
     }
     #queueRun() {
         if (this.#queueList.size === 0) {

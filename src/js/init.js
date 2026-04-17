@@ -1,8 +1,8 @@
 /// <reference path="./_docs.d.ts" />
 
 const CONFIG = {
-    version: 37,
-    updated: '2026-03-20T12:00:00.000Z',
+    version: 38,
+    updated: '2026-04-17T12:00:00.000Z',
     extensionVertsion: 3,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -120,6 +120,7 @@ const SETTINGS = {
     period_images: 'AllTime',
     period_articles: 'AllTime',
     baseModels: [],
+    image_types: [],
     baseModels_images: [],
     blackListTags: [],      // Doesn't work on images (pictures don't have tags)
     blackListUserIds: [],   //
@@ -228,7 +229,8 @@ class CivitaiPublicAPI {
 
             return data;
         } catch (error) {
-            console.error(`Failed to fetch ${target ?? 'something'}:`, error?.message ?? error);
+            console.error(error);
+            console.error(`Failed to fetch ${target ?? 'something'}.`);
             throw error;
         }
     }
@@ -360,11 +362,17 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             const data = await window.proxyFetchCivAPI(route, params);
             // console.log(`[API Bridge] (${target}) Raw Data`, data);
 
-            if (data.error) throw new Error(data.error);
+            const error = data.error ?? data.response?.error;
+            if (error) {
+                if (error instanceof Error) throw new Error(error);
+                const message = error.message ?? error.json?.message;
+                throw new Error(message);
+            }
 
             return data.response?.result?.data ?? data.response;
         } catch (error) {
-            console.log(`Failed to fetch ${target ?? 'something'}:`, error?.message ?? error);
+            console.error(error);
+            console.error(`Failed to fetch ${target ?? 'something'}.`);
             throw error;
         }
     }
@@ -591,7 +599,9 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             postId,
             username = '',
             baseModels = [],
+            types = [],
             browsingLevel,
+            withMeta = true,
             sort = '',
             period = '',
         } = options;
@@ -602,7 +612,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             json: {
                 periodMode: 'published',
                 useIndex: !disableIndex,
-                include: ["cosmetics", "meta"],
+                include: ["cosmetics"],
+                withMeta,
                 excludedTagIds: [],
                 // authed: true,
                 cursor
@@ -617,6 +628,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (collectionId) input.json.collectionId = +collectionId;
         if (postId) input.json.postId = +postId;
         if (username) input.json.username = username;
+        if (types?.length > 0) input.json.types = types;
         if (baseModels?.length > 0) input.json.baseModels = baseModels;
 
         const data = (await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' })).json;
@@ -3301,7 +3313,7 @@ class Controller {
         model.modelVersions.forEach(version => {
             const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
             const isActive = version.id === modelVersion.id;
-            const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1 });
+            const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '' });
             if (version.publishedAt > CONFIG.minDateForNewBadge) button.classList.add('recently-updated');
             if (isActive) button.classList.add('active');
             button.appendChild(this.#formatModelVersionName(version.name));
@@ -3477,7 +3489,7 @@ class Controller {
         }
 
         // Comments
-        if (EXTENSION_INSTALLED && model.stats?.commentCount) {
+        if (EXTENSION_INSTALLED) { // model.stats?.commentCount often 0, so skip the check
             const { element: commentsElement, promise } = this.#genComments({ entityId: model.id, entityType: 'model', opCreator: model.creator?.username || null, state: navigationState });
             page.appendChild(commentsElement);
         }
@@ -4139,7 +4151,9 @@ class Controller {
                     return promise;
                 }).catch(error => {
                     if (pageNavigation !== this.#pageNavigation) return;
+                    console.error(error);
                     console.error('Failed to fetch items:', error?.message ?? error);
+                    layout.clear();
                     element.textContent = '';
                     element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
@@ -4216,6 +4230,7 @@ class Controller {
                     period: forcedPeriod || SETTINGS.period_images,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfwLevel,
+                    types: isSpecific ? [] : SETTINGS.image_types,
                     baseModels,
                     modelVersionId,
                     collectionId,
@@ -4433,6 +4448,7 @@ class Controller {
             infinityScroll.reload();
         }, {
             baseModels_images: !isSpecific,
+            image_types: !isSpecific,
             groupImagesByPost: !postId,
             period_images: !forcedPeriod
         }));
@@ -4635,6 +4651,24 @@ class Controller {
                 if (s.fontSize) s.removeProperty('font-size');
                 if (s.fontFamily) s.removeProperty('font-family');
                 if (s.fontWeight) s.removeProperty('font-weight');
+            }
+        });
+
+        // useless wrappers
+        description.querySelectorAll('span, strong, b, i, em, u, small, mark, sub, sup').forEach(el => {
+            const meaningfulNodes = [...el.childNodes].filter(n => !(n.nodeType === Node.TEXT_NODE && !n.textContent.trim()));
+
+            // <em><br></em> (new line)
+            if (meaningfulNodes.length === 1 && meaningfulNodes[0].nodeName === 'BR') {
+                el.replaceWith(...el.childNodes);
+                return;
+            }
+
+            // <em> </em> (spaces)
+            if (!el.textContent.trim()) {
+                if (el.childNodes.length) el.replaceWith(...el.childNodes);
+                else el.remove();
+                return;
             }
         });
 
@@ -4971,7 +5005,7 @@ class Controller {
         const keywords = new Set([ 'BREAK' ]);
         const tokenSpecs = [
             { type: 'lora',     regex: /<lora:[^:>]+:[^>]+>/y },
-            { type: 'link',     regex: /https:\/\/civitai\.com\/[^\s]+/y },
+            { type: 'link',     regex: /https:\/\/[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}(?:\/[^\s,.:;!?)]*)?/y },
             { type: 'escaped',  regex: /\\[\\():]/y },
             { type: 'weight',   regex: /:-?[0-9.]+/y },
             { type: 'bracket',  regex: /[()]/y },
@@ -5081,12 +5115,18 @@ class Controller {
                 // insertElement('span', span, { class: 'lora-weight' }, value.substring(indexEnd + 1, value.length - 1));
                 // span.appendChild(document.createTextNode('>'));
             } else if (type === 'link') {
-                if (isURL(value)) {
-                    const a = insertElement('a', weightContainer, { class: 'link', href: value, target: '_blank', rel: 'noopener' }, value);
-                    const { params } = this.parseCivUrl(value);
-                    if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) a.setAttribute('data-link-preview', '');
+                const url = toURL(value);
+                if (url) {
+                    if (CONFIG.civitai_origins.includes(url.origin)) {
+                        const a = insertElement('a', weightContainer, { class: 'link', href: url.toString(), target: '_blank', rel: 'noopener' }, value);
+                        const { params } = this.parseCivUrl(url.toString());
+                        if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) a.setAttribute('data-link-preview', '');
+                    } else {
+                        insertElement('span', weightContainer, { class: 'link link-not-civitai' }, value);
+                    }
+                } else {
+                    insertElement('span', weightContainer, { class: 'link' }, value);
                 }
-                else insertElement('span', weightContainer, { class: 'link' }, value);
             } else if (type === 'bracket') {
                 if (value === '(') {
                     openWeight(value, i);
@@ -5990,7 +6030,7 @@ class Controller {
         { // blurhash
             weight: 5,
             generator: (ctx) => {
-                const { data: article, mediaContainer, forceAutoplay } = ctx;
+                const { data: article, mediaContainer, card, forceAutoplay } = ctx;
 
                 if (article.coverImage) {
                     const previewMedia = article.coverImage;
@@ -6073,8 +6113,8 @@ class Controller {
 
                 // actual image
                 if (article.coverImage) {
-                    this.#insertMediaElement(mediaContainer, { media: article.coverImage, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                     mediaContainer.setAttribute('data-id', article.coverImage.id);
+                    this.#insertMediaElement(mediaContainer, { media: article.coverImage, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                 }
             }
         }
@@ -6210,8 +6250,8 @@ class Controller {
 
                 // actual image
                 if (previewMedia) {
-                    this.#insertMediaElement(mediaContainer, { media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                     mediaContainer.setAttribute('data-id', previewMedia.id);
+                    this.#insertMediaElement(mediaContainer, { media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                 }
             }
         }
@@ -6338,8 +6378,8 @@ class Controller {
                 cardContentBottom.appendChild(statsContainer);
 
                 // actual image
-                this.#insertMediaElement(mediaContainer, { media: image, width: itemWidth, height: itemHeight, decoding: 'async', target: 'image-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                 mediaContainer.setAttribute('data-id', image.id);
+                this.#insertMediaElement(mediaContainer, { media: image, width: itemWidth, height: itemHeight, decoding: 'async', target: 'image-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
             }
         }
     ];
@@ -6360,11 +6400,12 @@ class Controller {
         if (userInfo.userId && CONFIG.userGroups[userInfo.userId]) className += ` user-${CONFIG.userGroups[userInfo.userId]}`;
         container.className = className;
 
-        const creatorImageSize = Math.round((userInfo.imageSize || 48) * this.#devicePixelRatio);
+        const imageSize = Math.round(userInfo.imageSize || 48);
+        const imageSizeDpr = Math.round(imageSize * this.#devicePixelRatio);
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
-                container.style.setProperty('--image-size', creatorImageSize + 'px');
-                const src = `${userInfo.image.replace(this.#regex.urlParamWidth, `/width=${this.#getNearestServerSize(creatorImageSize)}/`)}?width=${creatorImageSize}&height=${creatorImageSize}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
+                container.style.setProperty('--image-size', imageSize + 'px');
+                const src = `${userInfo.image.replace(this.#regex.urlParamWidth, `/width=${this.#getNearestServerSize(imageSizeDpr)}/`)}?width=${imageSizeDpr}&height=${imageSizeDpr}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
 
                 if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, new Set());
 
@@ -6475,7 +6516,7 @@ class Controller {
         const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.3;
         let paramString = target ? (`?target=${target}`) : '';
         // Crop image if result is 30% wider than required
-        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.92&fit=crop${allowAnimated ? '' : '&format=webp'}`;
+        if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.84&fit=crop${allowAnimated ? '' : '&format=webp'}`;
         const widthString = original ? '/original=true/' : `/${size}anim=false,optimized=true/`;
         const urlBase = media.url.includes('/original=true/') ? media.url.replace('/original=true/', widthString) : media.url.replace(this.#regex.urlParamWidth, widthString);
         const url = `${urlBase}${paramString}`;
@@ -6493,7 +6534,7 @@ class Controller {
             const videoSrc = source.replace(this.#regex.urlParamAnimFalse, '');
 
             // Force the poster to be resized to what the server should return anyway (it doesn't always return the correct size)
-            if (!resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${realWidth}&quality=.92&format=webp`;
+            if (!resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${realWidth}&quality=.84&format=webp`;
             const poster = src = `${source.replace(this.#regex.urlEndsOnMp4, '.jpeg')}${paramString}`;
 
             mediaContainer.setAttribute('data-src', videoSrc);
@@ -6509,8 +6550,6 @@ class Controller {
         if (loading === 'eager') mediaElement.loading = loading;
         if (decoding === 'sync' || decoding === 'async') mediaElement.decoding = decoding;
 
-        if (src) mediaElement.setAttribute('src', src);
-
         if (setMediaElementOriginalSizes) {
             mediaElement.style.cssText = `width: ${media.width}px; height: ${media.height}px;`;
         } else if (width && height) {
@@ -6519,7 +6558,12 @@ class Controller {
             mediaElement.style.cssText = `aspect-ratio: ${this.#round(ratio)};`;
         }
         if (resized && width && height) mediaContainer.setAttribute('data-resize', `${width}:${height}`);
+
         mediaContainer.prepend(mediaElement);
+
+        // Set the src AFTER inserting it into the DOM, otherwise the browser decodes the image twice...
+        if (src) mediaElement.setAttribute('src', src);
+
         return mediaElement;
     }
 
@@ -6707,9 +6751,11 @@ class Controller {
         return this.#genFilters(list, onAnyChange);
     }
 
+    // TODO: translation for "image_types"
     static #genImagesListFilters(onAnyChange, options = {}) {
-        const { baseModels_images = true, groupImagesByPost = true, period_images = true } = options;
+        const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
         const modelsOptions = [ "All", ...this.#models.options ];
+        const imagesTypeOptions = [ "All", "image", "video" ];
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
 
         const list = [
@@ -6745,6 +6791,14 @@ class Controller {
                 tags: this.#models.tags,
                 setValue: newValue => SETTINGS.baseModels_images = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.baseModels_images.length ? (SETTINGS.baseModels_images.length > 1 ? SETTINGS.baseModels_images : SETTINGS.baseModels_images[0]) : 'All'
+            } : null,
+            EXTENSION_INSTALLED && image_types ? { type: 'list',
+                key: 'image_types',
+                label: window.languagePack?.text?.imagesType ?? 'Type',
+                options: imagesTypeOptions,
+                labels: this.#listFilters.genLabels(imagesTypeOptions, 'imageTypes'),
+                setValue: newValue => SETTINGS.image_types = newValue === 'All' ? [] : [ newValue ],
+                getValue: () => SETTINGS.image_types.length ? (SETTINGS.image_types.length > 1 ? SETTINGS.image_types : SETTINGS.image_types[0]) : 'All'
             } : null,
             { type: 'list',
                 key: 'sort_images',
@@ -7325,22 +7379,22 @@ class Controller {
         history.replaceState(this.state, '', this.#page);
     }
 
-    static navigate({ hash, title, soft = false }) {
+    static navigate({ hash, title, historyMode = 'push' }) {
         if (!hash || hash[0] !== '#') hash = '#home';
 
         if (title !== undefined) this.#setTitle(title);
 
-        // Replace history state
-        if (soft) {
-            history.replaceState(this.state, '', hash);
+        const newState = { id: Date.now() };
+
+        if (historyMode === 'replace') {
+            history.replaceState(newState, '', hash);
             this.#page = hash;
+            this.gotoPage(hash, newState);
             return;
         }
 
         this.saveState();
 
-        // Navigate to page
-        const newState = { id: Date.now() };
         if (hash !== location.hash) history.pushState(newState, '', hash);
         this.gotoPage(hash, newState);
     }
@@ -7857,10 +7911,14 @@ function onBodyClick(e) {
 
     if (e.ctrlKey) return;
 
-    const href = e.target.closest('a[href^="#"]:not([target="_blank"])')?.getAttribute('href');
-    if (href) {
+    const link = e.target.closest('a[href^="#"]:not([target="_blank"])');
+    if (link) {
         e.preventDefault();
-        Controller.navigate({ hash: href });
+
+        const href = link.getAttribute('href');
+        const replace = link.hasAttribute('data-replace-history');
+
+        Controller.navigate({ hash: href, historyMode: replace ? 'replace' : 'push' });
     }
 }
 
@@ -8624,8 +8682,7 @@ function init() {
     // TEMP // TODO: normal solution
     if (initialHash.startsWith('#images') && initialHash.includes('image=')) document.getElementsByTagName('header')[0]?.setAttribute('data-format', 'mini');
 
-    Controller.gotoPage(initialHash);
-    Controller.navigate({ hash: initialHash, soft: true });
+    Controller.navigate({ hash: initialHash, historyMode: 'replace' });
     Controller.onResize();
 
     if (!document.hidden) {

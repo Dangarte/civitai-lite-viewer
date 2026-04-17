@@ -1577,8 +1577,19 @@ hr.description-xl-item {
 }
 
 .card.error {
-    outline: 20px solid red;
-    outline-offset: -20px;
+    outline: .5rem solid var(--c-error);
+    outline-offset: -.5rem;
+}
+
+.card.error::after {
+    content: 'Error';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 2rem;
+    color: var(--c-error);
+    font-weight: 700;
 }
 
 .card:focus-visible {
@@ -1594,6 +1605,7 @@ hr.description-xl-item {
 .card-background {
     display: block;
     position: absolute;
+    contain: strict;
     inset: 0;
     border-radius: var(--radius);
     pointer-events: none;
@@ -1927,6 +1939,7 @@ hr.description-xl-item {
 
 .image-tags .badge {
     padding: .25em;
+    user-select: auto;
 }
 
 .media-full-preview {
@@ -3101,6 +3114,7 @@ a.link-button.link-open-civitai::after {
 .scroll-page-to-top:hover,
 .scroll-page-to-top:focus-visible {
     opacity: 1;
+    background-color: var(--c-main-bg);
 }
 
 .bib-entry {
