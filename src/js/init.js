@@ -1754,7 +1754,7 @@ class Controller {
 
         // Open in CivitAI
         const civitaiUrl = this.createCivitUrl();
-        if (civitaiUrl) insertElement('a', element, { href: civitaiUrl, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        if (civitaiUrl) insertElement('a', appContent, { href: civitaiUrl, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
         return { element: appContent, title: window.languagePack?.errors?.error ?? 'Error' };
     }
