@@ -16,7 +16,7 @@
             ]
         },
         "condition": {
-            "urlFilter": "https://civitai.com/?bridge=true",
+            "urlFilter": "https://civitai.red/?bridge=true",
             "resourceTypes": [
                 "sub_frame"
             ]

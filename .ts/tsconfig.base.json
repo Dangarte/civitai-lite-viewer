@@ -1,0 +1,12 @@
+{
+    "compilerOptions": {
+        "lib": [
+            "ESNext"
+        ],
+        "allowJs": true,
+        "checkJs": true,
+        "strict": false,
+        "composite": true,
+        "noEmit": true
+    }
+}

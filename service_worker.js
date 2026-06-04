@@ -1,3 +1,5 @@
+"use strict";
+
 const SW_CONFIG = {
     cache: {
         api: 'civitai_light-api-cache-v1',
@@ -64,13 +66,14 @@ SW_CONFIG.validTargets = new Set([...Object.keys(SW_CONFIG.cacheByTarget), ...Ob
 
 self.addEventListener('activate', () => {
     Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => CacheManager.cleanExpiredCache({ cacheName }));
+    // @ts-ignore
     self.clients.claim();
 });
 self.addEventListener('fetch', onFetch);
 self.addEventListener('message', onMessage);
 
 
-class TaskController {
+class MyTaskController {
     constructor() {
         this.taskQueues = new Map();
     }
@@ -110,7 +113,7 @@ class TaskController {
     }
 }
 
-const taskController = new TaskController();
+const taskController = new MyTaskController();
 
 function onMessage(e) {
     const sendSuccess = response => {
@@ -267,7 +270,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
             const isWrongFormat = fileLimits && !fileLimits.mimeTypes.includes(blob.type);
             const isAnimated = (disableAnimation || params.format) && (await isImageAnimated(blob));
 
-            if (isHuge && requestedWidth && !params.width && !params.height) params.width = requestedWidth;
+            if (isHuge && requestedWidth && !params.width && !params.height) params.width = String(requestedWidth);
 
             if (!params.format && (
                 isWrongFormat
@@ -368,7 +371,7 @@ function createBlurhashResponse(hash, width, height, punch) {
     v.setUint16(26, 1, true); v.setUint16(28, 32, true); v.setUint32(30, 0, true); v.setUint32(34, size, true);
 
     new Uint8Array(buffer, 54).set(pixels);
-    return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Content-Length': totalSize, 'Cache-Control': `public, max-age=${SW_CONFIG.ttl['blurhash']}, immutable`, 'Date': new Date().toUTCString() } });
+    return new Response(buffer, { headers: { 'Content-Type': 'image/bmp', 'Content-Length': String(totalSize), 'Cache-Control': `public, max-age=${SW_CONFIG.ttl['blurhash']}, immutable`, 'Date': new Date().toUTCString() } });
 }
 
 async function resizeBlobImage(blob, options) {
@@ -729,7 +732,8 @@ class CacheManager {
     }
 
     // Get response from cache
-    static async get(request, cacheName = null, options = { event: null, SWR: false, silent: false }) {
+    static async get(request, cacheName = null, options) {
+        if (!options) options = { event: null, SWR: false, silent: false };
         let response;
 
         request = this.#clearRequest(request);
@@ -804,6 +808,7 @@ class CacheManager {
         const clientId = e.clientId ?? null;
         if (clientId === null) return;
 
+        // @ts-ignore
         const client = await self.clients.get(clientId);
         if (!client) return;
 
@@ -879,7 +884,7 @@ class CacheManager {
     }
 
     // Check and remove all old data (max-age expired)
-    static async cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null } = {}) {
+    static async cleanExpiredCache({ cacheName, mode = 'max-age-expired', urlMask = null }) {
         if (mode === 'all') {
             const cache = await this.#getCache(cacheName);
             const keys = await cache.keys();

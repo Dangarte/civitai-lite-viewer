@@ -1,4 +1,5 @@
 /// <reference path="./_docs.d.ts" />
+"use strict";
 
 function setAttributes(element, attributes) {
     if (attributes === undefined) return;
@@ -35,6 +36,21 @@ function insertTextNode(text, parent) {
     parent.appendChild(document.createTextNode(text));
 }
 
+function whenImageSettles(img) {
+    return new Promise(resolve => {
+        if (img.src && img.complete) return resolve(Boolean(img.naturalWidth));
+
+        const handler = e => {
+            img.removeEventListener('load', handler);
+            img.removeEventListener('error', handler);
+            resolve(Boolean(img.complete && img.naturalWidth));
+        };
+
+        img.addEventListener('load', handler);
+        img.addEventListener('error', handler);
+    });
+}
+
 function animateElement(element, options) {
     const { keyframes, framescount, timing = {}, duration, delay, easing, fill, timeline = document.timeline } = options;
     if (framescount !== undefined) timing.number = framescount;
@@ -55,16 +71,16 @@ function toClipBoard(text) {
 }
 
 const FILESIZE_UNITS = [
-    [1024 ** 4, 'tb'],
-    [1024 ** 3, 'gb'],
-    [1024 ** 2, 'mb'],
-    [1024, 'kb'],
-    [1, 'b'],
+    { factor: 1024 ** 4,    key: 'tb' },
+    { factor: 1024 ** 3,    key: 'gb' },
+    { factor: 1024 ** 2,    key: 'mb' },
+    { factor: 1024,         key: 'kb' },
+    { factor: 1,            key: 'b'  },
 ];
 function filesizeToString(size) {
     const l = window.languagePack?.fileSize ?? {};
     for (let i = 0; i < FILESIZE_UNITS.length; i++) {
-        const [factor, key] = FILESIZE_UNITS[i];
+        const { factor, key } = FILESIZE_UNITS[i];
         if (size >= factor) {
             const value = size / factor;
             const roundTo = value < 10 ? 100 : value < 100 ? 10 : 1;
@@ -129,9 +145,9 @@ async function fetchJSON(url, options = {}) {
             throw new Error(error || `HTTP ${res.status}`);
         }
         return await res.json();
-    } catch (err) {
-        console.warn('fetchJSON error:', err?.message ?? err);
-        return { error: err?.message ?? err };
+    } catch (error) {
+        console.warn('fetchJSON error:', error?.message ?? error);
+        return { error: error?.message ?? error };
     }
 }
 
@@ -145,13 +161,13 @@ function parseParams(paramString) {
 }
 
 const TIME_UNITS = [
-    [31536000, 'year'],
-    [2592000,  'month'],
-    [604800,   'week'],
-    [86400,    'day'],
-    [3600,     'hour'],
-    [60,       'minute'],
-    [1,        'second'],
+    { step: 31536000, key: 'year'   },
+    { step: 2592000,  key: 'month'  },
+    { step: 604800,   key: 'week'   },
+    { step: 86400,    key: 'day'    },
+    { step: 3600,     key: 'hour'   },
+    { step: 60,       key: 'minute' },
+    { step: 1,        key: 'second' },
 ];
 function pluralIndex(n) {
     const n10 = n % 10;
@@ -169,7 +185,7 @@ function timeAgo(seconds) {
     const base = future ? (lang?.unitAfter ?? 'in %n %unit') : (lang?.unitAgo ?? '%n %unit ago');
 
     for (let i = 0; i < TIME_UNITS.length; i++) {
-        const [step, key] = TIME_UNITS[i];
+        const { step, key } = TIME_UNITS[i];
         if (s >= step) {
             const n = Math.floor(s / step);
             const forms = window.languagePack?.units?.[key];
@@ -182,6 +198,31 @@ function timeAgo(seconds) {
     return lang?.now ?? 'now';
 }
 
+function timeAgoSameBucket(dateA, dateB) {
+    const toSeconds = d => Math.floor((Date.now() - d) / 1000);
+    const getBucket = seconds => {
+        if (seconds === 0) return { key: 'now', n: 0, future: false };
+
+        const future = seconds < 0;
+        let s = future ? -seconds : seconds;
+
+        for (let i = 0; i < TIME_UNITS.length; i++) {
+            const { step, key } = TIME_UNITS[i];
+            if (s >= step) {
+                const n = Math.floor(s / step);
+                return { key, n, future };
+            }
+        }
+
+        return { key: 'now', n: 0, future: false };
+    };
+
+    const a = getBucket(toSeconds(dateA));
+    const b = getBucket(toSeconds(dateB));
+
+    return a.key === b.key && a.n === b.n && a.future === b.future;
+}
+
 function pluralize(count, [one, few, many]) {
     const i = pluralIndex[count];
     if (i === 0) return one;
@@ -190,8 +231,8 @@ function pluralize(count, [one, few, many]) {
 }
 
 function formatNumber(number) {
-    if (number >= 1000000) return (number / 1000000).toFixed(number % 1000000 < 100000 ? 1 : 0) + 'M';
-    if (number >= 1000) return (number / 1000).toFixed(number % 1000 < 100 ? 1 : 0) + 'k';
+    if (number >= 1000000) return +(number / 1000000).toFixed(number % 1000000 < 100000 ? 1 : 0) + 'M';
+    if (number >= 1000) return +(number / 1000).toFixed(number % 1000 < 100 ? 1 : 0) + 'k';
     return number.toString();
 }
 
@@ -732,6 +773,820 @@ class Blurhash {
 }
 
 
+// TODO: search
+// TODO: fix scroll jumps after image load during scrolling (add transform translateY to content during scroll and remove when idle)
+class VirtualList {
+    #id;
+    #container;
+    #contentFragment;
+    #options;
+    #isPassive;
+
+    #items = [];
+    #inViewport = new Set();
+    #parents = [];
+    #parentsMap = new Map();
+
+    #stateMeasuring = null;
+
+    #restoreState;
+    #readScroll;
+    #readResize;
+    #onScroll;
+    #onResize;
+
+    #lastScrollTop = null;
+    #lastScrollTime = Date.now();
+    #totalHeight = 0;
+    #viewportHeight = 0;
+    #containerOffsetTop = 0;
+
+    constructor(container, options = {}) {
+        this.#id = options.id || Date.now();
+        this.#container = container;
+        this.#options = {
+            overscanFactor: options.overscanFactor ?? 2,
+        };
+        this.#isPassive = options.passive ?? false;
+        this.#contentFragment = options.content ?? null; // DocumentFragment | null
+
+        this.#restoreState = this.restoreState.bind(this);
+        this.#readScroll = this.#handleReadScroll.bind(this);
+        this.#readResize = this.#handleReadResize.bind(this);
+        this.#onScroll = this.#handleScroll.bind(this);
+        this.#onResize = this.#handleResize.bind(this);
+
+        this.#init();
+        console.log(`[DEBUG] VirtualList ${this.#items.length} items`);
+    }
+
+    // --- INIT ---
+    #init() {
+        const source = this.#contentFragment || this.#container;
+
+        this.#collectItems(source);
+        this.#handleReadResize();
+
+        const progressive = !!this.#contentFragment;
+
+        if (progressive) this.#estimateAll();
+        else this.#measure({ readonly: true });
+
+        this.#container.classList.add('description-vl');
+
+        this.#domToScrollable();
+        this.#onScroll();
+
+        if (!this.#isPassive) {
+            document.addEventListener('scroll', this.#onScroll, { passive: true });
+            document.addEventListener('resize', this.#onResize, { passive: true });
+        }
+    }
+
+    // --- COLLECT ---
+    #margins = {
+        H1: { marginTop: 24, marginBottom: 16 },
+        H2: { marginTop: 20, marginBottom: 12 },
+        H3: { marginTop: 16, marginBottom: 8 },
+        P: { marginTop: 12, marginBottom: 12 },
+        LI: { marginTop: 4, marginBottom: 4 },
+        UL: { marginTop: 12, marginBottom: 12 },
+        OL: { marginTop: 12, marginBottom: 12 },
+        default: { marginTop: 0, marginBottom: 0 },
+    };
+    #collectItems(source = this.#container) {
+        const items = this.#items = [];
+        const parents = this.#parents = [];
+        const parentsMap = this.#parentsMap = new Map();
+        const listCounter = new Map();
+
+        const walk = (node, nodeParent = node) => {
+            const children = node.children;
+
+            for (let i = 0; i < children.length; i++) {
+                const child = children[i];
+                const tagName = child.tagName;
+                const m = this.#margins[tagName] || this.#margins.default;
+                const isFirst = i === 0;
+                const isLast = i === children.length - 1;
+
+                if (tagName === 'UL' || tagName === 'OL') {
+                    const parentItem = {
+                        element: child,
+                        parent: nodeParent,
+                        parentItem: parentsMap.get(nodeParent) || null,
+                        inDOM: false,
+
+                        marginTop: isFirst ? 0 : m.marginTop,
+                        marginBottom: isLast ? 0 : m.marginBottom,
+                        effectiveMarginTop: 0,
+                        effectiveMarginBottom: 0,
+                        blocksCollapseTop: false,
+                        blocksCollapseBottom: false,
+                        isFirst,
+                        isLast,
+
+                        startIndex: items.length,
+                        endIndex: items.length
+                    };
+
+                    parents.push(parentItem);
+                    parentsMap.set(child, parentItem);
+
+                    walk(child);
+
+                    parentItem.endIndex = items.length;
+                } else {
+                    let listIndex = null;
+
+                    if (tagName === 'LI') {
+                        const count = (listCounter.get(node) || 0) + 1;
+                        listCounter.set(node, count);
+                        listIndex = count;
+                    }
+
+                    const item = {
+                        element: child,
+                        parent: nodeParent,
+                        parentItem: parentsMap.get(nodeParent) || null,
+                        index: items.length,
+                        listIndex,
+
+                        height: 0,
+                        top: 0,
+                        bottom: 0,
+
+                        marginTop: isFirst ? 0 : m.marginTop,
+                        marginBottom: isLast ? 0 : m.marginBottom,
+                        effectiveMarginTop: 0,
+                        effectiveMarginBottom: 0,
+                        gapTop: 0,
+                        isFirst,
+                        isLast,
+
+                        measured: false,
+                        pendingMeasure: false,
+
+                        inDOM: false,
+                        inQueue: false
+                    };
+
+                    items.push(item);
+                }
+            }
+        };
+
+        walk(source, this.#container);
+
+        // resolve effective margins
+        const collectParentMarginsTop = (item) => {
+            const result = [];
+
+            let p = item.parentItem;
+            let current = item;
+
+            while (p && current.isFirst && p.blocksCollapseTop !== true) {
+                result.push(p.marginTop);
+                current = p;
+                p = p.parentItem;
+            }
+
+            return result;
+        };
+        const collectParentMarginsBottom = (item) => {
+            const result = [];
+
+            let p = item.parentItem;
+            let current = item;
+
+            while (p && current.isLast && p.blocksCollapseBottom !== true) {
+                result.push(p.marginBottom);
+                current = p;
+                p = p.parentItem;
+            }
+
+            return result;
+        };
+
+        for (const p of this.#parents) {
+            p.effectiveMarginTop = Math.max(p.marginTop, ...collectParentMarginsTop(p));
+            p.effectiveMarginBottom = Math.max(p.marginBottom, ...collectParentMarginsBottom(p));
+        }
+
+        for (const item of this.#items) {
+            item.effectiveMarginTop = Math.max(item.marginTop, ...collectParentMarginsTop(item));
+            item.effectiveMarginBottom = Math.max(item.marginBottom, ...collectParentMarginsBottom(item));
+        }
+
+        // resolve gaps
+        let prev = null;
+        for (let i = 0; i < this.#items.length; i++) {
+            const curr = this.#items[i];
+
+            if (!prev) {
+                curr.gapTop = 0;
+            } else {
+                curr.gapTop = Math.max(prev.effectiveMarginBottom, curr.effectiveMarginTop);
+            }
+
+            prev = curr;
+        }
+    }
+
+    // --- MEASURE ---
+    #measure({ readonly = false } = {}) {
+        if (!readonly) this.#domToOriginal();
+
+        let currentOffset = 0;
+
+        for (const item of this.#items) {
+            const el = item.element;
+            const h = el.offsetHeight || 1;
+
+            currentOffset += item.gapTop;
+
+            item.top = currentOffset;
+            item.height = h;
+            item.bottom = currentOffset + h;
+
+            currentOffset += h;
+        }
+
+        this.#totalHeight = currentOffset;
+        this.#stateMeasuring = null;
+        this.#container.style.height = `${this.#totalHeight}px`;
+
+        if (!readonly) this.#domToScrollable();
+    }
+
+    #estimations = {
+        H1: 48,
+        H2: 40,
+        H3: 32,
+        P: 24,
+        LI: 22,
+        IMG: 200,
+        PRE: 180,
+        CODE: 180,
+        default: 24
+    };
+    #estimateHeight(item) {
+        const tag = item.element.tagName;
+        const estSelf = this.#estimations[tag] ?? this.#estimations.default;
+
+        const children = item.element.children;
+        if (!children || children.length === 0) return estSelf;
+
+        let total = 0;
+        let prevTag = null;
+
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            const childTag = child.tagName;
+            const childEst = this.#estimations[childTag] ?? this.#estimations.default;
+            const m = this.#margins[childTag] || this.#margins.default;
+
+            const isFirst = i === 0;
+            if (!isFirst && prevTag) {
+                const prevMargins = this.#margins[prevTag] || this.#margins.default;
+                const gap = Math.max(prevMargins.marginBottom, m.marginTop);
+                total += gap;
+            }
+
+            total += childEst;
+            prevTag = childTag;
+        }
+
+        return Math.max(estSelf, total);
+    }
+    #estimateAll() {
+        let currentOffset = 0;
+
+        for (const item of this.#items) {
+            const h = this.#estimateHeight(item);
+            item.measured = false;
+
+            currentOffset += item.gapTop;
+
+            item.top = currentOffset;
+            item.height = h;
+            item.bottom = currentOffset + h;
+
+            currentOffset += h;
+        }
+
+        this.#totalHeight = currentOffset;
+        this.#stateMeasuring = null;
+        this.#container.style.height = `${this.#totalHeight}px`;
+    }
+
+    #encodeMeasuring() {
+        if (this.#stateMeasuring !== null) return this.#stateMeasuring;
+
+        const n = this.#items.length;
+        if (n === 0) return '';
+
+        const buffer = new Uint16Array(n * 2);
+
+        let prevBottom = 0;
+        for (let i = 0, j = 0; i < n; i++, j += 2) {
+            const item = this.#items[i];
+
+            buffer[j] = item.height;
+            buffer[j + 1] = item.top - prevBottom;
+
+            prevBottom = item.bottom;
+        }
+
+        const uint8view = new Uint8Array(buffer.buffer);
+        let binary = '';
+        const chunkSize = 32768;
+        for (let i = 0; i < uint8view.length; i += chunkSize) {
+            binary += String.fromCharCode(...uint8view.subarray(i, i + chunkSize));
+        }
+        const encodedString = btoa(binary);
+
+        this.#stateMeasuring = encodedString;
+
+        return encodedString;
+    }
+
+    #decodeMeasuring(encodedString) {
+        if (!encodedString) return [];
+
+        const binary = atob(encodedString);
+        const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+
+        const buffer = new Uint16Array(bytes.buffer);
+        const n = buffer.length / 2;
+        const measured = new Array(n);
+
+        let currentTop = 0;
+        for (let i = 0, j = 0; i < n; i++, j += 2) {
+            const height = buffer[j];
+            const gap = buffer[j + 1];
+            const top = currentTop + gap;
+
+            measured[i] = {
+                top: top,
+                height: height
+            };
+
+            currentTop = top + height;
+        }
+
+        return measured;
+    }
+
+    // --- READ PHASES ---
+    #handleReadScroll(e = {}) {
+        this.#containerOffsetTop = this.#container.offsetTop;
+
+        const scrollTop = e?.scrollTop ?? document.documentElement.scrollTop;
+        e.scrollTopRelative = scrollTop - this.#containerOffsetTop;
+
+        return e;
+    }
+
+    #handleReadResize(e = {}) {
+        this.#viewportHeight = e.windowHeight = window.innerHeight;
+        return e;
+    }
+
+    // --- WRITE PHASES ---
+    #handleScroll(e = {}) {
+        if (!this.#container) return;
+
+        const scrollTop = typeof e.scrollTopRelative === 'number' ? e.scrollTopRelative : this.#handleReadScroll(e).scrollTopRelative;
+
+        const vh = this.#viewportHeight;
+        const overscan = vh * this.#options.overscanFactor;
+
+        const top = scrollTop - overscan;
+        const bottom = scrollTop + vh + overscan;
+
+        for (const item of this.#items) {
+            if (item.bottom >= top && item.top <= bottom) {
+                if (!item.inDOM && !item.inQueue) this.#queueAdd(item);
+            } else {
+                if (item.inDOM) this.#unmount(item);
+                if (item.inQueue) this.#queueRemove(item);
+            }
+        }
+
+        this.#lastScrollTop = scrollTop;
+        this.#lastScrollTime = Date.now();
+        return scrollTop;
+    }
+
+    #handleResize(e = {}) {
+        if (!this.#container) return;
+
+        if (!e.windowHeight) this.#handleReadResize(e);
+
+        for (const item of this.#items) {
+            item.measured = false;
+            item.pendingMeasure = false;
+        }
+
+        if (this.#contentFragment) {
+            this.#estimateAll();
+            this.#onScroll();
+        } else {
+            this.#measure();
+            this.#onScroll();
+        }
+    }
+
+    // --- DOM OPS ---
+    #domToOriginal() {
+        for (const item of this.#items) {
+            item.inDOM = false;
+        }
+        for (const item of this.#parents) {
+            item.inDOM = false;
+        }
+
+        for (const item of this.#items) {
+            item.parent.appendChild(item.element);
+            this.#mountParent(item.parent);
+        }
+    }
+
+    #domToScrollable() {
+        this.#container.textContent = '';
+        for (const item of this.#items) {
+            const el = item.element;
+            el.remove(); // remove link from element to parent
+            item.inDOM = false;
+            el.style.top = `${item.top}px`;
+            if (item.listIndex !== null) el.setAttribute('value', item.listIndex); // LI numbering
+            el.classList.add('description-vl-item');
+        }
+        for (const item of this.#parents) {
+            const el = item.element;
+            el.classList.add('description-vl-sub-container');
+            item.inDOM = false;
+        }
+    }
+
+    #mountParent(parentItem) {
+        if (!parentItem || parentItem.inDOM) return;
+
+        const next = this.#findParentAnchor(parentItem);
+        if (next) {
+            const { parent: container, anchor } = this.#getInsertContext(parentItem, next);
+            if (anchor) container.insertBefore(parentItem.element, anchor);
+            else container.appendChild(parentItem.element);
+        } else {
+            parentItem.parent.appendChild(parentItem.element);
+        }
+
+
+        parentItem.inDOM = true;
+
+        if (parentItem.parentItem) this.#mountParent(parentItem.parentItem);
+    }
+
+    #unmountParent(parentItem) {
+        if (!parentItem.inDOM) return;
+
+        for (let i = parentItem.startIndex; i < parentItem.endIndex; i++) {
+            if (this.#items[i].inDOM) return;
+        }
+
+        parentItem.element.remove();
+        parentItem.inDOM = false;
+
+        if (parentItem.parentItem) this.#unmountParent(parentItem.parentItem);
+    }
+
+    #mount(item) {
+        if (item.inDOM) return;
+
+        if (item.parentItem) this.#mountParent(item.parentItem);
+
+        item.element.style.top = `${item.top}px`;
+
+        const next = this.#findNextMounted(item);
+        if (next) {
+            const { parent, anchor } = this.#getInsertContext(item, next);
+            if (anchor) parent.insertBefore(item.element, anchor);
+            else parent.appendChild(item.element);
+        } else item.parent.appendChild(item.element);
+
+        if (!item.measured && !item.pendingMeasure) {
+            item.pendingMeasure = true;
+            this.#scheduleBatchMeasure(item);
+        }
+
+        item.inDOM = true;
+        this.#inViewport.add(item);
+    }
+
+    #unmount(item) {
+        if (!item.inDOM) return;
+
+        item.element.remove();
+        item.inDOM = false;
+        this.#inViewport.delete(item);
+
+        if (item.parentItem) this.#unmountParent(item.parentItem);
+    }
+
+    #getInsertContext(item, anchorItem) {
+        let parent = item.parent;
+        let anchorEl = anchorItem.element;
+
+        while (anchorEl && anchorEl.parentElement !== parent) anchorEl = anchorEl.parentElement;
+
+        if (anchorEl) return { parent, anchor: anchorEl };
+
+        return { parent, anchor: null };
+    }
+
+    #findNextMounted(item, limit = 40) {
+        const max = Math.min(this.#items.length, item.index + 1 + limit);
+
+        for (let i = item.index + 1; i < max; i++) {
+            const next = this.#items[i];
+            if (next.inDOM) return next;
+        }
+
+        return null;
+    }
+
+    #findParentAnchor(parentItem, limit = 40) {
+        const max = Math.min(this.#items.length, parentItem.endIndex + limit);
+
+        for (let i = parentItem.endIndex; i < max; i++) {
+            const item = this.#items[i];
+            if (!item.inDOM) continue;
+
+            return item;
+        }
+
+        return null;
+    }
+
+    #measureQueue = new Set();
+    #isMeasureScheduled = false;
+    #scheduleBatchMeasure(item) {
+        this.#measureQueue.add(item);
+        if (this.#isMeasureScheduled) return;
+
+        this.#isMeasureScheduled = true;
+        requestAnimationFrame(() => this.#processMeasureBatch());
+    }
+    #processMeasureBatch() {
+        if (this.#measureQueue.size === 0) {
+            this.#isMeasureScheduled = false;
+            return;
+        }
+
+        const itemsToMeasure = Array.from(this.#measureQueue);
+        this.#measureQueue.clear();
+        this.#isMeasureScheduled = false;
+
+        let minChangedIndex = Infinity;
+
+        const lastScrollTop = this.#lastScrollTop;
+        let firstVisibleItem = null;
+        for (const item of this.#inViewport) {
+            if (item.bottom > lastScrollTop) {
+                firstVisibleItem = item;
+                break;
+            }
+        }
+
+        for (const item of itemsToMeasure) {
+            if (!item.inDOM) {
+                item.measured = false; // mark measuring as invalid
+                item.pendingMeasure = false;
+                continue;
+            }
+
+            item.height = item.element.offsetHeight || 1;
+            item.measured = true;
+            item.pendingMeasure = false;
+
+            minChangedIndex = Math.min(minChangedIndex, item.index);
+
+            if (!item.isImagesProcessed) this.#checkMeasuringImages(item);
+        }
+
+        if (minChangedIndex !== Infinity) {
+            const startTop = firstVisibleItem ? firstVisibleItem.top : 0;
+            this.#reflowFromIndex(Math.max(0, minChangedIndex - 1));
+
+            if (firstVisibleItem) {
+                const scrollDelta = firstVisibleItem.top - startTop;
+                const isScrolling = Date.now() - this.#lastScrollTime < 60;
+
+                if (scrollDelta !== 0 && !isScrolling) {
+                    document.documentElement.scrollTo({ top: lastScrollTop + scrollDelta, behavior: 'instant' });
+                }
+            }
+
+        }
+    }
+
+    #checkMeasuringImages(item) {
+        item.isImagesProcessed = true;
+
+        const imgs = item.element.querySelectorAll('img');
+        if (!imgs.length) return;
+
+        for (const img of imgs) {
+            if (img.__isMeasured) continue;
+            img.__isMeasured = true;
+
+            whenImageSettles(img)
+            .then(() => {
+                if (!this.#container) return;
+                this.#scheduleBatchMeasure(item);
+            });
+        }
+    }
+
+    #reflowFromIndex(startIndex) {
+        let currentOffset;
+
+        // remove vl class (to get margins)
+        this.#container.classList.remove('description-vl');
+
+        if (startIndex <= 0) {
+            currentOffset = 0;
+            startIndex = 0;
+        } else {
+            const prev = this.#items[startIndex - 1];
+            currentOffset = prev.bottom;
+        }
+
+        for (let i = startIndex; i < this.#items.length; i++) {
+            const item = this.#items[i];
+
+            currentOffset += item.gapTop;
+
+            item.top = currentOffset;
+            item.bottom = currentOffset + item.height;
+
+            currentOffset = item.bottom;
+        }
+
+        for (let i = startIndex; i < this.#items.length; i++) {
+            const item = this.#items[i];
+            if (item.inDOM) item.element.style.top = `${item.top}px`;
+        }
+
+        if (this.#totalHeight !== currentOffset) {
+            this.#totalHeight = currentOffset;
+            this.#stateMeasuring = null;
+            this.#container.style.height = `${currentOffset}px`;
+        }
+
+        this.#container.classList.add('description-vl');
+    }
+
+    // --- QUEUE ---
+    #queueList = new Set(); // items
+    #queueActive = null;    // animationFrame
+    #queueAdd(item) {
+        this.#queueList.add(item);
+        item.inQueue = true;
+        if (!this.#queueActive) this.#queueActive = requestAnimationFrame(() => this.#queueRun());
+    }
+    #queueRemove(item) {
+        this.#queueList.delete(item);
+        item.inQueue = false;
+    }
+    #queueRun() {
+        if (!this.#container) return;
+
+        if (this.#queueList.size === 0) {
+            this.#queueActive = null;
+            return;
+        }
+
+        const startTime = performance.now();
+        const FRAME_BUDGET = 2;             // 2 ms
+        const MAX_WEIGHT_PER_FRAME = 60;    // 60 elements
+
+        let consumedWeight = 0;
+        for (const item of this.#queueList) {
+            if (performance.now() - startTime > FRAME_BUDGET || consumedWeight >= MAX_WEIGHT_PER_FRAME) break;
+            this.#mount(item);
+            this.#queueRemove(item);
+            consumedWeight += 1;
+        }
+
+        if (this.#queueList.size > 0) this.#queueActive = requestAnimationFrame(() => this.#queueRun());
+        else this.#queueActive = null;
+    }
+    #queueClear() {
+        if (this.#queueActive) {
+            cancelAnimationFrame(this.#queueActive);
+            this.#queueActive = null;
+        }
+
+        for (const item of this.#queueList) {
+            item.inQueue = false;
+        }
+
+        this.#queueList.clear();
+    }
+
+    // --- API ---
+    resize() {
+        this.#onResize();
+    }
+
+    destroy(options) {
+        const preventRemoveItemsFromDOM = options?.preventRemoveItemsFromDOM ?? false;
+
+        if (!this.#isPassive) {
+            document.removeEventListener('scroll', this.#onScroll);
+            document.removeEventListener('resize', this.#onResize);
+        }
+
+        this.#queueClear();
+        this.#measureQueue.clear();
+
+        this.#items = [];
+        this.#parents = [];
+        this.#parentsMap.clear();
+        this.#inViewport.clear();
+
+        if (!preventRemoveItemsFromDOM) this.#container.textContent = '';
+
+        this.#container = null;
+    }
+
+    getCallbacks() {
+        return {
+            restoreState: this.#restoreState,
+            readScroll: this.#readScroll,
+            readResize: this.#readResize,
+            onScroll: this.#onScroll,
+            onResize: this.#onResize
+        };
+    }
+
+    restoreState(state) {
+        const { totalHeight, measured } = state;
+        if (typeof totalHeight !== 'number' || typeof measured !== 'string') return;
+
+        this.#totalHeight = totalHeight;
+        this.#stateMeasuring = null;
+        this.#container.style.height = `${totalHeight}px`;
+
+        const n = this.#items.length;
+        const decodedMeasuring = this.#decodeMeasuring(measured);
+        if (decodedMeasuring.length && decodedMeasuring.length !== n) {
+            console.warn('Invalid navigation state!');
+            return;
+        }
+
+        for (let i = 0; i < n; i++) {
+            const item = this.#items[i];
+            const s = decodedMeasuring[i];
+
+            item.top = s.top;
+            item.height = s.height;
+            item.bottom = item.top + item.height;
+
+            if (item.inDOM) item.element.style.top = `${item.top}px`;
+        }
+    }
+
+    get id() {
+        return this.#id;
+    }
+
+    get state() {
+        return {
+            currentScrollTop: this.#lastScrollTop || 0,
+            totalHeight: this.#totalHeight || 0,
+            measured: this.#encodeMeasuring()
+        };
+    }
+
+    // --- STATIC API ---
+    static getItems(container) {
+        const items = [];
+
+        const walk = node => {
+            for (const child of node.children) {
+                if (child.tagName === 'UL' || child.tagName === 'OL') walk(child);
+                else items.push(child);
+            }
+        };
+
+        walk(container);
+        return items;
+    }
+}
+
 // TODO: Animate scroll to element (when navigating with the keyboard)
 class MasonryLayout {
     #id;
@@ -1037,7 +1892,7 @@ class MasonryLayout {
         this.#queueClear();
         this.#items.forEach(item => {
             if (!item.element) return;
-            item.inDOM = false;    
+            item.inDOM = false;
             if (!preventRemoveItemsFromDOM) item.element.remove();
             this.#onElementRemove?.(item.element, item.data, preventRemoveItemsFromDOM);
             delete item.element;
@@ -1255,9 +2110,9 @@ class MasonryLayout {
     #handlerPointerDown(e) {
         const target = e.target.closest('[data-visc-id]');
         if (!target || !this.#container.contains(target)) return;
-        
+
         const focusedItem = this.#itemsById.get(+target.getAttribute('data-visc-id'));
-        if (focusedItem) this.#setTabIndex(focusedItem, true);
+        if (focusedItem) this.#setTabIndex(focusedItem);
     }
 
     #handleReadScroll(e = {}) {
@@ -1603,7 +2458,7 @@ class MasonryLayout {
             currentScrollTop: this.#lastScrollTop,
             focusedItem: this.#focusedItem ?? null,
             focusedItemOffsetTop: focusedItem ? this.#lastScrollTop - focusedItem.boundTop : 0
-        }
+        };
     }
 }
 

@@ -1,13 +1,15 @@
 {
     "manifest_version": 3,
     "name": "CivitAI API Bridge Extension",
-    "version": "1.0",
+    "version": "1.1",
     "permissions": [
-        "declarativeNetRequest"
+        "declarativeNetRequest",
+        "cookies",
+        "storage"
     ],
     "host_permissions": [
-        "https://civitai.com/*",
-        "https://*.civitai.com/*"
+        "https://civitai.red/*",
+        "https://*.civitai.red/*"
     ],
     "background": {
         "service_worker": "service_worker.js",
@@ -38,7 +40,7 @@
         },
         {
             "matches": [
-                "https://civitai.com/?bridge=true"
+                "https://civitai.red/?bridge=true"
             ],
             "run_at": "document_start",
             "js": [

@@ -1,12 +1,14 @@
 /// <reference path="./_docs.d.ts" />
+"use strict";
+
 
 const CONFIG = {
-    version: 38,
-    updated: '2026-04-17T12:00:00.000Z',
-    extensionVertsion: 3,
+    version: 39,
+    updated: '2026-06-04T12:00:00.000Z',
+    extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
-    civitai_url: 'https://civitai.com',
+    civitai_url: 'https://civitai.red', // (green -> com, com -> red)
     civitai_origins: [
         'https://civitai.com',
         'https://civitai.green',
@@ -97,8 +99,10 @@ const CONFIG = {
         }
     },
     userGroups: {
-        // civbot = civitai bot (challanges, contest, etc.)
-        6235605: 'civbot' // "CivBot"
+        // civ_bot = civitai bot (challanges, contest, etc.)
+        6235605: 'civ_bot',     // "CivBot"
+        12042163: 'civ_staff',  // "CivitaiOfficial"
+        1: 'civ_staff',         // "JustMaier"
     },
     minDateForNewBadge: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days model "new" (Dates are in ISO format, so they can be compared as strings)
     timeOut: 20000, // 20 sec (ms)
@@ -114,10 +118,10 @@ const SETTINGS = {
     checkpointType: 'All',
     types: [ 'Checkpoint' ],
     sort: 'Highest Rated',
-    sort_images: 'Newest',
-    sort_articles: 'Newest',
+    sort_images: 'Most Reactions',
+    sort_articles: 'Recently Updated',
     period: 'Month',
-    period_images: 'AllTime',
+    period_images: 'Month',
     period_articles: 'AllTime',
     baseModels: [],
     image_types: [],
@@ -141,6 +145,7 @@ const SETTINGS = {
     colorCorrection: true,
     showLogs: true,
     civitaiLinksAltClickByDefault: false,
+    useLegacyVirtualList: true,     // Use fake virtual scroll (working default Ctrl + F)
     disableCrossorigin: false,      // disable adding crossorigin attr to img elements (opaque responses, impossible to scale)
     disableRemixAutoload: false,    // Completely disables automatic loading of remix image (image full page)
     disablePostAutoload: true,      // Completely disables automatic loading of post images (image full page)
@@ -181,10 +186,6 @@ const SETTINGS = {
 //  1788: close-up
 //  111991: sexual activity
 //  162559: ejaculating while penetrated
-//
-// To get tags and tagIds from image
-//  https://civitai.com/api/trpc/tag.getVotableTags?input=%7B%22json%22%3A%7B%22id%22%3A{imageId}%2C%22type%22%3A%22image%22%2C%22authed%22%3Atrue%7D%7D
-
 
 const DEVMODE = Boolean(localStorage.getItem('civitai-lite-viewer--devmode'));
 const EXTENSION_INSTALLED = Boolean(window.proxyFetchCivAPI);
@@ -199,13 +200,6 @@ if (EXTENSION_INSTALLED) {
         }, { once: true });
     }
 }
-
-// Reasons for some old code snippets
-// Snippet_1:
-//   The presence of a `modelId` or `imageId` in the request forces the
-//   civitai api to use the old method for retrieving images,
-//   and it, unlike the new one (probably a bug? But all the stats there are 0),
-//   returns a response with stats.
 
 // =================================
 
@@ -288,7 +282,6 @@ class CivitaiPublicAPI {
             postId,
             username = '',
             userId = null,
-            modelId = null, // Snippet_1
             type = '',
             nsfw = false,
             hidden = false,
@@ -303,7 +296,6 @@ class CivitaiPublicAPI {
         if (cursor) url.searchParams.append('cursor', cursor);
 
         if (username) url.searchParams.append('username', username);
-        if (modelId) url.searchParams.append('modelId', modelId); // Snippet_1
         if (userId) url.searchParams.append('userId', userId);
         if (modelVersionId) url.searchParams.append('modelVersionId', modelVersionId);
         if (postId) url.searchParams.append('postId', postId);
@@ -321,7 +313,7 @@ class CivitaiPublicAPI {
 
     async fetchImageMeta(id, nsfwLevel) {
         const url = new URL(`${this.baseURL}/images`);
-        url.searchParams.append('limit', 1);
+        url.searchParams.append('limit', '1');
 
         if (id) url.searchParams.append('imageId', id);
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
@@ -343,6 +335,55 @@ class CivitaiPublicAPI {
         const data = await this.#getJSON({ url, target: 'model version info' });
         return data;
     }
+
+    // Empty functions for ts
+
+    async fetchArticles(options = {}) {
+        return {
+            items: [],
+            metadata: {
+                nextCursor: null
+            }
+        };
+    }
+
+    async fetchArticle(id) {
+        return {};
+    }
+
+    async fetchCollectionInfo(id) {
+        return {};
+    }
+
+    async fetchPostInfo(id) {
+        return {};
+    }
+
+    async fetchComments_v1(options = {}) {
+        return {
+            items: [],
+            metadata: {
+                nextCursor: null
+            }
+        };
+    }
+
+    async fetchComments(options = {}) {
+        return {
+            items: [],
+            metadata: {
+                nextCursor: null
+            }
+        };
+    }
+
+    async fetchComment(id) {
+        return {};
+    }
+
+    async fetchVotableTags(id, type) {
+        return [];
+    }
 }
 
 // WIP
@@ -354,7 +395,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     constructor(baseURL) {
         super(baseURL);
         this.IMAGE_CDN_ROOT = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA";
-        console.log(`[API Bridge] Uses the civitai.com original API instead of the public one`);
+        console.log(`[API Bridge] Uses the civitai.red original API instead of the public one`);
     }
 
     async #getJSON({ route, params, target }) {
@@ -364,12 +405,16 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
             const error = data.error ?? data.response?.error;
             if (error) {
-                if (error instanceof Error) throw new Error(error);
+                if (error instanceof Error) throw error;
                 const message = error.message ?? error.json?.message;
                 throw new Error(message);
             }
 
-            return data.response?.result?.data ?? data.response;
+            const result = data.response?.result?.data ?? data.response;
+
+            if (!result.json) throw new Error('Invalid response.');
+
+            return result.json;
         } catch (error) {
             console.error(error);
             console.error(`Failed to fetch ${target ?? 'something'}.`);
@@ -384,12 +429,12 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}${type === 'image' ? '.jpeg' : '.mp4'}`; // .jpeg or .mp4 - otherwise cf will return "cf-cache-status DYNAMIC"
     }
 
-    #prepareUserBlock(user = {}) {
+    #prepareUserBlock(user) {
         if (!user || typeof user !== 'object') return {};
 
         if (user.deletedAt) {
             return {
-                userId: user.id,
+                id: user.id,
                 isModerator: user.isModerator || false,
                 deletedAt: user.deletedAt,
                 username: '[deleted]'
@@ -401,7 +446,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         const urlId = user.profilePicture?.url || user.image;
 
         return {
-            userId: user.id,
+            id: user.id,
             isModerator: user.isModerator || hasModeratorCosmetics || false,
             username: user.username || '[username]',
             image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, type: 'image', itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
@@ -599,9 +644,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             postId,
             username = '',
             baseModels = [],
+            prioritizedUserIds = [],
             types = [],
             browsingLevel,
-            withMeta = true,
+            withMeta = false,
             sort = '',
             period = '',
         } = options;
@@ -630,8 +676,9 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (username) input.json.username = username;
         if (types?.length > 0) input.json.types = types;
         if (baseModels?.length > 0) input.json.baseModels = baseModels;
+        if (prioritizedUserIds?.length > 0) input.json.prioritizedUserIds = prioritizedUserIds;
 
-        const data = (await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' })).json;
+        const data = await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' });
 
         return {
             items: this.#convertImages(data.items, browsingLevel),
@@ -671,7 +718,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (username) input.json.username = String(username);
         if (tags.length > 0 && !tags.some(t => typeof t !== 'number' || isNaN(t))) input.json.tags = tags;
 
-        const data = (await this.#getJSON({ route: 'article.getInfinite', params: { input }, target: 'articles' })).json;
+        const data = await this.#getJSON({ route: 'article.getInfinite', params: { input }, target: 'articles' });
 
         const items = data.items.map(item => {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
@@ -710,7 +757,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const article = (await this.#getJSON({ route: 'article.getById', params: { input }, target: `article (id: ${id})` })).json;
+        const article = await this.#getJSON({ route: 'article.getById', params: { input }, target: `article (id: ${id})` });
 
         return {
             id: article.id,
@@ -771,7 +818,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (tag) input.json.tag = tag;
         if (baseModels?.length > 0) input.json.baseModels = baseModels;
 
-        const data = (await this.#getJSON({ route: 'model.getAll', params: { input }, target: 'models' })).json;
+        const data = await this.#getJSON({ route: 'model.getAll', params: { input }, target: 'models' });
 
         const items = data.items.map(item => {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
@@ -820,8 +867,20 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         };
     }
 
-    // No images... lol...
-    async fetchModelInfo_no_image_DISABLED(id) {
+    // No images, required second request from page
+    async fetchModelInfo(id) {
+        // Public API (if empty then proxy fetch)
+        const resultOriginal = await super.fetchModelInfo(id);
+        if (resultOriginal.modelVersions?.length) {
+            // Fix download urls (switch to red)
+            const comUrl = 'https://civitai.com/';
+            const redUrl = 'https://civitai.red/';
+            resultOriginal.modelVersions.forEach(v => v.files?.forEach(f => f.downloadUrl = f.downloadUrl?.replace(comUrl, redUrl)));
+            return resultOriginal;
+        }
+
+        console.log('[API Bridge] Public API returned empty list, retry with bridge.');
+
         const input = {
             json: {
                 // authed: true,
@@ -829,7 +888,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const model = (await this.#getJSON({ route: 'model.getById', params: { input }, target: `model (id: ${id})` })).json;
+        const model = await this.#getJSON({ route: 'model.getById', params: { input }, target: `model (id: ${id})` });
 
         return {
             id: model.id,
@@ -850,7 +909,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                     modelId: version.modelId,
                     name: version.name,
                     files: this.#convertFiles(version.files, 'models'),
-                    // images: this.#convertImages(version.images, browsingLevel),
+                    images: Array.isArray(version.images) ? this.#convertImages(version.images, 32) : null, // No images in response...
                     description: version.description,
                     availability: version.earlyAccessConfig ? 'EarlyAccess' : version.availability,
                     earlyAccessConfig: version.earlyAccessConfig,
@@ -877,7 +936,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const data = (await this.#getJSON({ route: 'collection.getById', params: { input }, target: `collection (id: ${id})` })).json;
+        const data = await this.#getJSON({ route: 'collection.getById', params: { input }, target: `collection (id: ${id})` });
         const collection = data.collection;
 
         return {
@@ -902,7 +961,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const post = (await this.#getJSON({ route: 'post.get', params: { input }, target: `post (id: ${id})` })).json;
+        const post = await this.#getJSON({ route: 'post.get', params: { input }, target: `post (id: ${id})` });
 
         return {
             id: post.id,
@@ -926,24 +985,22 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const [imageData, genData] = await Promise.all([
-            this.#getJSON({ 
-                route: 'image.get', 
-                params: { input }, 
-                target: `image (id: ${id})` 
+        const [image, generation] = await Promise.all([
+            this.#getJSON({
+                route: 'image.get',
+                params: { input },
+                target: `image (id: ${id})`
             }),
-            this.#getJSON({ 
-                route: 'image.getGenerationData', 
-                params: { input }, 
-                target: `image generation data (id: ${id})` 
+            this.#getJSON({
+                route: 'image.getGenerationData',
+                params: { input },
+                target: `image generation data (id: ${id})`
             })
         ]);
 
-        const image = imageData.json;
-        const generation = genData.json;
-
         return {
             id: image.id,
+            postId: image.postId,
             url: !image.url || image.url?.startsWith('https:') ? image.url : this.#convertUrlIdToUrl({ urlId: image.url, type: image.type, itemId: image.id, width: 450 }),
             nsfwLevel: image.nsfwLevel,
             width: image.width,
@@ -1008,7 +1065,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (limit) input.json.limit = Math.min(limit, 100);
         if (modelId) input.json.modelId = +modelId;
 
-        const data = (await this.#getJSON({ route: 'comment.getAll', params: { input }, target: 'comments' })).json;
+        const data = await this.#getJSON({ route: 'comment.getAll', params: { input }, target: 'comments' });
 
         return {
             items: data.comments.map(c => this.#parseComment(c)),
@@ -1048,7 +1105,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         input.json.entityId = +entityId;
         input.json.entityType = entityType;
 
-        const data = (await this.#getJSON({ route: 'commentv2.getInfinite', params: { input }, target: 'comments' })).json;
+        const data = await this.#getJSON({ route: 'commentv2.getInfinite', params: { input }, target: 'comments' });
 
         return {
             items: data.comments.map(c => this.#parseComment(c)),
@@ -1066,7 +1123,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const comment = (await this.#getJSON({ route: 'comment.getById', params: { input }, target: `comment (id: ${id})` })).json;
+        const comment = await this.#getJSON({ route: 'comment.getById', params: { input }, target: `comment (id: ${id})` });
 
         return this.#parseComment(comment);
     }
@@ -1080,13 +1137,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const tags = (await this.#getJSON({ route: 'tag.getVotableTags', params: { input }, target: `tags (id: ${id}; type: ${type})` })).json;
+        const tags = await this.#getJSON({ route: 'tag.getVotableTags', params: { input }, target: `tags (id: ${id}; type: ${type})` });
 
         return tags;
     }
-
-    // model.getCollectionShowcase -> {"json":{"id":MODEL_ID,"authed":true}}
-    // post.getResources -> {"json":{"id":POST_ID,"authed":true}}
 }
 
 // TODO: Prerender pages when pointerdown, and show on click
@@ -1095,7 +1149,6 @@ class Controller {
     static appElement = document.getElementById('app');
     static #devicePixelRatio = window.devicePixelRatio;
     static #errorTimer = null;
-    static #emptyImage = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>";
     static #pageNavigation = null; // This is necessary to ignore events that are no longer related to the current page (for example, after a long API load from an old page)
     static #activeVirtualScroll = [];
     static #page = null;
@@ -1152,6 +1205,7 @@ class Controller {
             'Pony',
             'Pony V7',
             'Qwen',
+            'Qwen 2',
             'SD 1.4',
             'SD 1.5',
             'SD 1.5 Hyper',
@@ -1191,10 +1245,17 @@ class Controller {
             'Wan Video 2.2 TI2V-5B',
             'Wan Video 2.5 I2V',
             'Wan Video 2.5 T2V',
+            'Wan Image 2.7',
+            'Wan Video 2.7',
             'ZImageTurbo',
             'ZImageBase',
             'Anima',
             'Kling',
+            'Ernie',
+            'ACE Audio',
+            'HappyHorse',
+            'HiDream-O1',
+            'Lens',
             'Other'
         ],
         labels: {
@@ -1222,10 +1283,10 @@ class Controller {
             'Flux.1 Krea': 'F1 Krea',
             'Flux.1 Kontext': 'F1 Ktxt',
             'Flux.2 D': 'F2',
-            'Flux.2 Klein 9B': 'F2 Klein 9B',
-            'Flux.2 Klein 9B-base': 'F2 Klein 9B',
-            'Flux.2 Klein 4B': 'F2 Klein 4B',
-            'Flux.2 Klein 4B-base': 'F2 Klein 4B',
+            'Flux.2 Klein 9B': 'Klein 9B',
+            'Flux.2 Klein 9B-base': 'Klein 9B',
+            'Flux.2 Klein 4B': 'Klein 4B',
+            'Flux.2 Klein 4B-base': 'Klein 4B',
             'Aura Flow': 'Aura',
             'SDXL 1.0': 'XL',
             'SDXL Turbo': 'XL T',
@@ -1329,6 +1390,12 @@ class Controller {
             'Seedance': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
             'LTXV2': ['video', 'weights', 'lightricks', 'multilingual'],
             'LTXV 2.3': ['video', 'weights', 'lightricks', 'multilingual'],
+            'Ernie': ['image', 'weights', 'baidu', 'multilingual'],
+            'ACE Audio': ['audio', 'weights', 'ace studio', 'stepfun', 'multilingual'],
+            'HappyHorse': ['video', 'closed', 'alibaba'], // multilingual ?
+            'HiDream-O1': ['image', 'weights', 'hidream.ai', 'multilingual'],
+            'Lens': ['image', 'weights', 'microsoft', 'multilingual'],
+            'Krea 2': ['image', 'closed', 'krea.ai', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -1405,15 +1472,15 @@ class Controller {
 
     static #pages = [
         { // #home
-            match: ({ pageId }) => pageId === '#home',
-            goto: ({ params }) => {
+            match: ({ pageId, params }) => pageId === '#home',
+            goto: ({ pageId, params }) => {
                 if (params.url) return this.openFromCivitUrl(params.url);
                 return this.gotoHome();
             }
         },
         { // #models
-            match: ({ pageId }) => pageId === '#models',
-            goto: ({ params = {} }) => {
+            match: ({ pageId, params }) => pageId === '#models',
+            goto: ({ pageId, params }) => {
                 if (params.hash) return this.gotoModelByHash(params.hash);
                 if (params.model) return this.gotoModel(params.model, params.version);
                 return this.gotoModels({
@@ -1423,7 +1490,7 @@ class Controller {
                     username: params.username || params.user
                 });
             },
-            prepare: ({ params = {} }) => {
+            prepare: ({ pageId, params }) => {
                 if (params.hash) {
                     if (this.#cache.modelVersions.has(params.hash)) return { key: null, promise: null };
                     return {
@@ -1448,7 +1515,7 @@ class Controller {
                     limit: CONFIG.perRequestLimits.models,
                     tag: params.tag ?? '',
                     query: params.query,
-                    collectionId: params.collection,
+                    collectionId: params.collection || null,
                     username: params.username || params.user,
                     types: forcedType || SETTINGS.types,
                     sort: SETTINGS.sort,
@@ -1466,8 +1533,8 @@ class Controller {
             }
         },
         { // #articles
-            match: ({ pageId }) => pageId === '#articles',
-            goto: ({ params = {} }) => {
+            match: ({ pageId, params }) => pageId === '#articles',
+            goto: ({ pageId, params }) => {
                 if (params.article) return this.gotoArticle(params.article);
                 return this.gotoArticles({
                     tag: params.tag,
@@ -1477,8 +1544,8 @@ class Controller {
             }
         },
         { // #images
-            match: ({ pageId }) => pageId === '#images',
-            goto: ({ params = {} }) => {
+            match: ({ pageId, params }) => pageId === '#images',
+            goto: ({ pageId, params }) => {
                 if (params.collection) return this.gotoCollection(params.collection);
 
                 if (params.image) return this.gotoImage(params.image, params.nsfw);
@@ -1506,7 +1573,7 @@ class Controller {
 
                 return this.gotoImages();
             },
-            prepare: ({ params = {} }) => {
+            prepare: ({ pageId, params }) => {
                 if (params.collection && !this.#cache.collections.has(`${params.collection}`)) {
                     return {
                         key: params.collection,
@@ -1535,7 +1602,7 @@ class Controller {
     ];
     static #civUrlRules = [
         { // models
-            match: ({ url }) => url.pathname.startsWith('/models/'),
+            match: ({ url, params }) => url.pathname.startsWith('/models/'),
             parse: ({ url, params }) => {
                 params.modelId = url.pathname.match(this.#regex.urlModels)?.[1] ?? null;
             },
@@ -1547,28 +1614,28 @@ class Controller {
             }
         },
         { // images
-            match: ({ url }) => url.pathname.startsWith('/images/'),
+            match: ({ url, params }) => url.pathname.startsWith('/images/'),
             parse: ({ url, params }) => {
                 params.imageId = url.pathname.match(this.#regex.urlImages)?.[1] ?? null;
             },
             toLocal: ({ url, params }) => params.imageId ? `#images?image=${params.imageId}` : null
         },
         { // posts
-            match: ({ url }) => url.pathname.startsWith('/posts/'),
+            match: ({ url, params }) => url.pathname.startsWith('/posts/'),
             parse: ({ url, params }) => {
                 params.postId = url.pathname.match(this.#regex.urlPosts)?.[1] ?? null;
             },
             toLocal: ({ url, params }) => params.postId ? `#images?post=${params.postId}` : null
         },
         { // articles
-            match: ({ url }) => url.pathname.startsWith('/articles/'),
+            match: ({ url, params }) => url.pathname.startsWith('/articles/'),
             parse: ({ url, params }) => {
                 params.articleId = url.pathname.match(this.#regex.urlArticles)?.[1] ?? null;
             },
             toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
         },
         { // collections
-            match: ({ url }) => url.pathname.startsWith('/collections/'),
+            match: ({ url, params }) => url.pathname.startsWith('/collections/'),
             parse: ({ url, params }) => {
                 params.collectionId = url.pathname.match(this.#regex.urlCollections)?.[1] ?? null;
             },
@@ -1598,9 +1665,13 @@ class Controller {
         this.#setTitle();
 
         // Clear cache records created after the current new transition
-        if (this.#state && (!savedState || Date.now() - savedState.id < 10)) this.#cache.history.keys().forEach(id => {
-            if (id > this.#state.id) this.#cache.history.delete(id);
-        });
+        if (this.#state && (!savedState || Date.now() - savedState.id < 10)) {
+            for (const id of this.#cache.history.keys()) {
+                if (id > this.#state.id) {
+                    this.#cache.history.delete(id);
+                }
+            }
+        }
 
         if (typeof savedState === 'object' && !Array.isArray(savedState)) this.#state = {...savedState};
         else this.#state = {};
@@ -1617,6 +1688,7 @@ class Controller {
         this.appElement.querySelectorAll('video').forEach(el => el.pause());
         this.appElement.querySelectorAll('.autoplay-observed').forEach(disableAutoPlayOnVisible);
         this.appElement.querySelectorAll('.inviewport-observed').forEach(onTargetInViewportClearTarget);
+        cleanupDetachedObservers(); // here, otherwise it breaks virtual descriptions (pictures in them)
         document.getElementById('tooltip')?.remove();
         document.getElementById('page-loading-bar')?.remove();
         this.appElement.classList.add('page-loading');
@@ -1657,7 +1729,6 @@ class Controller {
             if (!loaded) return;
 
             hideTimeError();
-            cleanupDetachedObservers();
 
             document.getElementById('page-loading-bar')?.remove();
             this.appElement.classList.remove('page-loading');
@@ -1724,7 +1795,7 @@ class Controller {
 
     static preparePage(page) {
         // Start downloading or retrieving from cache in advance,
-        // because after pressing it is highly likely that a click will occur... 
+        // because after pressing it is highly likely that a click will occur...
         const [ pageId, paramString ] = page?.split('?') ?? [];
         this.#preClickResults = {};
 
@@ -1760,10 +1831,11 @@ class Controller {
     }
 
     static #addVirtualScroll(virtualScroll) {
-        const { onScroll = null, onResize = null, readScroll = null, readResize = null } = virtualScroll.getCallbacks();
+        const { onScroll = null, onResize = null, readScroll = null, readResize = null, restoreState = null } = virtualScroll.getCallbacks();
         this.#activeVirtualScroll.push({
             id: virtualScroll.id,
             virtualScroll,
+            restoreState,
             readScroll,
             readResize,
             onScroll,
@@ -1831,52 +1903,63 @@ class Controller {
             // try convert url
             const qUrl = toURL(q);
             if (qUrl) {
-                if (!CONFIG.civitai_origins.includes(qUrl.origin)) {
+                try {
+                    if (!CONFIG.civitai_origins.includes(qUrl.origin)) throw Error('Unknown origin');
+
+                    const { localUrl: redirectUrl, params } = this.parseCivUrl(qUrl);
+
+                    if (!redirectUrl) throw new Error('Unknown url');
+                    let promise;
+
+                    if (qUrl.pathname.startsWith('/models/')) {
+                        if (!params.modelId) throw new Error('There is no model id in the link');
+                        if (params.modelVersionId) {
+                            promise = this.api.fetchModelVersionInfo(params.modelVersionId).then(version => {
+                                const previewMedia = version?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                                const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? redirectUrl;
+                                results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: version.model?.type ?? window.languagePack?.text?.model ?? 'Model' });
+                            });
+                        } else {
+                            promise = this.api.fetchModelInfo(params.modelId).then(model => {
+                                const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+                                const title = model.name ?? redirectUrl;
+                                results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
+                            });
+                        }
+                    } else if (qUrl.pathname.startsWith('/images/')) {
+                        if (!params.imageId) throw new Error('There is no image id in the link');
+                        promise = this.api.fetchImageMeta(params.imageId).then(media => {
+                            const title = window.languagePack?.text?.image ?? 'Image';
+                            results.push({ media, image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
+                        });
+                    } else if (qUrl.pathname.startsWith('/posts/')) {
+                        if (!params.postId) throw new Error('There is no post id in the link');
+                        const title = window.languagePack?.text?.post ?? 'Post';
+                        results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
+                    } else if (EXTENSION_INSTALLED && qUrl.pathname.startsWith('/articles/')) {
+                        if (!params.articleId) throw new Error('There is no article id in the link');
+                        promise = this.api.fetchArticle(params.articleId).then(article => {
+                            const typeBadge = window.languagePack?.text?.article ?? 'Article';
+                            results.push({ media: article.coverImage, image: CONFIG.logo, href: redirectUrl, title: article.title, typeBadge });
+                        });
+                    }
+
+                    if (promise) promises.push(promise);
+
+                    if (!promises.length && !results.length) results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
+
+                    if (promises.length) {
+                        showLoading();
+                        Promise.allSettled(promises).then(() => q === searchQuery ? renderResults(results) : null);
+                    } else renderResults(results);
+
+                    return;
+                } catch (_) {
                     results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
                     renderResults(results);
                     return;
                 }
 
-                const { localUrl: redirectUrl, params } = this.parseCivUrl(qUrl);
-                if (!redirectUrl) throw new Error('Unknown url');
-                let promise;
-
-                if (qUrl.pathname.startsWith('/models/')) {
-                    if (!params.modelId) throw new Error('There is no model id in the link');
-                    if (params.modelVersionId) {
-                        promise = this.api.fetchModelVersionInfo(params.modelVersionId).then(version => {
-                            const previewMedia = version?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-                            const title = version.model?.name ? `${version.model?.name} (${version.name})` : version.name ?? redirectUrl;
-                            results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: version.model?.type ?? window.languagePack?.text?.model ?? 'Model' });
-                        });
-                    } else {
-                        promise = this.api.fetchModelInfo(params.modelId).then(model => {
-                            const previewMedia = model?.modelVersions?.[0]?.images?.find(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-                            const title = model.name ?? redirectUrl;
-                            results.push({ media: previewMedia, image: CONFIG.logo, href: redirectUrl, title, typeBadge: model.type ?? window.languagePack?.text?.model ?? 'Model' });
-                        });
-                    }
-                } else if (qUrl.pathname.startsWith('/images/')) {
-                    if (!params.imageId) throw new Error('There is no image id in the link');
-                    promise = this.api.fetchImageMeta(params.imageId).then(media => {
-                        const title = window.languagePack?.text?.image ?? 'Image';
-                        results.push({ media, image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
-                    });
-                } else if (qUrl.pathname.startsWith('/posts/')) {
-                    if (!params.postId) throw new Error('There is no post id in the link');
-                    const title = window.languagePack?.text?.post ?? 'Post';
-                    results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
-                }
-                if (promise) promises.push(promise);
-
-                if (!promises.length && !results.length) results.push({ icon: 'cross', title: searchLang.linkNotSupported ?? 'This link is not supported' });
-
-                if (promises.length) {
-                    showLoading();
-                    Promise.allSettled(promises).then(() => q === searchQuery ? renderResults(results) : null);
-                } else renderResults(results);
-
-                return;
             }
 
             // try search by hash
@@ -1965,7 +2048,7 @@ class Controller {
 
         // Settings
         const settingsContainer = insertElement('div', appContent);
-        const addSetting = ({ description, blockquote, toggleElement }) => {
+        const addSetting = ({ description, blockquote = null, toggleElement }) => {
             try {
                 const container = createElement('div', { class: 'config-container' });
                 container.appendChild(toggleElement);
@@ -2081,7 +2164,8 @@ class Controller {
         // Cache usage
         const cachesWrap = insertElement('div', appContent);
         navigator.storage.estimate().then(info => {
-            const caches = info.usageDetails?.caches ?? info.usage;
+            const usageDetails = 'usageDetails' in info ? info.usageDetails : undefined;
+            const caches = /** @type {any} */ (usageDetails)?.caches ?? info.usage;
             if (caches > 200000000) { // 191 Mb
                 insertElement('h2', cachesWrap, undefined, tempHome.cachesTitle ?? 'Cache information');
                 insertElement('p', cachesWrap, undefined, tempHome.cachesDescription ?? 'This is information about the size of the cache of this site on disk. If you changed DPR (Change page scale, change interface scale in OS), or SW scaling setting, then there could be outdated image sizes left, will be deleted automatically after some time, but you can delete them manually.');
@@ -2091,7 +2175,8 @@ class Controller {
                 const updateCacheSize = () => {
                     if (!this.appElement.contains(cacheFileSize)) return;
                     navigator.storage.estimate().then(info => {
-                        const caches = info.usageDetails?.caches ?? info.usage;
+                        const usageDetails = 'usageDetails' in info ? info.usageDetails : undefined;
+                        const caches = /** @type {any} */ (usageDetails)?.caches ?? info.usage;
                         if (caches < 200000000) cacheFileSize.classList.remove('error-text');
                         cacheFileSize.textContent = filesizeToString(caches);
                     });
@@ -2182,7 +2267,7 @@ class Controller {
             onElementRemove: this.#onCardRemoved.bind(this)
         };
 
-        const loadItems = ({ cursor } = {}) => {
+        const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
                 query = {
                     limit: CONFIG.perRequestLimits.articles,
@@ -2252,7 +2337,7 @@ class Controller {
             if (SETTINGS.blackListUserIds.length) {
                 const countAll = articles.length;
 
-                articles = articles.filter(article => !SETTINGS.blackListUserIds.includes(article?.userId ?? article?.creator?.userId));
+                articles = articles.filter(article => !SETTINGS.blackListUserIds.includes(article?.userId ?? article?.creator?.id));
 
                 if (articles.length !== countAll) {
                     this.#log(`Due to the users blacklist, ${countAll - articles.length} article(s) were hidden`);
@@ -2314,7 +2399,7 @@ class Controller {
 
         }
 
-        return { 
+        return {
             element: fragment,
             title: window.languagePack?.text?.articles ?? 'Articles',
             promise: infinityScroll.promise
@@ -2372,11 +2457,22 @@ class Controller {
                 categoryLink.classList.add('model-category');
                 modelTagsWrap.prepend(categoryLink);
 
-                const isUpdated = Math.abs(updatedAt - publishedAt) > 2 * 60 * 1000;
+                const isUpdated = Math.abs(+updatedAt - +publishedAt) > 2 * 60 * 1000;
                 const publishedDates = isUpdated ? [{ label: 'Updated', date: updatedAt }, { label: 'Published', date: publishedAt }] : [{ label: 'Published', date: publishedAt }];
-                const relativeTime = this.#genRelativeTime(publishedDates);
+                const relativeTime = this.#genRelativeTime(publishedDates, 24 * 60 * 60 * 1000);
                 relativeTime.className = 'badge model-category separated-right';
                 modelTagsWrap.prepend(relativeTime);
+
+                // Creator
+                if (article.user) {
+                    const userInfo = {...article.user};
+                    if (userInfo.username) userInfo.url = `#articles?username=${userInfo.username}`;
+                    const userBLock = this.#genUserBlock(userInfo);
+                    if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play', 'separated-right');
+                    modelTagsWrap.prepend(userBLock);
+                    const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
+                    userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', userInfo.username || 'user'));
+                }
             };
             if (this.#state.article_tags || article.tags.join('').length <= 80) updateTags(article.tags);
             else {
@@ -2391,7 +2487,7 @@ class Controller {
             }
 
             // Download buttons
-            const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
+            const downloadButtons = createElement('div', { class: 'model-download-files' });
             article.attachments.forEach(file => {
                 const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
                 const downloadUrl = file.downloadUrl || `${CONFIG.civitai_url}/api/download/attachments/${file.id}`; // file.url - required auth
@@ -2401,6 +2497,7 @@ class Controller {
                 insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
                 if (file.name) a.setAttribute('data-filename', file.name);
             });
+            if (article.attachments.length) modelNameWrap.appendChild(downloadButtons);
 
             // Article cover
             if (article.coverImage) {
@@ -2412,33 +2509,24 @@ class Controller {
 
             const content = createElement('div', { class: 'model-description article-content' });
 
-            // Creator
-            if (article.user) {
-                const userInfo = {...article.user};
-                if (userInfo.username) userInfo.url = `#articles?username=${userInfo.username}`;
-                const userBLock = this.#genUserBlock(userInfo);
-                if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
-                content.appendChild(userBLock);
-                const draggableTitleBase = window.languagePack?.text?.models_from ?? 'Models from {username}';
-                userBLock.querySelector('a')?.setAttribute('data-draggable-title', draggableTitleBase.replace('{username}', userInfo.username || 'user'));
-            }
-
             // Content
             const description = this.#analyzeModelDescriptionString(article.content);
             const modelDescriptionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelDescriptionFragment, cache);
             if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
-            content.appendChild(modelDescriptionFragment);
             page.appendChild(content);
 
             // Adding virtual scrolling if there are many elements (For example an article with id = 3733)
-            if (content.children.length > 300) {
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                    if (!this.appElement.contains(content)) return;
-
-                    const virtualScroll = this.#genFakeVirtualScroll(`article-${article.id}`, content);
-                    this.#addVirtualScroll(virtualScroll);
-                }));
+            if (VirtualList.getItems(modelDescriptionFragment).length > 400) {
+                let virtualScroll;
+                if (SETTINGS.useLegacyVirtualList) {
+                    virtualScroll = this.#genFakeVirtualScroll(`article-${article.id}`, content, modelDescriptionFragment);
+                } else {
+                    virtualScroll = new VirtualList(content, { id: `article-${article.id}`, passive: true, content: modelDescriptionFragment });
+                }
+                this.#addVirtualScroll(virtualScroll);
+            } else {
+                content.appendChild(modelDescriptionFragment);
             }
 
             // Comments
@@ -2469,6 +2557,7 @@ class Controller {
             this.#log('Loaded article:', data);
             return insertArticle(data);
         }).catch(error => {
+            console.error(error);
             if (pageNavigation !== this.#pageNavigation) return;
             return this.#gotoError(error);
         });
@@ -2732,6 +2821,18 @@ class Controller {
         const pageNavigation = this.#pageNavigation;
         const navigationState = copyThis(this.#state);
 
+        // api dont return images... so we need load them after loading model info... bad design...
+        const checkModelVersionImages = (model, version = null) => {
+            if (!EXTENSION_INSTALLED) return true;
+            const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
+            if (Array.isArray(modelVersion.images)) return true;
+
+            return this.api.fetchImages({ modelVersionId: modelVersion.id, prioritizedUserIds: model.creator?.id ? [ model.creator.id ] : [], limit: 20, browsingLevel: SETTINGS.browsingLevel, period: 'AllTime', sort: 'Most Reactions' }).then(response => {
+                console.log(`Loaded cover images for model version: ${modelVersion.id}`, response.items);
+                modelVersion.images = response.items || [];
+            });
+        };
+
         const insertModelPage = model => {
             if (!model.modelVersions.length) {
                 return this.#gotoError({ message: 'Model not available. API returned empty list.' });
@@ -2788,6 +2889,12 @@ class Controller {
         const cachedModel = this.#cache.models.get(`${id}`) || this.#preClickResults[`${id}-result`];
         if (cachedModel) {
             this.#log('Loaded model (cache):', cachedModel);
+            const coverImagesPromise = checkModelVersionImages(cachedModel, version);
+            if (coverImagesPromise instanceof Promise) {
+                return {
+                    promise: coverImagesPromise.then(() => insertModelPage(cachedModel))
+                };
+            }
             return insertModelPage(cachedModel);
         }
 
@@ -2797,9 +2904,13 @@ class Controller {
             if (data?.id) this.#cache.models.set(`${data.id}`, data);
             if (pageNavigation !== this.#pageNavigation) return;
             this.#log('Loaded model:', data);
-            const result = insertModelPage(data);
-            if (result.promise) return result.promise;
-            return result;
+            const coverImagesPromise = checkModelVersionImages(data, version);
+            if (coverImagesPromise instanceof Promise) {
+                return {
+                    promise: coverImagesPromise.then(() => insertModelPage(data))
+                };
+            }
+            return insertModelPage(data);
         }).catch(error => {
             if (pageNavigation !== this.#pageNavigation) return;
             return this.#gotoError(error);
@@ -2865,7 +2976,7 @@ class Controller {
             this.#cache.models.set(`${id}`, model);
         };
 
-        const loadItems = ({ cursor } = {}) => {
+        const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
                 query = {
                     limit: CONFIG.perRequestLimits.models,
@@ -3040,7 +3151,7 @@ class Controller {
 
     static openFromCivitUrl(href) {
         const { localUrl } = this.parseCivUrl(href);
-        if (!localUrl) return this.#gotoError(error, 'Unsupported url');
+        if (!localUrl) return this.#gotoError(new Error('Unsupported url'));
         this.navigate({ hash: localUrl });
     }
 
@@ -3211,7 +3322,7 @@ class Controller {
     static #genModelPage(options) {
         const { model, version = null, state: navigationState = copyThis(this.#state) } = options;
         const modelVersion = version ? model.modelVersions.find(v => v.name === version || v.id === Number(version)) ?? model.modelVersions[0] : model.modelVersions[0];
-        const page = createElement('div', { class: 'model-page', 'data-model-id': model.id });
+        const page = createElement('div', { class: 'model-page', 'data-model-id': model.id, 'data-model-version-id': modelVersion.id });
 
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         if (!cache.descriptionImages) cache.descriptionImages = new Map();
@@ -3270,6 +3381,7 @@ class Controller {
             }
             if (file.name) a.setAttribute('data-filename', file.name);
         });
+        if (availabilityBadge === 'EarlyAccess') downloadButtons.setAttribute('inert', '');
 
         // Model sub name
         const createdAt = new Date(modelVersion.createdAt);
@@ -3282,7 +3394,7 @@ class Controller {
                 const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag);
                 if (tag === modelVersion.baseModel) categoryLink = a;
             });
-            
+
             if (modelVersion.baseModel) {
                 if (!categoryLink) categoryLink = createElement('div', { class: 'badge' });
                 categoryLink.textContent = this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel;
@@ -3290,9 +3402,9 @@ class Controller {
                 modelTagsWrap.prepend(categoryLink);
             }
 
-            const isUpdated = Math.abs(publishedAt - createdAt) > 2 * 60 * 1000;
+            const isUpdated = Math.abs(+publishedAt - +createdAt) > 2 * 60 * 1000;
             const publishedDates = isUpdated ? [{ label: 'Updated', date: publishedAt }, { label: 'Published', date: createdAt }] : [{ label: 'Published', date: createdAt }];
-            const relativeTime = this.#genRelativeTime(publishedDates);
+            const relativeTime = this.#genRelativeTime(publishedDates, 24 * 60 * 60 * 1000);
             relativeTime.className = 'badge model-category separated-right';
             modelTagsWrap.prepend(relativeTime);
         };
@@ -3312,15 +3424,23 @@ class Controller {
         const modelVersionsElements = [];
         model.modelVersions.forEach(version => {
             const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
-            const isActive = version.id === modelVersion.id;
             const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '' });
+
+            const isActive = version.id === modelVersion.id;
+            const isDifferentBase = version.baseModel !== modelVersion.baseModel;
+            const updatedAt = new Date(version.publishedAt ?? version.createdAt);
+            const updatedAtISO = isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
+            const lilpipeText = updatedAtISO ? `<div><b>${window.languagePack?.text?.Updated ?? 'Updated'}</b> <span class="dark-text">(<relative-time datetime="${updatedAtISO}"></relative-time>)</span></div><div>${updatedAt.toLocaleDateString()} <span class="dark-text">${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>${isDifferentBase ? `<div style="margin-block-start:.5em;">${this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base'}</div>` : ''}` : '';
+
+            if (lilpipeText && !isActive) button.setAttribute('lilpipe-text', lilpipeText);
             if (version.publishedAt > CONFIG.minDateForNewBadge) button.classList.add('recently-updated');
             if (isActive) button.classList.add('active');
+
             button.appendChild(this.#formatModelVersionName(version.name));
             modelVersionsElements.push(button);
         });
         modelVersionsElements[0]?.setAttribute('tabindex', 0);
-        
+
         let fakeIndex = 0;
         const setFakeFocus = index => {
             modelVersionsWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
@@ -3389,29 +3509,34 @@ class Controller {
             modelPreviewWrap.appendChild(carousel.element);
         }
 
-        const hideLongDescription = (descriptionId, el) => {
-            if (this.#state[`long_description_${descriptionId}`] || el.children.length < 40) {
-                if (el.children.length > 400) fixDescriptionXL(descriptionId, el);
+        const mountDescription = (descriptionId, descriptionFragment, container) => {
+            if (this.#state[`long_description_${descriptionId}`] || descriptionFragment.children.length < 40) {
+                if (VirtualList.getItems(descriptionFragment).length > 400) fixDescriptionXL(descriptionId, descriptionFragment, container);
+                else container.appendChild(descriptionFragment);
                 return;
             }
-            el.classList.add('hide-long-description');
+
+            container.appendChild(descriptionFragment);
+            container.classList.add('hide-long-description');
             const showMore = createElement('button', { class: 'show-more' });
             showMore.appendChild(getIcon('arrow_down'));
-            el.appendChild(showMore);
+            container.appendChild(showMore);
             showMore.addEventListener('click', () => {
                 this.#state[`long_description_${descriptionId}`] = true;
-                el.classList.remove('hide-long-description');
+                container.classList.remove('hide-long-description');
                 showMore.remove();
-                if (el.children.length > 400) fixDescriptionXL(descriptionId, el);
+                if (VirtualList.getItems(container).length > 400) fixDescriptionXL(descriptionId, container);
             }, { once: true });
         };
-        const fixDescriptionXL = (id, description) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                if (!this.appElement.contains(description)) return;
-
-                const virtualScroll = this.#genFakeVirtualScroll(id, description);
-                this.#addVirtualScroll(virtualScroll);
-            }));
+        const fixDescriptionXL = (id, description, container = description) => {
+            const isMounted = description === container;
+            let virtualScroll;
+            if (SETTINGS.useLegacyVirtualList) {
+                virtualScroll = this.#genFakeVirtualScroll(id, container, isMounted ? null : description);
+            } else {
+                virtualScroll = new VirtualList(container, { id, passive: true, content: isMounted ? null : description });
+            }
+            this.#addVirtualScroll(virtualScroll);
         };
 
         // Model version description block
@@ -3429,7 +3554,7 @@ class Controller {
         if (model.creator) {
             const userInfo = {...model.creator};
             if (userInfo.username) userInfo.url = `#models?username=${userInfo.username}`;
-            if (!userInfo.userId) userInfo.userId = model.userId;
+            if (!userInfo.id) userInfo.id = model.userId;
             const userBLock = this.#genUserBlock(userInfo);
             if(!SETTINGS.autoplay) userBLock.classList.add('image-hover-play');
             modelVersionDescription.appendChild(userBLock);
@@ -3472,20 +3597,17 @@ class Controller {
             const modelVersionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelVersionFragment, cache);
             if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
-            modelVersionWrap.appendChild(modelVersionFragment);
-            hideLongDescription('modelVersion', modelVersionWrap);
+            mountDescription('modelVersion', modelVersionFragment, modelVersionWrap);
         }
 
         // Model descrition
         if (model.description) {
-            const modelDescription = createElement('div', { class: 'model-description' });
+            const modelDescription = insertElement('div', page, { class: 'model-description' });
             const description = this.#analyzeModelDescriptionString(model.description);
             const modelDescriptionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelDescriptionFragment, cache);
             if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
-            modelDescription.appendChild(modelDescriptionFragment);
-            hideLongDescription('model', modelDescription);
-            if (modelDescription.childNodes.length) page.appendChild(modelDescription);
+            mountDescription('model', modelDescriptionFragment, modelDescription);
         }
 
         // Comments
@@ -3524,7 +3646,7 @@ class Controller {
             const title = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username);
 
             // Creator and Created At
-            const creator = this.#genUserBlock({ userId: media.userId, username: media.username, url: `#images?username=${media.username}` });
+            const creator = this.#genUserBlock({ id: media.userId, username: media.username, url: `#images?username=${media.username}` });
             if (media.createdAt) {
                 const createdAt = new Date(media.createdAt);
                 const relativeTime = this.#genRelativeTime([{ label: 'Published', date: createdAt }]);
@@ -3572,7 +3694,7 @@ class Controller {
                         }
                         const post = new Set(data.items);
                         this.#cache.posts.set(`${media.postId}`, post);
-                        textNode.nodeValue = post.size;
+                        textNode.nodeValue = String(post.size);
                     });
                 }
             }
@@ -3629,7 +3751,7 @@ class Controller {
                 container.appendChild(commentsElement);
             }
 
-            // Open in CivitAI 
+            // Open in CivitAI
             insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
             return { title };
@@ -3765,7 +3887,7 @@ class Controller {
 
         let query;
 
-        const loadItems = ({ cursor = null, commentId } = {}) => {
+        const loadItems = ({ cursor = null, commentId = undefined } = {}) => {
             if (commentId !== undefined) {
                 return cache.commentsById[commentId] ?? this.api.fetchComment(commentId).then(comment => {
                     cache.commentsById[commentId] = comment;
@@ -3785,7 +3907,7 @@ class Controller {
 
                 if (cache.filter === state.filter && cache.items?.length) {
                     this.#log('Loading comments (nav cache)');
-    
+
                     return {
                         items: cache.items,
                         cursor: cache.nextCursor ?? null
@@ -3809,6 +3931,97 @@ class Controller {
             });
         };
 
+        const spamRegex = {
+            spaces: /\s+/g,
+            words: /[\p{L}\p{N}]{2,}/gu,
+            repeated: /(.)\1{8,}/u,
+            emoji: /\p{Extended_Pictographic}/u,
+            letters: /\p{L}/u
+        };
+        const spamDetect = fragment => {
+            const text = (fragment.textContent || '').replace(spamRegex.spaces, ' ').trim();
+
+            // > 3k symbols - spam
+            if (text.length > 3000) return hideSpam(fragment, text);
+
+            let score = 0;
+            const lower = text.toLowerCase();
+
+            // --- word repetition ---
+            const words = lower.match(spamRegex.words);
+
+            if (words && words.length > 8) {
+                const freq = new Map();
+                let maxRepeat = 0;
+
+                for (let i = 0; i < words.length; i++) {
+                    const word = words[i];
+                    const count = (freq.get(word) || 0) + 1;
+                    freq.set(word, count);
+                    if (count > maxRepeat) maxRepeat = count;
+                }
+
+                if (maxRepeat >= 5) score += 4;
+
+                if (freq.size / words.length < 0.35) score += 3;
+            }
+
+
+            // repeated symbols
+            if (spamRegex.repeated.test(text)) score += 3;
+
+            // --- capslock + emoji ---
+            let letters = 0;
+            let upper = 0;
+            let emojiCount = 0;
+
+            for (const ch of text) {
+                // emoji
+                if (spamRegex.emoji.test(ch)) {
+                    emojiCount++;
+                    continue;
+                }
+
+                // letters
+                if (spamRegex.letters.test(ch)) {
+                    letters++;
+
+                    if (ch === ch.toUpperCase() && ch !== ch.toLowerCase()) {
+                        upper++;
+                    }
+                }
+            }
+
+            // capslock
+            if (letters > 20 && upper / letters > 0.55) score += 2;
+
+            // emoji flood
+            if (emojiCount >= 20) score += 4;
+            else if (emojiCount >= 10) score += 2;
+
+            if (score >= 6) return hideSpam(fragment, text);
+
+            return false;
+
+
+            function hideSpam(fragment, previewText) {
+                const originalNodes = Array.from(fragment.childNodes, node => node);
+
+                const wrapper = createElement('div', { class: 'spam-hidden' });
+                const button = createElement('button');
+                button.textContent = `Spam hidden — show (${previewText.slice(0, 80)}${previewText.length > 80 ? "…" : ""})`;
+
+                button.addEventListener("click", () => {
+                    wrapper.replaceChildren(...originalNodes);
+                }, { once: true });
+
+                wrapper.append(button);
+                fragment.replaceChildren(wrapper);
+
+                return true;
+            }
+        };
+
         const insertItems = (items, container, cursor = null) => {
             const fragment = new DocumentFragment();
             const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -3822,12 +4035,12 @@ class Controller {
 
             items.forEach(item => {
                 const card = insertElement('div', fragment, { class: 'comment', 'data-id': item.id });
-                
+
                 // Header: User Info + Meta
                 const header = insertElement('div', card, { class: 'comment-header' });
                 const isOp = opCreator !== null && (item.user.username === opCreator || item.user.id === opCreator);
                 header.appendChild(this.#genUserBlock({ ...item.user, group: isOp ? 'OP' : null, imageSize: 36 }));
-                
+
                 const meta = insertElement('div', header, { class: 'comment-meta' });
                 const date = new Date(item.createdAt).toLocaleDateString();
                 insertElement('relative-time', meta, { class: 'comment-date', datetime: item.createdAt, 'lilpipe-text': date });
@@ -3835,14 +4048,15 @@ class Controller {
                 // Content
                 const contentBlock = insertElement('div', card, { class: 'comment-content model-description' });
                 const content = safeParseHTML(item.content);
+                spamDetect(content);
                 this.#analyzeModelDescription(content, cache);
-                
+
                 if (SETTINGS.colorCorrection) this.#analyzeTextColors(content, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 });
                 contentBlock.appendChild(content);
 
                 // Footer: Reactions + Reply Button
                 const footer = insertElement('div', card, { class: 'comment-footer' });
-                
+
                 const reactionsByType = {};
                 item.reactions.forEach(r => {
                     if (!reactionsByType[r.reaction]) reactionsByType[r.reaction] = { count: 0, users: [] };
@@ -3851,12 +4065,15 @@ class Controller {
 
                 const reactions = Object.keys(reactionsByType);
                 if (reactions.length) {
-                    const reactionsWrap = insertElement('div', footer, { class: 'comment-stats badges' });
-                    const icons = { Like: '👍', Dislike: '👎', Heart: '❤️', Laugh: '🤣', Cry: '😭' };
-                    reactions.forEach(reaction => {
-                        const r = reactionsByType[reaction];
-                        insertElement('div', reactionsWrap, { class: 'badge' }, `${icons[reaction] || '.'} ${r.count}`);
-                    });
+                    const statsContainer = this.#genStats([
+                        { iconString: '👍', value: reactionsByType.Like?.count, unit: 'like' },
+                        { iconString: '👎', value: reactionsByType.Dislike?.count, unit: 'dislike' },
+                        { iconString: '😭', value: reactionsByType.Cry?.count, unit: 'cry' },
+                        { iconString: '❤️', value: reactionsByType.Heart?.count, unit: 'heart' },
+                        { iconString: '🤣', value: reactionsByType.Laugh?.count, unit: 'laugh' },
+                    ], true);
+                    statsContainer.classList.add('comment-stats');
+                    footer.appendChild(statsContainer);
                 }
 
                 // Replies Logic
@@ -3920,7 +4137,7 @@ class Controller {
         let promise = null;
         const loadComments = (cursor = null, button = null) => {
             const result = loadItems({ cursor });
-            
+
             if (result instanceof Promise) {
                 let indicator;
                 return Promise.race([
@@ -3964,7 +4181,7 @@ class Controller {
 
     static #genInfinityScroll(options) {
         const { layoutConfig, loadItems, prepareItems, onPointerDown, labels = {} } = options;
-        let promise, cursor, firstDraw = false, hiddenItems = 0;
+        let promise = null, cursor, firstDraw = false, hiddenItems = 0;
 
         const element = createElement('div', { class: 'cards-list' });
 
@@ -3975,6 +4192,8 @@ class Controller {
                 onPointerDown(id);
             }, { capture: true });
         }
+
+        layoutConfig.passive = true;
 
         const layout = new MasonryLayout(element, layoutConfig);
 
@@ -4073,7 +4292,15 @@ class Controller {
                 }
             });
 
-            if (!cards.values().some(item => item.animation)) return; // Skip if nothing to shift
+            // Skip if nothing to shift
+            let hasShift = false;
+            for (const item of cards.values()) {
+                if (item.animation) {
+                    hasShift = true;
+                    break;
+                }
+            }
+            if (!hasShift) return;
 
             element.classList.remove('cards-loading');
             cards.forEach(item => {
@@ -4155,6 +4382,7 @@ class Controller {
                     console.error('Failed to fetch items:', error?.message ?? error);
                     layout.clear();
                     element.textContent = '';
+                    element.style.height = '';
                     element.classList.add('error');
                     element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
                 }).finally(() => {
@@ -4181,8 +4409,8 @@ class Controller {
     }
 
     static #genImages(options) {
-        const { modelId, modelVersionId, collectionId, postId, userId, username, opCreator = null, state: navigationState = copyThis(this.#state) } = options; // Snippet_1 : modelId
-        const isSpecific = modelVersionId || collectionId || modelId || userId || username || postId;
+        const { modelVersionId, collectionId, postId, userId, username, opCreator = null, state: navigationState = copyThis(this.#state) } = options;
+        const isSpecific = modelVersionId || collectionId || userId || username || postId;
         const forcedPeriod = collectionId || postId ? 'AllTime' : null;
         const navCache = this.#cache.history.get(navigationState.id) ?? {};
         const key = `images`;
@@ -4221,7 +4449,7 @@ class Controller {
             if (postInfo) this.#cache.posts.set(`${imageMeta.postId}`, postInfo);
         };
 
-        const loadItems = ({ cursor } = {}) => {
+        const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
                 const baseModels = !EXTENSION_INSTALLED || isSpecific ? [] : SETTINGS.baseModels_images;
                 query = {
@@ -4234,7 +4462,6 @@ class Controller {
                     baseModels,
                     modelVersionId,
                     collectionId,
-                    modelId, // Snippet_1
                     userId,
                     username,
                     postId
@@ -4248,7 +4475,7 @@ class Controller {
 
                 if (cache.filter === state.filter && cache.items?.length) {
                     this.#log('Loading images (nav cache)');
-    
+
                     return {
                         items: cache.items,
                         cursor: cache.nextCursor ?? null
@@ -4369,7 +4596,7 @@ class Controller {
 
                 // Mark user as model uploader
                 if (opCreator && image.username === opCreator) image.usergroup = 'OP';
-    
+
                 let isPostNew = false;
                 if (!postsById.has(image.postId)) {
                     postsById.set(image.postId, new Set());
@@ -4464,7 +4691,8 @@ class Controller {
         return { element: fragment, promise: infinityScroll.promise };
     }
 
-    static #filterImages(images, options = { blackListTagIds: null, results: false }) {
+    static #filterImages(images, options) {
+        if (!options) options = { blackListTagIds: null, results: false };
         if (!SETTINGS.blackListTagIds.length && !SETTINGS.hideFurry && !SETTINGS.hideExtreme && !SETTINGS.hideGay) return options.results ? images.map(it => ({ item: it, ok: true })) : images;
         let blackListTagIds = options.blackListTagIds;
 
@@ -4509,28 +4737,53 @@ class Controller {
         return badges;
     }
 
-    static #genFakeVirtualScroll(id, container) {
-        const readScroll = onScroll = e => e;
+    static #genFakeVirtualScroll(id, container, content) {
+        const writeBounds = (element, bounds) => {
+            element.style.width = `${bounds.width}px`;
+            element.style.height = `${bounds.height}px`;
+            element.style.containIntrinsicSize = `${bounds.width}px ${bounds.height}px`;
+        };
+        const readScroll = e => e;
+        const onScroll = e => e;
         const readResize = (e = {}) => {
-            e.items = Array.from(container.children).map(element => ({ element, bounds: element.getBoundingClientRect() }));    
+            e.items = Array.from(container.children).map(element => ({ element, bounds: element.getBoundingClientRect() }));
+            // e.items = VirtualList.getItems(container).map(element => ({ element, bounds: element.getBoundingClientRect() }));
             return e;
         };
         const onResize = (e = {}) => {
             if (!e.items) readResize(e);
             e.items.forEach(item => {
                 const { element, bounds } = item;
-                element.style.width = `${bounds.width}px`;
-                element.style.height = `${bounds.height}px`;
-                element.style.containIntrinsicSize = `${bounds.width}px ${bounds.height}px`;
+                writeBounds(element, bounds);
                 element.classList.add('description-xl-item');
             });
         };
         const destroy = () => null;
         const getCallbacks = () => ({ readScroll, readResize, onScroll, onResize });
 
+        const measureLoadedImage = img => {
+            const element = img.closest('.description-xl-item');
+            if (!element) return;
+            element.classList.remove('description-xl-item');
+            element.style.width = '';
+            element.style.height = '';
+            element.style.containIntrinsicSize = '';
+            const bounds = element.getBoundingClientRect();
+            writeBounds(element, bounds);
+            element.classList.add('description-xl-item');
+        };
 
-        onResize();
+        if (content && container !== content) container.appendChild(content);
         container.classList.add('description-xl');
+
+        requestAnimationFrame(() => {
+            onResize();
+            container.querySelectorAll('img')
+            .forEach(img =>
+                whenImageSettles(img)
+                .then(() => measureLoadedImage(img))
+            );
+        });
 
         return { id, destroy, getCallbacks };
     }
@@ -4635,7 +4888,7 @@ class Controller {
                 let rootToDelete = span;
 
                 while (
-                    rootToDelete.parentElement && 
+                    rootToDelete.parentElement &&
                     rootToDelete.parentElement !== description &&
                     rootToDelete.parentElement.childNodes.length === 1
                 ) {
@@ -4692,24 +4945,29 @@ class Controller {
 
             let url = toURL(src), srcset = null;
 
-            if (url && url.origin === CONFIG.images_url && !src.includes('original=true')) {
-                const urlWidth = Number(src.match(regexUrlWidth)?.[1] || 0);
-                const baseWidth = this.#getNearestServerSize(Math.min(CONFIG.appearance.descriptionMaxWidth, urlWidth));
-                const sizes = [1, 2, 3];
-                const srcSetParts = [];
+            if (url && url.origin === CONFIG.images_url) {
+                const isOriginal = src.includes('original=true');
+                const regexReplace = isOriginal ? 'original=true' : regexUrlWidth;
+                // const urlWidth = isOriginal ? 4096 : Number(src.match(regexUrlWidth)?.[1] || 0);
+                // const baseWidth = this.#getNearestServerSize(Math.min(CONFIG.appearance.descriptionMaxWidth, urlWidth));
+                // const sizes = [2, 3];
+                // const srcSetParts = [];
 
-                sizes.forEach(ratio => {
-                    const targetWidth = baseWidth * ratio;
-                    let currentSrc;
+                // sizes.forEach(ratio => {
+                //     const targetWidth = baseWidth * ratio;
+                //     let currentSrc;
 
-                    if (targetWidth > 2200) currentSrc = src.replace(regexUrlWidth, 'original=true');
-                    else currentSrc = src.replace(regexUrlWidth, `width=${this.#getNearestServerSize(targetWidth)}`);
+                //     if (targetWidth > 2200) currentSrc = src.replace(regexReplace, 'original=true,optimized=true');
+                //     else currentSrc = src.replace(regexReplace, `width=${this.#getNearestServerSize(targetWidth)},optimized=true`);
 
-                    srcSetParts.push(`${currentSrc} ${ratio}x`);
-                });
+                //     srcSetParts.push(`${currentSrc} ${ratio}x`);
+                // });
 
-                srcset = srcSetParts.join(', ');
-                if (urlWidth !== baseWidth) src = src.replace(regexUrlWidth, `width=${baseWidth}`);
+                // srcset = isOriginal ? '' : srcSetParts.join(', ');
+                // if (urlWidth !== baseWidth) src = src.replace(regexReplace, isOriginal ? 'optimized=true' : `width=${baseWidth},optimized=true`);
+
+                // Otherwise, images may be upscaled using nearest-exact, which looks bad
+                src = src.replace(regexReplace, 'optimized=true');
             }
 
             if (cacheDescriptionImages.has(src)) {
@@ -4732,31 +4990,23 @@ class Controller {
 
                     // Success
                     img.classList.remove('loading');
-                    const xlItem = img.closest('.description-xl-item');
-                    if (xlItem) {
-                        xlItem.style.width = '';
-                        xlItem.style.height = '';
-                        xlItem.style.containIntrinsicSize = '';
-                        xlItem.classList.remove('description-xl-item');
-                    }
+                    img.style.width = '';
+                    img.style.height = '';
                     requestAnimationFrame(() => {
-                        const bounds = img.getBoundingClientRect();
+                        const width = img.naturalWidth;
+                        const height = img.naturalHeight;
+                        const ratio = height ? width / height : 1;
+                        const maxWidth = CONFIG.appearance.appWidth_small;
+                        const maxHeight = window.innerHeight * .9; // from css 90vh
+                        const maxScale = this.#round(Math.min(maxWidth / width, maxHeight / height));
+                        const domHeight = Math.min(height * maxScale, maxHeight);
                         const item = {
-                            naturalWidth: img.naturalWidth,
-                            naturalHeight: img.naturalHeight,
-                            ratio: img.naturalWidth / img.naturalHeight,
-                            height: bounds.height
+                            naturalWidth: width,
+                            naturalHeight: height,
+                            ratio: ratio,
+                            height: domHeight
                         };
                         cacheDescriptionImages.set(src, item);
-
-                        // Update size description-xl-item if exist
-                        if (xlItem) {
-                            const bounds = xlItem.getBoundingClientRect();
-                            xlItem.style.width = `${bounds.width}px`;
-                            xlItem.style.height = `${bounds.height}px`;
-                            xlItem.style.containIntrinsicSize = `${bounds.width}px ${bounds.height}px`;
-                            xlItem.classList.add('description-xl-item');
-                        }
                     });
                 };
 
@@ -4893,7 +5143,7 @@ class Controller {
             a.setAttribute('rel', rel.join(' ').trim());
             a.setAttribute('target', '_blank');
             fixLinkSpacing(a);
-            
+
             // Add link preview and check url syntax
             const url = href.startsWith('/') ? toURL(href, CONFIG.civitai_url) : toURL(href);
             if (!url) {
@@ -4966,7 +5216,7 @@ class Controller {
 
         description.querySelectorAll('pre').forEach(pre => {
             let headerCandidate = pre.previousElementSibling;
-            
+
             while (headerCandidate && headerCandidate.tagName.toLowerCase() === 'pre') {
                 headerCandidate = headerCandidate.previousElementSibling;
             }
@@ -5248,7 +5498,7 @@ class Controller {
             }
 
             let best = null;
-            let bestErr = Infinity;
+            let bestError = Infinity;
 
             const minChroma = baseLch.c * MIN_CHROMA_RATIO;
 
@@ -5277,10 +5527,10 @@ class Controller {
                 }
 
                 const lc = apca(rgb, bgRGB);
-                const err = Math.abs(lc - targetLc);
+                const error = Math.abs(lc - targetLc);
 
-                if (err < bestErr) {
-                    bestErr = err;
+                if (error < bestError) {
+                    bestError = error;
                     best = rgb;
                 }
 
@@ -5428,7 +5678,7 @@ class Controller {
                 insertElement('i', titleContainer, undefined, 'Remix of ');
 
                 // Creator
-                titleContainer.appendChild(this.#genUserBlock({ userId: media.userId, username: media.username }));
+                titleContainer.appendChild(this.#genUserBlock({ id: media.userId, username: media.username }));
 
                 // Stats
                 const stats = media.stats;
@@ -5513,14 +5763,14 @@ class Controller {
             { keys: ['RNG'], label: 'RNG' },
             { keys: ['Denoising strength', 'denoise'], label: 'Denoising', format: v => this.#round(+v) },
             // Does this make sense?
-            // { 
-            //     match: key => key.startsWith('Module '), 
+            // {
+            //     match: key => key.startsWith('Module '),
             //     label: key => key,
             //     group: 'modules'
             // },
-            // { 
-            //     match: key => key.startsWith('Beta schedule'), 
-            //     label: key => key.replace('Beta schedule ', 'β '), 
+            // {
+            //     match: key => key.startsWith('Beta schedule'),
+            //     label: key => key.replace('Beta schedule ', 'β '),
             //     group: 'scheduler_details'
             // }
         ];
@@ -5544,7 +5794,8 @@ class Controller {
             } else if (rule.match) {
                 Object.keys(meta).forEach(key => {
                     if (rule.match(key) && !usedKeys.has(key)) {
-                        const label = typeof rule.label === 'function' ? rule.label(key) : rule.label;
+                        // const label = rule.label instanceof Function ? rule.label(key) : rule.label;
+                        const label = rule.label;
                         if (meta[key]) renderItem(label, meta[key]);
                         usedKeys.add(key);
                     }
@@ -5616,7 +5867,7 @@ class Controller {
         if (rawResources.length) {
             const resources = rawResources.sort((a, b) => a.type === 'model' ? -1 : 1);
 
-            const metaBaseModel = (media.baseModel || meta.ecosystem)?.toLowerCase() || null;
+            const metaBaseModel = String(media.baseModel || meta.ecosystem)?.toLowerCase() || null;
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
             const resourcesTitle = insertElement('h3', resourcesContainer);
             resourcesTitle.appendChild(getIcon('database'));
@@ -5953,7 +6204,7 @@ class Controller {
 
         const card = createElement('a', { 'data-id': collection.id, href: `#images?collection=${collection.id}`, style: `width: ${itemWidth}px; height: ${itemHeight}px;`, 'data-draggable-title': collection.name });
         let cardClassName = 'card model-card';
-        
+
         // Image
         const previewMedia = collection.image;
         if (previewMedia) {
@@ -6068,9 +6319,9 @@ class Controller {
                 // publishedAt / createdAt
                 const createdAt = new Date(article.publishedAt);
                 const updatedAt = new Date(article.updatedAt || article.publishedAt);
-                const isUpdated = Math.abs(updatedAt - createdAt) > 2 * 60 * 1000;
+                const isUpdated = Math.abs(+updatedAt - +createdAt) > 30 * 60 * 1000; // 30 m
                 const publishedDates = isUpdated ? [{ label: 'Updated', date: updatedAt }, { label: 'Published', date: createdAt }] : [{ label: 'Published', date: createdAt }];
-                const relativeTime = this.#genRelativeTime(publishedDates);
+                const relativeTime = this.#genRelativeTime(publishedDates, 24 * 60 * 60 * 1000); // 24 h
                 relativeTime.className = 'model-published-time';
                 cardContentBottom.appendChild(relativeTime);
 
@@ -6333,7 +6584,7 @@ class Controller {
                 const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
 
                 // user and createdAt
-                const creator = this.#genUserBlock({ userId: image.userId, username: image.username, group: image.usergroup ?? null });
+                const creator = this.#genUserBlock({ id: image.userId, username: image.username, group: image.usergroup ?? null });
                 if (image.createdAt) {
                     const createdAt = new Date(image.createdAt);
                     const relativeTime = this.#genRelativeTime([{ label: 'Published', date: createdAt }]);
@@ -6392,12 +6643,16 @@ class Controller {
 
     static #genUserBlock(userInfo) {
         let className = 'user-info';
-        const container = createElement('div', { class: 'user-info' });
+        const container = createElement('div', { class: 'user-info', 'data-id': userInfo.id || -1 });
+
+        const userGroup = userInfo.id ? CONFIG.userGroups[userInfo.id] : null;
+        if (userGroup?.startsWith('civ_')) userInfo.isModerator = true;
 
         if (userInfo.deletedAt) className += ' user-deleted';
         if (userInfo.isModerator) className += ' user-moderator';
 
-        if (userInfo.userId && CONFIG.userGroups[userInfo.userId]) className += ` user-${CONFIG.userGroups[userInfo.userId]}`;
+
+        if (userGroup) className += ` user-${userGroup}`;
         container.className = className;
 
         const imageSize = Math.round(userInfo.imageSize || 48);
@@ -6405,7 +6660,7 @@ class Controller {
         if (userInfo.image !== undefined) {
             if (userInfo.image) {
                 container.style.setProperty('--image-size', imageSize + 'px');
-                const src = `${userInfo.image.replace(this.#regex.urlParamWidth, `/width=${this.#getNearestServerSize(imageSizeDpr)}/`)}?width=${imageSizeDpr}&height=${imageSizeDpr}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
+                const src = `${userInfo.image.replace(this.#regex.urlParamWidth, `/width=${this.#getNearestServerSize(imageSizeDpr)},optimized=true/`)}?width=${imageSizeDpr}&height=${imageSizeDpr}&fit=crop${SETTINGS.autoplay ? '' : '&format=webp'}&target=user-image`;
 
                 if (!this.#cachedUserImages.get(src)) this.#cachedUserImages.set(src, new Set());
 
@@ -6443,17 +6698,44 @@ class Controller {
         return container;
     }
 
-    static #genRelativeTime(list) {
+    static #genRelativeTime(list, minDiffMs = null) {
         const formatDate = d => d.toLocaleDateString();
         const formatTime = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        list.forEach(d => d.date instanceof Date ? null : d.date = new Date(d.date));
+        for (const d of list) {
+            if (!(d.date instanceof Date)) d.date = new Date(d.date);
+            if (isNaN(d.date.getTime())) d.date = null;
+        }
 
-        const tooltip = list.map((d, i) => {
-            return `<div style="margin-block-start:.5em"><div><b>${window.languagePack?.text?.[d.label] || d.label}</b>${i ? ` <span class="dark-text">(<relative-time datetime="${d.date.toISOString()}"></relative-time>)</span>` : ''}</div><div>${formatDate(d.date)} <span class="dark-text">${formatTime(d.date)}</span></div></div>`;
-        }).join('');
+        const sorted = list.filter(d => d.date instanceof Date).sort((a, b) => b.date - a.date);
 
-        return createElement('relative-time', { 'lilpipe-text': tooltip, datetime: list[0].date.toISOString() });
+        if (sorted.length === 0) {
+            return createElement('span', undefined, 'Invalid Date');
+        }
+
+
+        const tooltip = sorted.map((d, i) =>  `<div style="margin-block-start:.5em"><div><b>${window.languagePack?.text?.[d.label] || d.label}</b>${` <span class="dark-text">(<relative-time datetime="${d.date.toISOString()}"></relative-time>)</span>`}</div><div>${formatDate(d.date)} <span class="dark-text">${formatTime(d.date)}</span></div></div>`).join('');
+
+        if (typeof minDiffMs !== 'number' || sorted.length === 1) {
+            return createElement('relative-time', { 'lilpipe-text': tooltip, datetime: sorted[0].date.toISOString() });
+        }
+
+        const first = sorted[0];
+        const last = sorted[sorted.length - 1];
+        const diff = first.date - last.date;
+
+        if (diff < minDiffMs || timeAgoSameBucket(last.date, first.date)) {
+            return createElement('relative-time', { 'lilpipe-text': tooltip, datetime: first.date.toISOString() });
+        }
+
+        const wrapper = createElement('span', { class: 'relative-time-multi', 'lilpipe-text': tooltip });
+        const firstEl = createElement('relative-time', { datetime: first.date.toISOString() });
+        const secondWrap = createElement('span', { class: 'relative-time-secondary' });
+        const secondEl = createElement('relative-time', { datetime: last.date.toISOString() });
+        secondWrap.append(' (', secondEl, ')');
+        wrapper.append(firstEl, secondWrap);
+
+        return wrapper;
     }
 
     static #genMediaElement(options) {
@@ -6572,7 +6854,7 @@ class Controller {
         const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]:not([data-resize])`); // The resizing animation seems extremely unpleasant and out of place
         // const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]`);
         let previewImageOriginal = mediaOriginal?.querySelector(`.media-element`);
-        if (!previewImageOriginal) return;
+        if (!(previewImageOriginal instanceof HTMLElement)) return;
 
         const fullMedia = mediaElement.querySelector('.media-element');
         const isImage = fullMedia?.tagName === 'IMG';
@@ -6582,8 +6864,11 @@ class Controller {
 
         let timestump = 0;
         if (mediaElement.classList.contains('media-video')) {
-            const isVideo = previewImageOriginal.tagName === 'VIDEO';
-            timestump = +(isVideo ? previewImageOriginal.currentTime : mediaOriginal.getAttribute('data-timestump')) || 0;
+            timestump = +(
+                previewImageOriginal instanceof HTMLVideoElement
+                ? previewImageOriginal.currentTime
+                : mediaOriginal.getAttribute('data-timestump')
+            ) || 0;
             mediaElement.setAttribute('data-timestump', timestump);
         }
 
@@ -6592,9 +6877,9 @@ class Controller {
             else if (mediaOriginal.hasAttribute('data-focus-play')) pauseVideo(mediaOriginal, 'data-focus-play');
             previewImageOriginal = mediaOriginal.querySelector(`.media-element`);
         }
-        
-        const previewImage = previewImageOriginal?.cloneNode(true);
-        if (!previewImage) return;
+
+        const previewImage = (previewImageOriginal?.cloneNode(true));
+        if (!(previewImage instanceof HTMLElement)) return;
 
         previewImage.classList.add('media-preview-image');
         previewImage.setAttribute('inert', '');
@@ -6602,12 +6887,13 @@ class Controller {
 
         const previewWrap = createElement('div', { class: 'media-preview-wrapper' });
         previewWrap.appendChild(previewImage);
-        if (previewImage.tagName === 'VIDEO') {
+        if (previewImage instanceof HTMLVideoElement) {
             if (!previewImage.paused) previewImage.pause();
             if (timestump) previewImage.currentTime = timestump;
-        } else if (previewImage.tagName === 'CANVAS') {
+        } else if (previewImage instanceof HTMLCanvasElement) {
             const ctx = previewImage.getContext('2d');
-            ctx.drawImage(previewImageOriginal, 0, 0);
+            // hide this ts fake-error
+            ctx.drawImage(/** @type {HTMLCanvasElement} */ (previewImageOriginal), 0, 0 );
         }
         previewWrap.appendChild(Controller.genLoadingIndecator());
 
@@ -6703,7 +6989,7 @@ class Controller {
             if (mediaElement.classList.contains('video-autoplay')) return;
 
             // Start and stop the video to get the correct frame if autoplay is off
-            observer.disconnect(); // 
+            observer.disconnect();
             return playVideo(mediaElement, 'data-autoplay').then(() => {
                 pauseVideo(mediaElement, 'data-autoplay');
                 onload();
@@ -7270,14 +7556,14 @@ class Controller {
         return { element, setValue };
     }
 
-    static #genStringInput({ onchange, value = '', placeholder = 'string', maxlength, multiline = false }) {
+    static #genStringInput({ onchange, value = '', placeholder = 'string', maxlength = null, multiline = false }) {
         const element = createElement('div', { class: 'config config-string' });
         let currentValue = value;
 
         const inputElement = multiline
             ? insertElement('textarea', element, { class: 'string-input textarea-input', placeholder })
             : insertElement('input', element, { type: 'text', class: 'string-input', placeholder });
-        
+
         const invisibleString = multiline ? null : insertElement('div', element, { class: 'invisible-string string-input' });
 
         if (maxlength) inputElement.setAttribute('maxlength', maxlength);
@@ -7379,10 +7665,10 @@ class Controller {
         history.replaceState(this.state, '', this.#page);
     }
 
-    static navigate({ hash, title, historyMode = 'push' }) {
+    static navigate({ hash = '#home', title = '', historyMode = 'push' }) {
         if (!hash || hash[0] !== '#') hash = '#home';
 
-        if (title !== undefined) this.#setTitle(title);
+        if (title) this.#setTitle(title);
 
         const newState = { id: Date.now() };
 
@@ -7429,7 +7715,8 @@ class Controller {
         const scrollDeltaMax = this.#activeVirtualScroll.map(item => {
             const scrollTopRelative = state[`scrollTopRelative-${item.id}`];
             const virtualScrollState = state[`virtualScrollState-${item.id}`] || {};
-            const scrollTopRelativeNew = item.onScroll({ scrollTop, scrollTopRelative, ...virtualScrollState });
+            if (item.restoreState instanceof Function) item.restoreState(virtualScrollState);
+            const scrollTopRelativeNew = item.onScroll({ scrollTop, scrollTopRelative, ...virtualScrollState }) ?? scrollTopRelative;
             const delta = scrollTopRelativeNew - scrollTopRelative;
             return Math.abs(delta) > 10 ? delta : 0;
         }).sort((a, b) => a - b)[0];
@@ -7566,7 +7853,9 @@ function onTargetInViewportClearTarget(target) {
 }
 
 function onTargetInViewportClearAll() {
-    onTargetInViewportCallbacks.keys().forEach(element => onTargetInViewportClearTarget);
+    for (const element of onTargetInViewportCallbacks.keys()) {
+        onTargetInViewportClearTarget(element);
+    }
 }
 
 function cleanupDetachedObservers() {
@@ -7649,7 +7938,10 @@ function addIconToCache(name, original) {
     svg.setAttribute('aria-hidden', 'true');
     if (original) {
         svg.setAttribute('viewBox', '0 0 24 24');
-        Array.from(document.getElementById(name)?.cloneNode(true)?.children).forEach(node => svg.appendChild(node));
+        const symbol = document.getElementById(name)?.cloneNode(true);
+        if (symbol instanceof SVGSymbolElement) {
+            Array.from(symbol.children).forEach(node => svg.appendChild(node));
+        }
         iconsCache.set(iconName, svg);
     } else {
         const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
@@ -7887,7 +8179,7 @@ function tryClearCache() {
     try {
         const key ='civitai-lite-viewer--time:nextCacheClearTime';
         const nextCacheClearTime = localStorage.getItem(key) ?? (Date.now() - 1000);
-        if (new Date(nextCacheClearTime) < Date.now()) {
+        if (+(new Date(nextCacheClearTime)) < Date.now()) {
             localStorage.setItem(key, new Date(Date.now() + 5 * 60 * 1000).toISOString());
             clearCache('old');
         }
@@ -8005,7 +8297,9 @@ function onBodyFocus(e) {
 function onVisibilityChange() {
     const isVisible = !document.hidden;
     if (isVisible) {
-        Array.from(document.querySelectorAll('.media-container[data-autoplay] video'))
+        /** @type {NodeListOf<HTMLVideoElement & { _wasPlaying?: boolean }>} */
+        const videos = document.querySelectorAll('.media-container[data-autoplay] video');
+        videos
         .forEach(video => {
             if (!video._wasPlaying) return;
             video.play().catch(() => null);
@@ -8016,7 +8310,9 @@ function onVisibilityChange() {
             cacheClearTimer = setInterval(tryClearCache, 60000);
         }
     } else {
-        Array.from(document.querySelectorAll('.media-container[data-autoplay] video'))
+        /** @type {NodeListOf<HTMLVideoElement & { _wasPlaying?: boolean }>} */
+        const videos = document.querySelectorAll('.media-container[data-autoplay] video');
+        videos
         .forEach(video => {
             if (video.paused) video._wasPlaying = false;
             else {
@@ -8037,7 +8333,7 @@ function languageToggleClick(e) {
     if (e.target.closest('#language-button')) {
         document.getElementById('language-list').classList.toggle('hidden');
         document.querySelectorAll('#language-list li img[data-src]').forEach(img => {
-            img.src = img.getAttribute('data-src');
+            img.setAttribute('src', img.getAttribute('data-src'));
             img.removeAttribute('data-src');
         });
         return;
@@ -8199,7 +8495,7 @@ function onDragstart(e) {
                 if (url.hash) {
                     insertElement('b', urlElement, { class: 'light-text' }, '#');
                     insertElement('span', urlElement, undefined, url.hash.substring(1));
-                } 
+                }
 
                 if (url.pathname === '/' && !url.hash) {
                     insertElement('span', urlElement, { class: 'darker-text' }, '/');
@@ -8481,11 +8777,12 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
     container.setAttribute('data-focus-play-timer', '');
 
     // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
+    const isFirstPlay = container.getAttribute('data-timestump') === '0';
     setTimeout(() => {
         if (!container.hasAttribute('data-focus-play-timer')) return;
 
         playVideo(container, 'data-focus-play');
-    }, 250);
+    }, isFirstPlay ? 250 : 100);
 
     target.addEventListener('blur', stopVideoPlayEvent, { passive: true });
     target.addEventListener('pointerleave', stopVideoPlayEvent, { passive: true });
@@ -8535,7 +8832,8 @@ function startLinkPreviewEvent(e, options = { fromFocus: false }) {
 }
 
 let prevLilpipeEvenetTime = 0, prevLilpipeTimer = null;
-function startLilpipeEvent(e, options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null }) {
+function startLilpipeEvent(e, options) {
+    if (!options) options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null };
     const target = e.eventTarget;
     const animationDuration = 150;
 

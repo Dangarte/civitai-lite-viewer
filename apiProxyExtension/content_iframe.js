@@ -1,3 +1,5 @@
+"use strict";
+
 // Clean iframe
 window.stop();
 document.documentElement.innerHTML = '<!DOCTYPE html><html><head><title>Proxy Bridge</title></head><body></body></html>';
@@ -6,18 +8,20 @@ document.documentElement.innerHTML = '<!DOCTYPE html><html><head><title>Proxy Br
 const ORIGINS = [
     "https://dangarte.github.io"
 ];
-const CIVITAI_ORIGIN = "https://civitai.com";
+const CIVITAI_ORIGIN = "https://civitai.red";
 const CIVITAI_TRPC = "/api/trpc/";
 const CIVITAI_TRPC_ROUTES = [
     'model.getAll',
     'model.getById',
+    'model.getCollectionShowcase', // not used now
+    'model.getAssociatedResourcesCardData', // not used now
+    'modelVersion.getById',
     'collection.getById',
     'post.get',
     'post.getResources', // not used now
-    'model.getAssociatedResourcesCardData', // not used now
-    'commentv2.getInfinite',
     'comment.getAll',
     'comment.getById',
+    'commentv2.getInfinite',
     'tag.getVotableTags',
     'image.get',
     'image.getGenerationData',
@@ -32,52 +36,50 @@ window.addEventListener('message', async e => {
         return;
     }
     const { id, type, route, params } = e.data;
+    if (type !== 'FETCH_REQUEST') return;
+
+    const sendResponse = data => {
+        window.parent.postMessage({ id, type: 'FETCH_RESPONSE', data }, e.origin);
+    };
 
     if (!CIVITAI_TRPC_ROUTES.includes(route)) {
         console.log(`[API Bridge] The route "${route}" is not on the white list`);
-        return Promise.resolve({ ok: false, error: "Wront route", route });
+        return sendResponse({ ok: false, error: "Forbidden route", route });
     }
 
-    if (type === 'FETCH_REQUEST') {
-        const options = {
+    try {
+        const url = new URL(`${CIVITAI_TRPC}${route}`, CIVITAI_ORIGIN);
+
+        // tRPC
+        if (params && params.input) {
+            const inputData = params.input;
+            if (inputData.json && typeof inputData.json === 'object') {
+                // Cookies are forced into requests via SW, so there is authorization there.
+                if (typeof inputData.json.authed !== 'boolean') inputData.json.authed = true;
+            }
+            // tRPC expects ?input={"json":{...}}
+            url.searchParams.append('input', JSON.stringify(inputData));
+        }
+
+        const response = await fetch(url, {
             method: 'GET',
             headers: {
                 'Accept': 'application/json'
             }
-        };
+        });
+        const contentType = response.headers.get("content-type");
 
-        try {
-            const url = new URL(`${CIVITAI_TRPC}${route}`, CIVITAI_ORIGIN);
-            Object.keys(params).forEach(key => {
-                const value = params[key];
-                const type = typeof value;
-                if (type === 'number' || type === 'string' || type === 'boolean') return url.searchParams.append(key, value);
-                if (type === 'object') return url.searchParams.append(key, JSON.stringify(value));
-            });
+        let body;
+        if (contentType?.includes("application/json")) body = await response.json();
+        else body = await response.text();
 
-            const response = await fetch(url, options);
-            const contentType = response.headers.get("content-type");
-
-            let body;
-            if (contentType && contentType.includes("application/json")) body = await response.json();
-            else body = await response.text();
-
-            window.parent.postMessage({
-                id,
-                type: 'FETCH_RESPONSE',
-                data: {
-                    ok: response.ok,
-                    status: response.status,
-                    response: body
-                }
-            }, e.origin);
-        } catch (error) {
-            window.parent.postMessage({
-                id,
-                type: 'FETCH_RESPONSE',
-                data: { ok: false, error: error.message }
-            }, e.origin);
-        }
+        sendResponse({
+            ok: response.ok,
+            status: response.status,
+            response: body
+        });
+    } catch (error) {
+        sendResponse({ ok: false, error: error.message });
     }
 });
 

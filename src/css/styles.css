@@ -133,7 +133,7 @@
         --c-main-bg:            color-mix(in oklab, var(--c-main, #0095ff), var(--c-bg) 40%);
         --c-main-bg-dark:       color-mix(in oklab, var(--c-main, #0095ff), var(--c-bg-dark) 60%);
         --c-main-text:          color-mix(in oklab, var(--c-main, #0095ff), var(--c-text) 35%);
-        --c-main-text-card:     color-mix(in oklab, var(--c-main, #0095ff), #fff 35%);
+        --c-main-text-card:     color-mix(in oklab, var(--c-main, #0095ff), #fff 60%);
 
         --c-nsfw-soft-gl:       color-mix(in srgb, var(--c-nsfw-soft), transparent 30%);
         --c-nsfw-soft-alt-gl:   color-mix(in srgb, var(--c-nsfw-soft-alt), transparent 30%);
@@ -321,6 +321,7 @@ ul:only-child {
 
 li::marker {
     color: var(--c-text-darker);
+    pointer-events: none;
 }
 
 th {
@@ -1373,7 +1374,7 @@ footer a {
 .model-description img,
 .model-description video {
     max-width: 100%;
-    max-height: 80vh;
+    max-height: 90vh;
     width: auto;
     height: auto;
     margin-inline: auto;
@@ -1384,10 +1385,15 @@ footer a {
 
 .model-description img.loading {
     border: 1px solid var(--c-border);
-    min-height: 96px;
-    min-width: 96px;
+    min-height: 200px;
+    min-width: 200px;
     background-color: var(--c-bg-light);
-    animation: pulse-opacity .75s ease-in-out infinite alternate;
+    animation: pulse-opacity .65s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-opacity {
+    0% { opacity: 1; }
+    100% { opacity: 0.4; }
 }
 
 .model-description li > p {
@@ -1398,21 +1404,11 @@ footer a {
     display: none;
 }
 
-.model-description > p:first-child,
-.model-description > ul:first-child,
-.model-description > ol:first-child,
-.model-description > h1:first-child,
-.model-description > h2:first-child,
-.model-description > h3:first-child {
+.model-description > :first-child {
     margin-block-start: 0;
 }
 
-.model-description > p:last-child,
-.model-description > ul:last-child,
-.model-description > ol:last-child,
-.model-description > h1:last-child,
-.model-description > h2:last-child,
-.model-description > h3:last-child {
+.model-description > :last-child {
     margin-block-end: 0;
 }
 
@@ -1561,6 +1557,31 @@ hr.description-xl-item {
     height: 0 !important;
 }
 
+.description-vl {
+    position: relative;
+    contain: strict;
+}
+
+.description-vl .description-vl-item {
+    position: absolute;
+    contain: layout style;
+    left: 0;
+    margin: 0;
+    width: 100%;
+}
+
+.description-vl li.description-vl-item {
+    left: 2em;
+}
+
+.description-vl-item > :first-child {
+    margin-block-start: 0;
+}
+
+.description-vl-item > :last-child {
+    margin-block-end: 0;
+}
+
 .card {
     display: block;
     position: absolute !important;
@@ -1689,7 +1710,22 @@ hr.description-xl-item {
     background-color: #0008;
     transform-origin: center center;
     pointer-events: none;
-    transition: opacity .2s ease-out, visibility 0s;
+    transition: all .1s ease-out, visibility 0s;
+}
+
+.video-play-button::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+    border-top: 2px solid currentColor;
+    z-index: 1;
+    opacity: 0;
+    border-radius: 50%;
+    display: none;
 }
 
 .video-hover-play {
@@ -1697,19 +1733,19 @@ hr.description-xl-item {
     touch-action: pan-y;
 }
 
-.media-container[data-focus-play] img + .video-play-button,
-.media-container[data-focus-play] canvas + .video-play-button {
-    animation: pulse-opacity .5s ease-out infinite alternate;
+.media-container[data-focus-play] img + .video-play-button::after,
+.media-container[data-focus-play] canvas + .video-play-button::after {
+    display: block;
+    animation: loading-indicator .72s ease infinite, fadeIn .1s .2s ease-out forwards;
 }
 
-@keyframes pulse-opacity {
-    0% { opacity: 1; }
-    100% { opacity: 0.4; }
+.media-container[data-focus-play-timer] .video-play-button {
+    transform: scale(.9);
+    background-color: #0006;
 }
-
 
 .media-container[data-focus-play] video + .video-play-button {
-    transition: opacity .2s ease-in, visibility 0s .2s;
+    transition: all .1s ease-in, visibility 0s .1s;
     visibility: hidden;
     opacity: 0;
 }
@@ -1786,8 +1822,6 @@ hr.description-xl-item {
     -webkit-box-orient: vertical;
     grid-row: 3;
     margin: 0;
-    pointer-events: none;
-    user-select: none;
 }
 
 .user-info {
@@ -1805,9 +1839,7 @@ hr.description-xl-item {
 }
 
 .user-moderator a,
-.user-moderator span,
-.user-civbot a,
-.user-civbot span {
+.user-moderator span {
     color: var(--c-main-text) !important;
     font-weight: 700;
     text-shadow: 0 0 4px var(--c-main20);
@@ -1817,9 +1849,12 @@ hr.description-xl-item {
 .user-info img {
     width: var(--image-size);
     height: var(--image-size);
+    background-color: var(--c-bg-darker);
+    border: 1px solid var(--c-border);
     font-size: calc(var(--image-size)/2);
     border-radius: var(--radius);
     margin: 0;
+    user-select: none;
     pointer-events: none;
 }
 
@@ -1828,7 +1863,7 @@ hr.description-xl-item {
     align-items: center;
     justify-content: center;
     line-height: 1;
-    background-color: var(--c-bg-darker);
+    background-image: radial-gradient(var(--c-main20), transparent);
 }
 
 .user-info a {
@@ -1837,6 +1872,7 @@ hr.description-xl-item {
 
 .card .user-info {
     display: flex;
+    text-shadow: 0 0 2px #0008;
 }
 
 .card .model-name,
@@ -1844,20 +1880,22 @@ hr.description-xl-item {
     color: #fff;
 }
 
-.model-card .user-moderator span,
-.image-card .user-moderator span,
-.model-card .user-civbot span,
-.image-card .user-civbot span {
+.card .user-moderator span {
     color: var(--c-main-text-card) !important;
 }
 
 .model-card .model-published-time,
 .image-card .image-created-time {
     display: block;
-    color: #e1e1e1;
+    color: #eee;
     font-size: .9em;
     width: -moz-fit-content;
     width: fit-content;
+}
+
+.model-card .model-published-time .relative-time-secondary {
+    color: #ddd;
+    font-size: .9em;
 }
 
 .user-info .user-group {
@@ -1995,13 +2033,13 @@ hr.description-xl-item {
     width: 1em;
     height: 1em;
     border-radius: 50%;
-    opacity: 1;
     transition: 0s;
     border: 3px solid #444;
     border-left: 3px solid #ccc;
     border-bottom: 3px solid #ccc;
     box-sizing: border-box;
-    animation: loading-indicator .72s ease infinite;
+    opacity: 0;
+    animation: loading-indicator .72s ease infinite, fadeIn .1s .1s ease-out forwards;
 }
 
 @keyframes loading-indicator {
@@ -2478,13 +2516,13 @@ code.prompt-positive::before {
     max-width: 28em;
     text-align: center;
     font-size: .75em;
-    --delay: .75s;
+    --delay: .65s;
     z-index: -1;
 }
 
 #load-no-more span {
     transform-origin: center center;
-    animation: popInFromUFO .75s var(--delay, .5s) cubic-bezier(0.175, 0.885, 0.32, 1.275) 1 backwards;
+    animation: popInFromUFO .65s var(--delay, .5s) cubic-bezier(0.175, 0.885, 0.32, 1.275) 1 backwards;
 }
 
 @keyframes popInFromUFO {
@@ -2552,6 +2590,10 @@ code.prompt-positive::before {
     display: flex;
     flex-wrap: wrap;
     gap: .5em;
+}
+
+.model-download-files[inert] {
+    opacity: .4;
 }
 
 .model-download-files .link-button {
@@ -2637,6 +2679,10 @@ code.prompt-positive::before {
     -webkit-line-clamp: 1;
     line-clamp: 1;
     -webkit-box-orient: vertical;
+}
+
+.model-tags .user-info {
+    padding-inline: .5em;
 }
 
 .article-preview .media-container {
@@ -3413,6 +3459,15 @@ a.link-button.link-open-civitai::after {
     font-size: 0.9em;
     padding: 0;
     padding-block: 0.5em;
+}
+
+.spam-hidden button {
+    text-align: start;
+}
+
+.spam-hidden {
+    max-height: 10em;
+    overflow-y: auto;
 }
 
 .drag-ghost-container {
