@@ -1001,6 +1001,19 @@ footer a {
     height: 256px;
 }
 
+.error-block-retry-bar {
+    width: 20ch;
+    height: 4px;
+    border-radius: 4px;
+    background-color: var(--c-text-darker);
+    animation: bar-retry-shrink var(--delay, 1s) 1 forwards, linear;
+}
+
+@keyframes bar-retry-shrink {
+    0% { transform: scaleX(1); }
+    100% { transform: scaleX(0); }
+}
+
 .error-page .link-open-civitai {
     width: -moz-fit-content;
     width: fit-content;
@@ -1054,6 +1067,7 @@ footer a {
 
 [lilpipe-text] {
     touch-action: pan-y;
+    cursor: help;
 }
 
 .tooltip {
@@ -1683,11 +1697,11 @@ hr.description-xl-item {
     flex-wrap: wrap;
     padding: .25em;
     padding-bottom: 2em;
-    background-image: linear-gradient(0, transparent, #0007 3em);
+    background-image: linear-gradient(0, transparent, #0008 3em);
 }
 
 .card-content-bottom {
-    background-image: linear-gradient(180deg, transparent, #0006 48px, #0007);
+    background-image: linear-gradient(180deg, transparent, #0007 48px, #0009);
     padding: .25em;
 }
 
@@ -1820,8 +1834,24 @@ hr.description-xl-item {
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
-    grid-row: 3;
     margin: 0;
+}
+
+.model-card .model-version-name {
+    font-size: .8em;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+    line-height: 1.25em;
+    max-height: 1.25em;
+}
+
+.model-card .badges.data-unknown .badge {
+    opacity: .6;
+}
+
+.model-card .badges.data-unknown .badge.badge-unknown {
+    opacity: 1;
+    background-color: var(--c-warning-alt);
 }
 
 .user-info {
@@ -1880,15 +1910,21 @@ hr.description-xl-item {
     color: #fff;
 }
 
+.card .model-version-name {
+    color: #ddd;
+}
+
 .card .user-moderator span {
     color: var(--c-main-text-card) !important;
 }
 
 .model-card .model-published-time,
 .image-card .image-created-time {
-    display: block;
+    display: inline;
     color: #eee;
     font-size: .9em;
+    line-height: 1.25em;
+    height: 1.25em;
     width: -moz-fit-content;
     width: fit-content;
 }
@@ -1896,6 +1932,12 @@ hr.description-xl-item {
 .model-card .model-published-time .relative-time-secondary {
     color: #ddd;
     font-size: .9em;
+}
+
+.model-card .model-published-time .icon {
+    display: inline;
+    font-size: 1.25em;
+    vertical-align: text-bottom;
 }
 
 .user-info .user-group {
@@ -2508,11 +2550,11 @@ code.prompt-positive::before {
     user-select: none;
 }
 
-#load-no-more .icon {
+#load-no-more > .icon {
     font-size: 3em;
 }
 
-#load-no-more span.darker-text {
+#load-no-more > span.darker-text {
     max-width: 28em;
     text-align: center;
     font-size: .75em;
@@ -2520,7 +2562,7 @@ code.prompt-positive::before {
     z-index: -1;
 }
 
-#load-no-more span {
+#load-no-more > span {
     transform-origin: center center;
     animation: popInFromUFO .65s var(--delay, .5s) cubic-bezier(0.175, 0.885, 0.32, 1.275) 1 backwards;
 }
@@ -2528,6 +2570,22 @@ code.prompt-positive::before {
 @keyframes popInFromUFO {
     0% { transform: translateY(-80%) scaleX(.25); opacity: 0; }
     100% { transform: translateY(0) scaleX(1); opacity: 1; }
+}
+
+.no-more-buttons {
+    pointer-events: all;
+    font-size: .8em;
+    padding: .5em;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: center;
+    align-items: center;
+    gap: .5em;
+}
+
+.no-more-buttons button {
+    padding: .25em;
+    padding-inline: .5em;
 }
 
 #load-more {
@@ -3448,6 +3506,11 @@ a.link-button.link-open-civitai::after {
     margin-block-start: .5em;
 }
 
+.comments-list .link-button {
+    width: fit-content;
+    margin-inline: auto;
+}
+
 .comments-list .media-loading-indicator {
     position: unset;
     margin-inline: auto;
@@ -3468,6 +3531,11 @@ a.link-button.link-open-civitai::after {
 .spam-hidden {
     max-height: 10em;
     overflow-y: auto;
+}
+
+.comment-timeline-mark {
+    text-align: center;
+    color: var(--c-text-dark);
 }
 
 .drag-ghost-container {

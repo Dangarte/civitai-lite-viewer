@@ -1856,6 +1856,14 @@ class MasonryLayout {
         this.#container.style.height = `${containerHeight}px`;
     }
 
+    getItems() {
+        return this.#items.map(item => ({
+            id: item.id,
+            data: item.data,
+            aspectRatio: item.aspectRatio ?? null
+        }));
+    }
+
     clear() {
         this.#items.forEach(item => {
             if (!item.element) return;

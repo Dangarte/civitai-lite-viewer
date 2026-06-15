@@ -3,7 +3,7 @@
 
 
 const CONFIG = {
-    version: 39,
+    version: 40,
     updated: '2026-06-04T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
@@ -251,7 +251,7 @@ class CivitaiPublicAPI {
         } = options;
 
         const url = new URL(`${this.baseURL}/models`);
-        url.searchParams.append('limit', limit);
+        url.searchParams.append('limit', String(Math.min(limit, 100)));
         if (cursor) url.searchParams.append('cursor', cursor);
 
         if (query) url.searchParams.append('query', query);
@@ -793,12 +793,15 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             browsingLevel,
             sort = '',
             period = '',
+            combineWithPublicData = false // Needed to get model version statistics
         } = options;
+
+        const publicOptions = combineWithPublicData ? {...options, limit: options.limit * 2} : null;
 
         const input = {
             json: {
                 periodMode: 'published',
-                include: ["cosmetics"],
+                include: ['cosmetics'],
                 excludedTagIds: [],
                 // authed: true,
                 browsingLevel: 9999, // get all lvls (otherwise, there will be the same error as with the images)
@@ -818,7 +821,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         if (tag) input.json.tag = tag;
         if (baseModels?.length > 0) input.json.baseModels = baseModels;
 
-        const data = await this.#getJSON({ route: 'model.getAll', params: { input }, target: 'models' });
+        const [ data, dataPublic ] = await Promise.all([
+            this.#getJSON({ route: 'model.getAll', params: { input }, target: 'models' }),
+            combineWithPublicData ? super.fetchModels(publicOptions) : Promise.resolve({})
+        ]);
 
         const items = data.items.map(item => {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
@@ -827,6 +833,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             const isUpdate = (Date.parse(item.lastVersionAt) - Date.parse(item.publishedAt)) > 60000;
 
             const version = item.version;
+            const publicVersion = combineWithPublicData ? dataPublic?.items?.find(model => model.id === item.id)?.modelVersions?.find(v => v.id === version.id) : null;
+
             return {
                 id: item.id,
                 name: item.name,
@@ -847,6 +855,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                         publishedAt: version.publishedAt,
                         nsfwLevel: version.nsfwLevel,
                         trainedWords: version.trainedWords || [],
+                        stats: publicVersion?.stats ? this.#prepareStats(publicVersion.stats) : null
                     },
                     isUpdate ? {
                         publishedAt: item.publishedAt,
@@ -876,6 +885,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             const comUrl = 'https://civitai.com/';
             const redUrl = 'https://civitai.red/';
             resultOriginal.modelVersions.forEach(v => v.files?.forEach(f => f.downloadUrl = f.downloadUrl?.replace(comUrl, redUrl)));
+
+            // Fix creator id
+            if (resultOriginal.creator && !resultOriginal.creator?.id && resultOriginal.userId) resultOriginal.creator.id = resultOriginal.userId;
+
             return resultOriginal;
         }
 
@@ -1524,6 +1537,7 @@ class Controller {
                     baseModels: forcedBaseModel || SETTINGS.baseModels,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfw,
+                    combineWithPublicData: EXTENSION_INSTALLED && SETTINGS.showCurrentModelVersionStats
                 };
 
                 return {
@@ -2975,6 +2989,29 @@ class Controller {
             const model = modelById.get(id);
             this.#cache.models.set(`${id}`, model);
         };
+        const sortByDownloads = () => {
+            // Sort by most downloaded first version (not newest, but first in list)
+            console.log('Sort loaded models by most downloaded version');
+            const items = infinityScroll.layout.getItems();
+            const sorted = items.sort((a, b) => {
+                const aCount = a.data?.modelVersions[0]?.stats?.downloadCount || 0;
+                const bCount = b.data?.modelVersions[0]?.stats?.downloadCount || 0;
+                return bCount - aCount;
+            });
+
+            infinityScroll.layout.clear();
+            infinityScroll.layout.addItems(sorted);
+            document.documentElement.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+        const genEndButtons = () => {
+            if (!EXTENSION_INSTALLED || SETTINGS.sort !== 'Most Downloaded') return;
+
+            const container = createElement('div', { class: 'no-more-buttons' });
+            const buttonSort = insertElement('button', container, undefined, 'Sort by version downloads');
+            buttonSort.prepend(getIcon('reload'));
+            buttonSort.addEventListener('click', sortByDownloads, { once: true });
+            return container;
+        };
 
         const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
@@ -2991,6 +3028,7 @@ class Controller {
                     baseModels: forcedBaseModel || SETTINGS.baseModels,
                     browsingLevel: SETTINGS.browsingLevel,
                     nsfw: SETTINGS.nsfw,
+                    combineWithPublicData: EXTENSION_INSTALLED && SETTINGS.showCurrentModelVersionStats
                 };
                 state.filter = JSON.stringify(query);
 
@@ -3076,7 +3114,7 @@ class Controller {
             if (SETTINGS.blackListUserIds.length) {
                 const countAll = models.length;
 
-                models = models.filter(model => !SETTINGS.blackListUserIds.includes(model?.creator?.userId));
+                models = models.filter(model => !SETTINGS.blackListUserIds.includes(model?.creator?.id));
 
                 if (models.length !== countAll) {
                     this.#log(`Due to the users blacklist, ${countAll - models.length} model(s) were hidden`);
@@ -3095,7 +3133,7 @@ class Controller {
         };
 
         const infinityScroll = this.#genInfinityScroll({
-            layoutConfig, onPointerDown, loadItems, prepareItems,
+            layoutConfig, onPointerDown, loadItems, prepareItems, genEndButtons,
             labels: {
                 hiddenItems: window.languagePack?.text?.hiddenModels ?? 'Due to the selected hide tags, {count} were hidden',
                 units: window.languagePack?.units?.element ?? ['element', 'elements', 'elements'],
@@ -3355,25 +3393,16 @@ class Controller {
             if (!hash) console.log('This file has no hashes', file);
             if (downloadFileHashes.has(hash)) return;
             downloadFileHashes.add(hash);
-            const download = window.languagePack?.text?.download ?? 'Download';
+            const formatString = file.metadata.format === 'SafeTensor' || file.metadata.format === 'Other' ? '' : file.metadata.format;
+            const fpString = file.metadata.fp ? file.metadata.fp : '';
+            const dwonloadTitle = `${file.type} ${formatString ? ` ${formatString}` : ''}${fpString ? ` (${fpString})` : ''}`;
             const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
             const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-text': `<b>${escapeHtml(file.type)}</b><br><span style="word-break:break-word;">${escapeHtml(file.name)?.replace(fileTypeRegex, '<span style="color:var(--c-text-darker);">.$1</span>') || ''}</span>`, 'lilpipe-delay': 600 });
             a.appendChild(getIcon('download'));
-            if (file.type === 'Model') {
-                const downloadTitle = `${download} ${file.metadata.fp ?? ''}` + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
-                a.appendChild(document.createTextNode(` ${downloadTitle}`));
-                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
-            } else if (file.type === 'Archive') {
-                const downloadTitle = download;
-                a.appendChild(document.createTextNode(` ${download}`));
-                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
-                a.appendChild(getIcon('file_zip'));
-            } else {
-                const downloadTitle = download + (file.metadata.format === 'SafeTensor' ? '' : ` ${file.metadata.format}`);
-                a.appendChild(document.createTextNode(` ${downloadTitle}`));
-                insertElement('span', a, { class: 'dark-text' }, ` ${fileSize}`);
-                a.appendChild(getIcon('file'));
-            }
+            insertTextNode(` ${dwonloadTitle}`, a);
+            insertElement('span', a, { class: 'dark-text' }, ` · ${fileSize}`);
+            if (file.type === 'Archive') a.appendChild(getIcon('file_zip'));
+
             if (file.virusScanResult !== 'Success') {
                 a.classList.add('link-warning');
                 a.setAttribute('lilpipe-text', `${a.getAttribute('lilpipe-text') || ''}<br><b>${escapeHtml(file.virusScanMessage ?? file.virusScanResult)}</b>`);
@@ -3612,7 +3641,13 @@ class Controller {
 
         // Comments
         if (EXTENSION_INSTALLED) { // model.stats?.commentCount often 0, so skip the check
-            const { element: commentsElement, promise } = this.#genComments({ entityId: model.id, entityType: 'model', opCreator: model.creator?.username || null, state: navigationState });
+            const timeline = model.modelVersions.map(version => {
+                return {
+                    date: version.publishedAt,
+                    label: version.name
+                };
+            });
+            const { element: commentsElement, promise } = this.#genComments({ entityId: model.id, entityType: 'model', timeline, opCreator: model.creator?.username || null, state: navigationState });
             page.appendChild(commentsElement);
         }
 
@@ -3646,7 +3681,7 @@ class Controller {
             const title = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', media.username);
 
             // Creator and Created At
-            const creator = this.#genUserBlock({ id: media.userId, username: media.username, url: `#images?username=${media.username}` });
+            const creator = this.#genUserBlock({ id: media.user?.id ?? media.userId ?? null, username: media.username, url: `#images?username=${media.username}` });
             if (media.createdAt) {
                 const createdAt = new Date(media.createdAt);
                 const relativeTime = this.#genRelativeTime([{ label: 'Published', date: createdAt }]);
@@ -3866,7 +3901,7 @@ class Controller {
     }
 
     static #genComments(options) {
-        const { entityId, entityType, opCreator = null, sort = 'Newest', state: navigationState = copyThis(this.#state) } = options;
+        const { entityId, entityType, opCreator = null, sort = 'Newest', timeline: timelineRaw = [], state: navigationState = copyThis(this.#state) } = options;
 
         if (!EXTENSION_INSTALLED || !entityId || !entityType) {
             const errorMessage = EXTENSION_INSTALLED ? 'No entity or id' : 'Cant find API-Bridge';
@@ -3882,6 +3917,17 @@ class Controller {
         const state = this.#state[key];
 
         if (!cache.commentsById) cache.commentsById = {};
+
+        const timeline = sort === 'Newest' && timelineRaw.length > 0 ? timelineRaw.map(a => {
+            const date = a.date instanceof Date ? a.date : new Date(a.date);
+            if (isNaN(date.getTime())) return { date: null, label: '' };
+
+            return {
+                date,
+                dateISO: date.toISOString(),
+                label: a.label || ''
+            };
+        }).filter(a => a.date && a.label).sort((a, b) => b.date - a.date) : [];
 
         const container = createElement('div', { class: 'comments-list' });
 
@@ -4022,6 +4068,8 @@ class Controller {
             }
         };
 
+        const genTimeLilpipe = date => `<div>${date.toLocaleDateString()} <span class="dark-text">${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>`;
+
         const insertItems = (items, container, cursor = null) => {
             const fragment = new DocumentFragment();
             const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -4034,6 +4082,16 @@ class Controller {
             }
 
             items.forEach(item => {
+                while (timeline[0] && timeline[0].dateISO > item.createdAt) {
+                    const markItem = timeline[0];
+                    timeline.splice(0, 1);
+                    const date = markItem.date;
+                    const mark = insertElement('div', fragment, { class: 'comment-timeline-mark' }, markItem.label);
+                    insertTextNode(' (', mark);
+                    insertElement('relative-time', mark, { datetime: markItem.dateISO, 'lilpipe-text': genTimeLilpipe(date) });
+                    insertTextNode(')', mark);
+                }
+
                 const card = insertElement('div', fragment, { class: 'comment', 'data-id': item.id });
 
                 // Header: User Info + Meta
@@ -4042,8 +4100,8 @@ class Controller {
                 header.appendChild(this.#genUserBlock({ ...item.user, group: isOp ? 'OP' : null, imageSize: 36 }));
 
                 const meta = insertElement('div', header, { class: 'comment-meta' });
-                const date = new Date(item.createdAt).toLocaleDateString();
-                insertElement('relative-time', meta, { class: 'comment-date', datetime: item.createdAt, 'lilpipe-text': date });
+                const date = new Date(item.createdAt);
+                insertElement('relative-time', meta, { class: 'comment-date', datetime: item.createdAt, 'lilpipe-text': genTimeLilpipe(date) });
 
                 // Content
                 const contentBlock = insertElement('div', card, { class: 'comment-content model-description' });
@@ -4180,7 +4238,7 @@ class Controller {
     }
 
     static #genInfinityScroll(options) {
-        const { layoutConfig, loadItems, prepareItems, onPointerDown, labels = {} } = options;
+        const { layoutConfig, loadItems, prepareItems, onPointerDown, genEndButtons, labels = {} } = options;
         let promise = null, cursor, firstDraw = false, hiddenItems = 0;
 
         const element = createElement('div', { class: 'cards-list' });
@@ -4197,7 +4255,7 @@ class Controller {
 
         const layout = new MasonryLayout(element, layoutConfig);
 
-        const loadMore = () => {
+        const loadMore = (attempts = 0) => {
             if (!cursor) return;
             const result = loadItems({ cursor });
 
@@ -4216,7 +4274,41 @@ class Controller {
                     console.error(error);
                     console.error('Failed to fetch items:', error?.message ?? error);
                     element.classList.add('error');
-                    element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
+                    const errorBlock = this.#genErrorPage(error?.message ?? 'Error');
+                    element.querySelectorAll('.error-block').forEach(block => block.remove());
+                    element.appendChild(errorBlock);
+
+                    // Retry attempts
+                    if (attempts < 0) attempts = 0;
+                    attempts++;
+                    const attemptText = window.languagePack?.text?.retryAttempt || 'Attempt';
+                    // fail
+                    if (attempts >= 5) {
+                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} 5 / 5`);
+                        return;
+                    }
+                    // manual
+                    if (attempts > 3) {
+                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 5`);
+                        const button = insertElement('button', errorBlock, { inert: '' }, window.languagePack?.text?.retry || 'Retry');
+                        button.prepend(getIcon('reload'));
+                        button.addEventListener('click', () => {
+                            button.setAttribute('inert', '');
+                            loadMore(attempts);
+                        }, { once: true });
+                        setTimeout(() => button.removeAttribute('inert'), 500 * attempts * attempts);
+                        return;
+                    }
+                    // auto
+                    const delay = 1000 * attempts * attempts;
+                    const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 5 (`);
+                    insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay + 500) });
+                    timerSpan.appendChild(document.createTextNode(')'));
+                    insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
+                    setTimeout(() => {
+                        if (pageNavigation !== this.#pageNavigation) return;
+                        loadMore(attempts);
+                    }, delay);
                 });
             } else {
                 cursor = result.cursor;
@@ -4250,6 +4342,11 @@ class Controller {
                     const units = labels.units ?? ["element", "elements", "elements"];
                     const text = hiddenTextBase.replace('{count}', `${hiddenItems} ${escapeHtml(units[pluralIndex(hiddenItems)])}`);
                     insertElement('span', loadNoMore, { class: 'darker-text' }, text);
+                }
+
+                if (typeof genEndButtons === 'function') {
+                    const buttons = genEndButtons();
+                    if (buttons && buttons instanceof Element) loadNoMore.appendChild(buttons);
                 }
             }
         };
@@ -5867,7 +5964,7 @@ class Controller {
         if (rawResources.length) {
             const resources = rawResources.sort((a, b) => a.type === 'model' ? -1 : 1);
 
-            const metaBaseModel = String(media.baseModel || meta.ecosystem)?.toLowerCase() || null;
+            const metaBaseModel = String(media.baseModel || meta.ecosystem || '')?.toLowerCase() || '';
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
             const resourcesTitle = insertElement('h3', resourcesContainer);
             resourcesTitle.appendChild(getIcon('database'));
@@ -5902,7 +5999,7 @@ class Controller {
                     if (weightRounded !== weight) span.setAttribute('lilpipe-text', escapeHtml(weight));
                 }
                 const resourceType = insertElement('span', el, { class: 'meta-resource-type' }, type);
-                if (type.toLowerCase() !== 'upscaler' && baseModel && metaBaseModel && baseModel.toLowerCase() !== metaBaseModel) resourceType.setAttribute('lilpipe-text', escapeHtml(baseModel));
+                if (baseModel && metaBaseModel && type.toLowerCase() !== 'upscaler' && baseModel.toLowerCase() !== metaBaseModel) resourceType.setAttribute('lilpipe-text', escapeHtml(baseModel));
                 return el;
             };
             const replaceResourceRow = (info, item, el) => {
@@ -6316,17 +6413,17 @@ class Controller {
                 // Creator
                 if (article.user) cardContentBottom.appendChild(this.#genUserBlock(article.user));
 
+                // Article Name
+                insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
+
                 // publishedAt / createdAt
                 const createdAt = new Date(article.publishedAt);
                 const updatedAt = new Date(article.updatedAt || article.publishedAt);
                 const isUpdated = Math.abs(+updatedAt - +createdAt) > 30 * 60 * 1000; // 30 m
                 const publishedDates = isUpdated ? [{ label: 'Updated', date: updatedAt }, { label: 'Published', date: createdAt }] : [{ label: 'Published', date: createdAt }];
                 const relativeTime = this.#genRelativeTime(publishedDates, 24 * 60 * 60 * 1000); // 24 h
-                relativeTime.className = 'model-published-time';
-                cardContentBottom.appendChild(relativeTime);
-
-                // Article Name
-                insertElement('div', cardContentBottom, { class: 'model-name' }, article.title);
+                const relativeTimeWrapper = insertElement('span', cardContentBottom, { class: 'model-published-time' });
+                relativeTimeWrapper.appendChild(relativeTime);
 
                 // Stats
                 const insertStats = (stats, parent) => {
@@ -6488,15 +6585,26 @@ class Controller {
 
                 // Model Name
                 insertElement('div', cardContentBottom, { class: 'model-name' }, model.name);
+                if (modelVersion.name) {
+                    const wrap = insertElement('div', cardContentBottom, { class: 'model-name model-version-name' }, `${modelVersion.name} • `);
+                    insertElement('relative-time', wrap, { datetime: modelVersion.publishedAt });
+                }
 
                 // Stats
                 const statsSource = SETTINGS.showCurrentModelVersionStats && modelVersion.stats ? modelVersion.stats : model.stats;
+                const statsWarning = SETTINGS.showCurrentModelVersionStats && !modelVersion.stats;
                 const statsContainer = this.#genStats([
                     { icon: 'download', value: statsSource.downloadCount, unit: 'download' },
                     { icon: 'like', value: statsSource.thumbsUpCount, unit: 'like' },
                     { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
                     // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
                 ]);
+                if (statsWarning) {
+                    statsContainer.classList.add('data-unknown');
+                    const badge = insertElement('div', statsContainer, { class: 'badge badge-unknown' });
+                    badge.appendChild(getIcon('warning'));
+                    badge.setAttribute('lilpipe-text', window.languagePack?.text?.versionStatisticsNotAvailable || 'Version statistics are not available');
+                }
                 cardContentBottom.appendChild(statsContainer);
 
                 // actual image
@@ -7122,7 +7230,7 @@ class Controller {
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
 
         const list = [
-            EXTENSION_INSTALLED ? null : { type: 'dropdown', // the main API (unlike the public one) does not return version statistics, so this parameter does not work
+            { type: 'dropdown',
                 items: [
                     { type: 'boolean',
                         key: 'showCurrentModelVersionStats',
