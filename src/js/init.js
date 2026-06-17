@@ -96,7 +96,8 @@ const CONFIG = {
                 "+114923+5262|3852", // "male focus" and "solo"
                 // "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
             ]
-        }
+        },
+        unpopularModels: [ 'SD 1.4', 'SD 1.5', 'SD 1.5 LCM', 'SD 1.5 Hyper', 'SD 2.0', 'SD 2.0 768', 'SD 2.1', 'SD 2.1 768', 'SD 2.1 Unclip', 'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Large Turbo', 'SD 3.5 Medium', 'SDXL 0.9', 'SDXL 1.0 LCM', 'SDXL Distilled', 'SDXL Hyper', 'SDXL Lightning', 'SDXL Turbo', 'Hunyuan 1', '', 'Pony V7', 'CogVideoX', 'SVD', 'SVD XT', 'AuraFlow', 'Chroma', 'Kolors', 'Lumina', 'LTXV', 'LTXV2', 'Mochi', 'ODOR', 'PixArt E', 'PixArt a', 'Playground v2', 'Wan Video', 'Stable Cascade', 'HiDream', 'HiDream-O1' ]
     },
     userGroups: {
         // civ_bot = civitai bot (challanges, contest, etc.)
@@ -130,7 +131,6 @@ const SETTINGS = {
     blackListUserIds: [],   //
     blackListTagIds: [],    // With the extension from the "apiProxyExtension" folder, you can filter images by tag ID
     hideUnpopularModels: true, // Hide unpopular models from selector list
-    modelsToHide: [ 'SD 1.4', 'SD 1.5', 'SD 2.0', 'SD 2.0 768', 'SD 2.1', 'SD 2.1 768', 'SD 2.1 Unclip', 'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Large Turbo', 'SD 3.5 Medium', 'SDXL 0.9', 'SDXL 1.0 LCM', 'SDXL Distilled', 'SDXL Hyper', 'SDXL Lightning', 'SDXL Turbo', 'Hunyuan 1', '', 'Pony V7', 'CogVideoX', 'SVD', 'SVD XT', 'AuraFlow', 'Chroma', 'Kolors', 'Lumina', 'LTXV', 'LTXV2', 'Mochi', 'ODOR', 'PixArt E', 'PixArt a', 'Playground v2', 'Wan Video', 'Stable Cascade' ],
     nsfw: true,
     nsfwLevel: 'Mature',
     browsingLevel: 4,
@@ -1220,27 +1220,24 @@ class Controller {
             'Flux.2 Klein 4B',
             'Flux.2 Klein 4B-base',
             'HiDream',
+            'HiDream-O1',
             'Hunyuan 1',
             'Hunyuan Video',
             'Illustrious',
-            'Imagen4',
             'Kolors',
             'LTXV',
             'LTXV2',
             'LTXV 2.3',
             'Lumina',
             'Mochi',
-            'Nano Banana',
             'NoobAI',
             'ODOR',
-            'OpenAI',
             'PixArt E',
             'PixArt a',
             'Playground v2',
             'Pony',
             'Pony V7',
             'Qwen',
-            'Qwen 2',
             'SD 1.4',
             'SD 1.5',
             'SD 1.5 Hyper',
@@ -1264,12 +1261,7 @@ class Controller {
             'SDXL Turbo',
             'SVD',
             'SVD XT',
-            'Seedream',
-            'Seedance',
-            'Sora 2',
             'Stable Cascade',
-            'Veo 3',
-            'Vidu Q1',
             'Wan Video',
             'Wan Video 1.3B t2v',
             'Wan Video 14B i2v 480p',
@@ -1278,24 +1270,37 @@ class Controller {
             'Wan Video 2.2 I2V-A14B',
             'Wan Video 2.2 T2V-A14B',
             'Wan Video 2.2 TI2V-5B',
+            'ZImageTurbo',
+            'ZImageBase',
+            'Anima',
+            'Ernie',
+            'ACE Audio',
+            'Lens',
+            'Ideogram 4.0', // For some reason, all ideogram models have the "Other" category...
+            
+            // API-only models
             'Wan Video 2.5 I2V',
             'Wan Video 2.5 T2V',
             'Wan Image 2.7',
             'Wan Video 2.7',
-            'ZImageTurbo',
-            'ZImageBase',
-            'Anima',
+            'Qwen 2',
+            'Vidu Q1',
+            'Seedream',
+            'Seedance',
+            'Veo 3',
+            'OpenAI',
+            'Nano Banana',
+            'Sora 2',
             'Kling',
-            'Ernie',
-            'ACE Audio',
             'HappyHorse',
-            'HiDream-O1',
-            'Lens',
+            'Imagen4',
             'Krea 2',
             'MAI',
+
             'Other'
         ],
         labels: {
+            'SDXL 1.0': 'SDXL',
             AuraFlow: 'Aura Flow',
             ZImageTurbo: 'Z-Image Turbo',
             ZImageBase: 'Z-Image Base',
@@ -1347,6 +1352,7 @@ class Controller {
             'Wan Video 2.5 T2V': 'Wan 2.5 T2V',
             'Wan Video 2.5 I2V': 'Wan 2.5 I2V',
             'HiDream': 'HiD',
+            'HiDream-O1': 'HiD-O1',
             'ZImageTurbo': 'ZIT',
             'ZImageBase': 'ZI',
         },
@@ -1364,6 +1370,7 @@ class Controller {
             'Flux.2 Klein 4B': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'Flux.2 Klein 4B-base': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'HiDream': ['image', 'weights', 'chinese'],
+            'HiDream-O1': ['image', 'weights', 'hidream.ai', 'multilingual'],
             'Hunyuan 1': ['image', 'weights', 'tencent', 'multilingual'],
             'Hunyuan Video': ['video', 'weights', 'tencent', 'multilingual'],
             'Illustrious': ['image', 'weights', 'sdxl', 'community', 'uncensored'],
@@ -1406,7 +1413,7 @@ class Controller {
             'SDXL Turbo': ['image', 'weights', 'sdxl', 'stability-ai'],
             'SVD': ['video', 'weights', 'stability-ai', 'legacy'],
             'SVD XT': ['video', 'weights', 'stability-ai'],
-            'Seedream': ['image', 'weights', 'multilingual'],
+            'Seedream': ['image', 'closed', 'multilingual'],
             'Sora 2': ['video', 'closed', 'openai', 'censored', 'multilingual'],
             'Stable Cascade': ['image', 'weights', 'cascade', 'stability-ai'],
             'Veo 3': ['video', 'closed', 'google', 'censored', 'multilingual'],
@@ -1433,10 +1440,10 @@ class Controller {
             'Ernie': ['image', 'weights', 'baidu', 'multilingual'],
             'ACE Audio': ['audio', 'weights', 'ace studio', 'stepfun', 'multilingual'],
             'HappyHorse': ['video', 'closed', 'alibaba'], // multilingual ?
-            'HiDream-O1': ['image', 'weights', 'hidream.ai', 'multilingual'],
             'Lens': ['image', 'weights', 'microsoft', 'multilingual'],
             'Krea 2': ['image', 'closed', 'krea.ai', 'multilingual'],
             'MAI': ['image', 'closed', 'microsoft', 'multilingual'],
+            'Ideogram 4.0': ['image', 'weights', 'censored', 'uncensored', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -3046,7 +3053,7 @@ class Controller {
         };
         const genEndButtons = () => {
             if (!EXTENSION_INSTALLED || SETTINGS.sort !== 'Most Downloaded') return;
-            if (infinityScroll.layout.getItems().length < 2) return;
+            if (modelById.size < 2) return;
 
             const container = createElement('div', { class: 'no-more-buttons' });
             const buttonSort = insertElement('button', container, undefined, 'Sort by version downloads');
@@ -7257,7 +7264,7 @@ class Controller {
     static #genImagesListFilters(onAnyChange, options = {}) {
         const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
         const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
-        const modelsToHide = SETTINGS.hideUnpopularModels ? SETTINGS.modelsToHide : [];
+        const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
         const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
         const modelsTags = this.#models.tags;
         const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));
@@ -7338,7 +7345,7 @@ class Controller {
     static #genModelsListFilters(onAnyChange, options = {}) {
         const { period = true, types = true, checkpointType = true, baseModels = true } = options;
         const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
-        const modelsToHide = SETTINGS.hideUnpopularModels ? SETTINGS.modelsToHide : [];
+        const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
         const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
         const modelsTags = this.#models.tags;
         const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));

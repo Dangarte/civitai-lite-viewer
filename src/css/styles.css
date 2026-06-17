@@ -3068,7 +3068,7 @@ a.link-button.link-open-civitai::after {
     translate: -50% 2px;
     max-height: 20em;
     padding: 8px;
-    padding-inline-end: 4px;
+    padding-inline-end: 2px; /* 8px - 6px */
     min-width: 100%;
     overflow-y: scroll;
     z-index: 9999;
@@ -3078,11 +3078,6 @@ a.link-button.link-open-civitai::after {
     height: 0;
     border-radius: var(--radius);
     cursor: default;
-}
-
-.list-options::-webkit-scrollbar {
-    width: 4px;
-    border-radius: 2px;
 }
 
 .list-options.list-visible {
