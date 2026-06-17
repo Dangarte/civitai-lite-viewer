@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 40,
-    updated: '2026-06-04T12:00:00.000Z',
+    version: 41,
+    updated: '2026-06-17T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -129,6 +129,8 @@ const SETTINGS = {
     blackListTags: [],      // Doesn't work on images (pictures don't have tags)
     blackListUserIds: [],   //
     blackListTagIds: [],    // With the extension from the "apiProxyExtension" folder, you can filter images by tag ID
+    hideUnpopularModels: true, // Hide unpopular models from selector list
+    modelsToHide: [ 'SD 1.4', 'SD 1.5', 'SD 2.0', 'SD 2.0 768', 'SD 2.1', 'SD 2.1 768', 'SD 2.1 Unclip', 'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Large Turbo', 'SD 3.5 Medium', 'SDXL 0.9', 'SDXL 1.0 LCM', 'SDXL Distilled', 'SDXL Hyper', 'SDXL Lightning', 'SDXL Turbo', 'Hunyuan 1', '', 'Pony V7', 'CogVideoX', 'SVD', 'SVD XT', 'AuraFlow', 'Chroma', 'Kolors', 'Lumina', 'LTXV', 'LTXV2', 'Mochi', 'ODOR', 'PixArt E', 'PixArt a', 'Playground v2', 'Wan Video', 'Stable Cascade' ],
     nsfw: true,
     nsfwLevel: 'Mature',
     browsingLevel: 4,
@@ -412,7 +414,11 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
             const result = data.response?.result?.data ?? data.response;
 
-            if (!result.json) throw new Error('Invalid response.');
+            // TODO: normal error handling
+            if (!result.json) {
+                console.log('[DEBUG] Invalid response. ', result);
+                throw new Error('Invalid response.');
+            }
 
             return result.json;
         } catch (error) {
@@ -1011,7 +1017,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             })
         ]);
 
-        return {
+        const resultImage = {
             id: image.id,
             postId: image.postId,
             url: !image.url || image.url?.startsWith('https:') ? image.url : this.#convertUrlIdToUrl({ urlId: image.url, type: image.type, itemId: image.id, width: 450 }),
@@ -1029,6 +1035,22 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             tagIds: image.tags?.map(t => t.id).filter(Boolean) ?? [],
             resources: image.resources ?? []
         };
+
+        if (generation?.resources && generation.resources.length > 0) {
+            if (!resultImage.meta) resultImage.meta = {};
+            if (!resultImage.meta.civitaiResources) resultImage.meta.civitaiResources = [];
+            generation.resources.forEach(resource => {
+                resultImage.meta.civitaiResources.push({
+                    modelId: resource.modelId,
+                    versionName: resource.versionName,
+                    modelName: resource.modelName,
+                    modelType: resource.modelType,
+                    modelVersionId: resource.modelVersionId,
+                });
+            });
+        }
+
+        return resultImage;
     }
 
     #parseComment(comment) {
@@ -1269,6 +1291,8 @@ class Controller {
             'HappyHorse',
             'HiDream-O1',
             'Lens',
+            'Krea 2',
+            'MAI',
             'Other'
         ],
         labels: {
@@ -1358,6 +1382,7 @@ class Controller {
             'PixArt a': ['image', 'weights', 'multilingual'],
             'Playground v2': ['image', 'weights', 'sdxl', 'playground-ai', 'multilingual'],
             'Qwen': ['image', 'weights', 'alibaba', 'multilingual'],
+            'Qwen 2': ['image', 'closed', 'alibaba', 'multilingual'],
             'SD 1.4': ['image', 'weights', 'sd15', 'stability-ai', 'legacy'],
             'SD 1.5': ['image', 'weights', 'sd15', 'stability-ai'],
             'SD 1.5 Hyper': ['image', 'weights', 'sd15', 'stability-ai'],
@@ -1393,8 +1418,10 @@ class Controller {
             'Wan Video 2.2 I2V-A14B': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
             'Wan Video 2.2 T2V-A14B': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
             'Wan Video 2.2 TI2V-5B': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
-            'Wan Video 2.5 I2V': ['video', 'weights', 'alibaba', 'i2v', 'multilingual', 'uncensored'],
-            'Wan Video 2.5 T2V': ['video', 'weights', 'alibaba', 't2v', 'multilingual', 'uncensored'],
+            'Wan Video 2.5 I2V': ['video', 'closed', 'alibaba', 'i2v', 'multilingual', 'censored'],
+            'Wan Video 2.5 T2V': ['video', 'closed', 'alibaba', 't2v', 'multilingual', 'censored'],
+            'Wan Image 2.7': ['image', 'closed', 'alibaba', 'multilingual', 'censored'],
+            'Wan Video 2.7': ['video', 'closed', 'alibaba', 't2v', 'multilingual', 'censored'],
             'ZImageTurbo': ['image', 'weights', 'multilingual'],
             'ZImageBase': ['image', 'weights', 'multilingual'],
             'Anima': ['image', 'weights', 'cosmos', 'circlestone-labs', 'uncensored'],
@@ -1409,6 +1436,7 @@ class Controller {
             'HiDream-O1': ['image', 'weights', 'hidream.ai', 'multilingual'],
             'Lens': ['image', 'weights', 'microsoft', 'multilingual'],
             'Krea 2': ['image', 'closed', 'krea.ai', 'multilingual'],
+            'MAI': ['image', 'closed', 'microsoft', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -2145,6 +2173,19 @@ class Controller {
                 value: SETTINGS.blackListTags.join(', '),
                 placeholder: 'tags separated by commas'
             }).element
+        });
+
+        // Unpopular models
+        addSetting({
+            description: tempHome.unpopularModelsDescription ?? 'Hide old and unpopular models from the list',
+            toggleElement: this.#genBoolean({
+                onchange: ({ newValue }) => {
+                    SETTINGS.hideUnpopularModels = newValue;
+                    savePageSettings();
+                },
+                value: SETTINGS.hideUnpopularModels,
+                label: tempHome.hideUnpopularModels ?? 'Hide unpopular models'
+            }).element,
         });
 
         // Autoplay
@@ -3005,6 +3046,7 @@ class Controller {
         };
         const genEndButtons = () => {
             if (!EXTENSION_INSTALLED || SETTINGS.sort !== 'Most Downloaded') return;
+            if (infinityScroll.layout.getItems().length < 2) return;
 
             const container = createElement('div', { class: 'no-more-buttons' });
             const buttonSort = insertElement('button', container, undefined, 'Sort by version downloads');
@@ -3012,6 +3054,7 @@ class Controller {
             buttonSort.addEventListener('click', sortByDownloads, { once: true });
             return container;
         };
+        if (EXTENSION_INSTALLED && SETTINGS.sort === 'Most Downloaded') listWrap.sortByDownloads = sortByDownloads; // For manual call from console
 
         const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
@@ -4241,6 +4284,10 @@ class Controller {
         const { layoutConfig, loadItems, prepareItems, onPointerDown, genEndButtons, labels = {} } = options;
         let promise = null, cursor, firstDraw = false, hiddenItems = 0;
 
+        const REQUEST_MIN_DELAY = 2000;
+        const REQUEST_BEFORE_DELAY = 2;
+        let lastRequestTimestumps = []; // 2 timestumps (x REQUEST_BEFORE_DELAY)
+
         const element = createElement('div', { class: 'cards-list' });
 
         if (onPointerDown) {
@@ -4257,7 +4304,24 @@ class Controller {
 
         const loadMore = (attempts = 0) => {
             if (!cursor) return;
+
+            const now = Date.now();
+            lastRequestTimestumps = lastRequestTimestumps.filter(time => now - time < REQUEST_MIN_DELAY);
+            if (lastRequestTimestumps.length >= REQUEST_BEFORE_DELAY) {
+                const oldestBurstTime = lastRequestTimestumps[0];
+                const timePassed = now - oldestBurstTime;
+                const waitTime = REQUEST_MIN_DELAY - timePassed;
+
+                if (waitTime > 0) {
+                    return new Promise(resolve => setTimeout(() => resolve(loadMore(attempts)), waitTime));
+                }
+            }
+            lastRequestTimestumps.push(Date.now());
+
             const result = loadItems({ cursor });
+
+            element.classList.remove('error');
+            element.querySelectorAll('.error-block').forEach(block => block.remove());
 
             if (result instanceof Promise) {
                 const pageNavigation = this.#pageNavigation;
@@ -4275,7 +4339,6 @@ class Controller {
                     console.error('Failed to fetch items:', error?.message ?? error);
                     element.classList.add('error');
                     const errorBlock = this.#genErrorPage(error?.message ?? 'Error');
-                    element.querySelectorAll('.error-block').forEach(block => block.remove());
                     element.appendChild(errorBlock);
 
                     // Retry attempts
@@ -4283,13 +4346,13 @@ class Controller {
                     attempts++;
                     const attemptText = window.languagePack?.text?.retryAttempt || 'Attempt';
                     // fail
-                    if (attempts >= 5) {
-                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} 5 / 5`);
+                    if (attempts >= 7) {
+                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} 5 / 7`);
                         return;
                     }
                     // manual
                     if (attempts > 3) {
-                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 5`);
+                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 7`);
                         const button = insertElement('button', errorBlock, { inert: '' }, window.languagePack?.text?.retry || 'Retry');
                         button.prepend(getIcon('reload'));
                         button.addEventListener('click', () => {
@@ -4300,8 +4363,8 @@ class Controller {
                         return;
                     }
                     // auto
-                    const delay = 1000 * attempts * attempts;
-                    const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 5 (`);
+                    const delay = 4000 * attempts * attempts; // 429 - 30 sec; 4s -> 16s -> 36s
+                    const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 7 (`);
                     insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay + 500) });
                     timerSpan.appendChild(document.createTextNode(')'));
                     insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
@@ -5752,7 +5815,7 @@ class Controller {
         const container = createElement('div', { class: 'generation-info' });
 
         // Remix of
-        if (meta?.extra?.remixOfId) {
+        if (meta.extra?.remixOfId) {
             const remixContainer = insertElement('a', container, { class: 'meta-remixOfId badge' });
 
             const inertRemixImage = media => {
@@ -5825,6 +5888,45 @@ class Controller {
                 button.addEventListener('click', () => {
                     button.remove();
                     loadRemixImage();
+                }, { once: true });
+            }
+        }
+
+        // Used images
+        if (meta.images && Array.isArray(meta.images)) {
+            const wrap = insertElement('div', container, { class: 'meta-images' });
+
+            const inertUsedImages = () => {
+                meta.images.forEach(item => {
+                    const imageWrap = insertElement('div', wrap, { class: 'badge meta-used-image' });
+                    if (item.hasErrors) {
+                        const icon = insertElement('div', imageWrap, { class: 'meta-media' });
+                        icon.appendChild(getIcon('image'));
+                        return;
+                    }
+                    const src = item.url;
+                    const aspectRatio = item.width && item.height ? this.#round(item.width / item.height) : 1;
+                    const style = `aspect-ratio: ${aspectRatio};`;
+                    const img = insertElement('img', imageWrap, { class: 'meta-media', decoding: 'async', priority: 'low', src, style });
+                    whenImageSettles(img).then(isOk => {
+                        if (isOk) return;
+                        item.hasErrors = true;
+    
+                        const icon = createElement('div', { class: 'meta-media', style });
+                        icon.appendChild(getIcon('image'));
+                        img.replaceWith(icon);
+                    });
+                });
+            };
+
+            if (!SETTINGS.disableRemixAutoload) inertUsedImages();
+            else {
+                const button = insertElement('button', wrap);
+                button.appendChild(getIcon('file_search'));
+                insertElement('span', button, undefined, 'Load used images');
+                button.addEventListener('click', () => {
+                    button.remove();
+                    inertUsedImages();
                 }, { once: true });
             }
         }
@@ -5964,7 +6066,8 @@ class Controller {
         if (rawResources.length) {
             const resources = rawResources.sort((a, b) => a.type === 'model' ? -1 : 1);
 
-            const metaBaseModel = String(media.baseModel || meta.ecosystem || '')?.toLowerCase() || '';
+            const metaBaseModel = String(media.baseModel || '')?.toLowerCase() || ''; // ecosystem "SDXL" !== "SDXL 1.0" ... disable for now
+            // const metaBaseModel = String(media.baseModel || meta.ecosystem || '')?.toLowerCase() || '';
             const resourcesContainer = insertElement('div', container, { class: 'meta-resources meta-resources-loading' });
             const resourcesTitle = insertElement('h3', resourcesContainer);
             resourcesTitle.appendChild(getIcon('database'));
@@ -6011,6 +6114,10 @@ class Controller {
                     this.#cache.modelVersions.set(modelKey, null);
                     return info;
                 }
+
+                // Place in cache BEFORE checking for presence in the list (so that it is always placed in cache even for different keys)
+                if (modelKey) this.#cache.modelVersions.set(modelKey, info);
+
                 if (info.id && loadedResources.has(info.id)) {
                     el.remove();
                     return info;
@@ -6027,7 +6134,6 @@ class Controller {
                 });
                 newEl.setAttribute('data-link-preview', '');
                 el.replaceWith(newEl);
-                if (modelKey) this.#cache.modelVersions.set(modelKey, info);
                 return info;
             };
             const processResources = items => {
@@ -6208,6 +6314,8 @@ class Controller {
     }
 
     static #parseMeta(meta) {
+        if (!meta) return { resources: [] };
+
         // Used resources
         const resourceHashes = new Set();
         const resources = [];
@@ -6231,13 +6339,13 @@ class Controller {
             resources.push({ key, ...resource });
         };
 
-        meta?.civitaiResources?.forEach(addResourceToList);
-        meta?.modelVersionIds?.map(id => ({ modelVersionId: id })).forEach(addResourceToList);
-        meta?.resources?.forEach(addResourceToList);
-        meta?.additionalResources?.forEach(addResourceToList);
-        if (meta?.hashes) Object.entries(meta.hashes).forEach(([name, hash]) => addResourceToList({ hash, name }));
+        meta.civitaiResources?.forEach(addResourceToList);
+        meta.modelVersionIds?.map(id => ({ modelVersionId: id })).forEach(addResourceToList);
+        meta.resources?.forEach(addResourceToList);
+        meta.additionalResources?.forEach(addResourceToList);
+        if (meta.hashes) Object.entries(meta.hashes).forEach(([name, hash]) => addResourceToList({ hash, name }));
         // if (meta['TI hashes']) Object.keys(meta['TI hashes'])?.forEach(key => addResourceToList({ hash: meta['TI hashes'][key], name: key })); // There always seem to be no models for these hashes on CivitAI // The image where this key was seen: 82695882
-        if (meta?.['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
+        if (meta['Model hash']) addResourceToList({ hash: meta['Model hash'], name: meta['Model'] });
 
         return { resources };
     }
@@ -7148,7 +7256,11 @@ class Controller {
     // TODO: translation for "image_types"
     static #genImagesListFilters(onAnyChange, options = {}) {
         const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
-        const modelsOptions = [ "All", ...this.#models.options ];
+        const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
+        const modelsToHide = SETTINGS.hideUnpopularModels ? SETTINGS.modelsToHide : [];
+        const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
+        const modelsTags = this.#models.tags;
+        const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));
         const imagesTypeOptions = [ "All", "image", "video" ];
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
 
@@ -7182,7 +7294,8 @@ class Controller {
                 label: window.languagePack?.text?.model ?? 'Model',
                 options: modelsOptions,
                 labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
-                tags: this.#models.tags,
+                badges: modelsBadges,
+                tags: modelsTags,
                 setValue: newValue => SETTINGS.baseModels_images = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.baseModels_images.length ? (SETTINGS.baseModels_images.length > 1 ? SETTINGS.baseModels_images : SETTINGS.baseModels_images[0]) : 'All'
             } : null,
@@ -7224,8 +7337,12 @@ class Controller {
 
     static #genModelsListFilters(onAnyChange, options = {}) {
         const { period = true, types = true, checkpointType = true, baseModels = true } = options;
-        const modelsOptions = [ "All", ...this.#models.options ];
-        const typeOptions = [ "All", ...this.#types.options];
+        const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
+        const modelsToHide = SETTINGS.hideUnpopularModels ? SETTINGS.modelsToHide : [];
+        const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
+        const modelsTags = this.#models.tags;
+        const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));
+        const typeOptions = [ 'All', ...this.#types.options];
         const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
 
@@ -7243,7 +7360,8 @@ class Controller {
                 label: window.languagePack?.text?.model ?? 'Model',
                 options: modelsOptions,
                 labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
-                tags: this.#models.tags,
+                badges: modelsBadges,
+                tags: modelsTags,
                 setValue: newValue => SETTINGS.baseModels = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.baseModels.length ? (SETTINGS.baseModels.length > 1 ? SETTINGS.baseModels : SETTINGS.baseModels[0]) : 'All'
             } : null,
@@ -7325,6 +7443,7 @@ class Controller {
                     options: rule.options,
                     labels: rule.labels,
                     tags: rule.tags,
+                    badges: rule.badges,
                     value,
                     onchange: ({ newValue }) => {
                         if (rule.setValue) rule.setValue(newValue);
@@ -7483,7 +7602,7 @@ class Controller {
         return { element, setValue };
     }
 
-    static #genList({ onchange, value, options, labels = {}, tags = {}, label = '' }) {
+    static #genList({ onchange, value, options, labels = {}, tags = {}, badges = {}, label = '' }) {
         const element = createElement('div', { class: 'config config-list' });
         let currentValue = value;
         const list = {};
@@ -7507,6 +7626,14 @@ class Controller {
         options.forEach((key, index) => {
             const element = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key });
             const span = insertElement('span', element, undefined, list[key]);
+            const optionBadges = badges[key];
+            if (optionBadges && optionBadges.length > 0) {
+                const wrap = insertElement('div', element, { class: 'badges' });
+                optionBadges.forEach(iconId => {
+                    const badge = insertElement('div', wrap, { class: 'badge' });
+                    badge.appendChild(getIcon(iconId));
+                });
+            }
             const text = list[key] || '';
             const optionTags = [ text, key, ...(tags[key] || []) ];
             const tagLabels = {};

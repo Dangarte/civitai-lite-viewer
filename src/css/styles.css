@@ -1343,6 +1343,7 @@ footer a {
 }
 
 .model-description a.only-image {
+    display: inline-block;
     line-height: 0;
     font-size: 0;
     position: relative;
@@ -2332,6 +2333,7 @@ a[href].meta-resource:hover .meta-resource-name {
     100% { left: 120%; }
 }
 
+.meta-images button,
 .meta-remixOfId button {
     margin-inline: auto;
 }
@@ -2352,6 +2354,25 @@ a[href].meta-resource:hover .meta-resource-name {
 
 .meta-remixOfId-info .user-info {
     display: inline-flex;
+}
+
+.meta-images {
+    display: flex;
+    gap: .5em;
+}
+
+.meta-images .meta-media {
+    max-width: 10em;
+    max-height: 10em;
+    min-width: 4em;
+    min-height: 4em;
+    object-fit: contain;
+    height: auto;
+    pointer-events: all;
+}
+
+.meta-images .meta-media .icon {
+    font-size: 4em;
 }
 
 .meta-other {
@@ -3071,12 +3092,30 @@ a.link-button.link-open-civitai::after {
 
 .list-option {
     margin-block: 1px;
-    line-height: 1em;
+    line-height: 1.25em;
     padding-block: .5em;
     padding-inline: 1em;
     cursor: pointer;
     white-space: nowrap;
     border-radius: var(--radius);
+}
+
+.list-option .badges {
+    display: inline-block;
+    margin-inline-start: 1ch;
+    color: var(--c-text-dark);
+    --icon-color-secondary: currentColor;
+}
+
+.list-option .badges .badge {
+    padding: 0;
+    font-size: 1.25em;
+    vertical-align: middle;
+    background: none;
+}
+
+.list-option .badges .icon-lock {
+    color: var(--c-warning);
 }
 
 .list-option mark {
