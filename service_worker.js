@@ -64,6 +64,8 @@ SW_CONFIG.local_urls = {
 SW_CONFIG.immutableCaches = SW_CONFIG.immutableCaches.map(k => SW_CONFIG.cache[k]);
 SW_CONFIG.validTargets = new Set([...Object.keys(SW_CONFIG.cacheByTarget), ...Object.keys(SW_CONFIG.ttl)]);
 
+const pendingPosters = new Map();
+
 self.addEventListener('activate', () => {
     Object.entries(SW_CONFIG.cache).forEach(([, cacheName]) => CacheManager.cleanExpiredCache({ cacheName }));
     // @ts-ignore
@@ -133,6 +135,34 @@ function onMessage(e) {
     }
     const { action, data } = e.data;
 
+    if (action.startsWith('video-poster')) {
+        const { id, bitmap } = data;
+        const pending = pendingPosters.get(id);
+        if (!pending) {
+            bitmap.close();
+            return;
+        }
+
+        clearTimeout(pending.timeout);
+        pendingPosters.delete(data.id);
+
+        if (action === 'video-poster-success') {
+            (async () => {
+                try {
+                    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(bitmap, 0, 0);
+                    bitmap.close();
+                    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.84 });
+                    pending.resolve(blob);
+                } catch (err) {
+                    pending.reject(err);
+                }
+            })();
+        } else if (action === 'video-poster-error') pending.reject(new Error(data.error));
+        return;
+    }
+
     let actionCallback = null;
     if (action === 'clear_cache') actionCallback = () => actionClearCache(data);
     else actionCallback = () => Promise.reject(`Undefined action: '${action}'`);
@@ -180,6 +210,62 @@ function actionClearCache(data) {
 }
 
 async function cacheFetch(request, cacheControl = { public: true }) {
+    if (request.url.startsWith(SW_CONFIG.local_urls.base)) return localFetch(request);
+
+    const params = Object.fromEntries(new URL(request.url).searchParams.entries());
+
+    if (params.target && !SW_CONFIG.validTargets.has(params.target)) delete params.target;
+
+    const { cacheName, specialFetch } = resolveFetchStrategy( request, params, cacheControl);
+
+    let originalResponse;
+
+    try {
+        const actualRequest = clearRequestFromLocalParams(request);
+        const response = await specialFetch(actualRequest);
+        originalResponse = response;
+        if (!response.ok) return response;
+
+        const customHeaders = [];
+        let blob = await resolveResponseBlob(request, actualRequest, response);
+
+        applyContentCachePolicy(blob, request, params, cacheControl);
+
+        if (blob.type.startsWith('image/')) {
+            const { blob: resizedBlob, isAnimated } = await processImageBlob(blob, request, params);
+            blob = resizedBlob;
+            if (isAnimated) {
+                await cacheAnimatedOriginal(request, blob, cacheControl, cacheName, params);
+                customHeaders.push({ k: 'X-Animated', v: 'true' });
+            }
+        }
+
+        if (!cacheControl.noCache) cacheControl.immutable =SW_CONFIG.immutableCaches.includes(cacheName);
+
+        const finalResponse = responseFromBlob(blob, cacheControl);
+
+        if (customHeaders.length) customHeaders.forEach(({ k, v }) => response.headers.set(k, v));
+
+        if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(request, finalResponse.clone(), cacheName);
+
+        return finalResponse;
+    }
+
+    catch (error) {
+        console.error(error);
+        if (request.url.includes('transcode=true') && request.url.includes('.jpeg')) {
+            console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
+            const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
+            const response = await cacheFetch(newREquest, cacheControl);
+            CacheManager.put(request, response.clone(), cacheName);
+            return response;
+        }
+        return originalResponse || new Response('', { status: 500, statusText: 'Network Error' });
+    }
+}
+
+// TODO: remove
+async function cacheFetch_original(request, cacheControl = { public: true }) {
     if (request.url.startsWith(SW_CONFIG.local_urls.base)) return localFetch(request);
 
     let cacheName = SW_CONFIG.cache.media;
@@ -230,14 +316,27 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         // Don't try to cache the response with an error
         if (!fetchResponse.ok) return fetchResponse;
 
+        let blob;
+
         // Stop downloading if the server decides to return the video to the image
         if (request.destination === 'image' && fetchResponse.headers?.get('content-type')?.startsWith('video/')) {
             fetchResponse.body?.cancel();
-            console.warn('A video response was received in the image element, download canceled.', request.url);
-            return new Response(null, { status: 415, statusText: 'Unsupported Media Type' });
+            const url = (modified ? requestWithoutLocalParams : request).url;
+            console.warn('A video response was received in the image element, download canceled. Attempting to download a poster via a video element.', url);
+
+            blob = await requestPoster(url).catch(error => {
+                console.error(error);
+                return null;
+            });
+
+            if (!blob) {
+                console.warn('Failed to load poster via video element.', url);
+                return new Response(null, { status: 415, statusText: 'Unsupported Media Type' });
+            }
+        } else {
+            blob = await fetchResponse.blob();
         }
 
-        let blob = await fetchResponse.blob();
         const customHeaders = [];
 
         if (!cacheControl.maxAge) {
@@ -304,7 +403,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         return response;
     } catch (_) {
         console.error(_);
-        if (request.url.indexOf('transcode=true') !== -1 && request.url.indexOf('.jpeg') !== -1) {
+        if (request.url.includes('transcode=true') && request.url.includes('.jpeg')) {
             console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
             const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
             const response = await cacheFetch(newREquest, cacheControl);
@@ -313,6 +412,129 @@ async function cacheFetch(request, cacheControl = { public: true }) {
         }
         return originalResponse || new Response('', { status: 500, statusText: 'Network Error' });
     }
+}
+
+async function processImageBlob(blob, request, params) {
+    if (!blob.type.startsWith('image/')) return blob;
+
+    const fileLimits = params.target?.endsWith('-card') ? SW_CONFIG.fileLimits.card.image : null;
+    const disableAnimation = (/[,/]anim=false[,/]/).test(request.url);
+    const requestedWidth = Number(request.url.match(/[,/]width=(\d+)[,/]/)?.[1]) || null;
+
+    let effectiveMaxFileSize = null;
+    if (fileLimits) {
+        if (requestedWidth && fileLimits.maxFileSizes?.length) {
+            const match = fileLimits.maxFileSizes.sort((a, b) => a.width - b.width).find(item => requestedWidth <= item.width);
+            effectiveMaxFileSize = match?.maxFileSize ?? fileLimits.maxFileSize;
+        } else {
+            effectiveMaxFileSize = fileLimits.maxFileSize;
+        }
+    }
+
+    const isHuge = effectiveMaxFileSize && blob.size > effectiveMaxFileSize;
+    const isWrongFormat = fileLimits && !fileLimits.mimeTypes.includes(blob.type);
+    const isAnimated = (disableAnimation || params.format) && (await isImageAnimated(blob));
+
+    if (isHuge && requestedWidth && !params.width && !params.height) params.width = String(requestedWidth);
+
+    if (!params.format && (
+        isWrongFormat
+        || isHuge
+        || disableAnimation && isAnimated
+    )) params.format = 'webp';
+
+    if (params.width || params.height || params.format) {
+        const { width, height , format, quality, fit, position, smoothing } = params;
+        const options = { width, height, quality, format, fit, position, smoothing };
+
+        blob = (await ImageResizeQueue.run(blob, options)) || blob;
+    }
+
+    return { blob, isAnimated };
+}
+
+async function cacheAnimatedOriginal(request, blob, cacheControl, cacheName, params) {
+    if (params.cache === 'no-cache') return false;
+    if (cacheControl.noCache) return false;
+
+    const response = responseFromBlob(blob, cacheControl);
+
+    const url = new URL(request.url);
+    url.searchParams.append('original', 'true');
+
+    const originalRequest = cloneRequestWithModifiedUrl(request, url.toString());
+
+    await CacheManager.put(originalRequest, response, cacheName);
+
+    return true;
+}
+
+function resolveFetchStrategy(request, params, cacheControl) {
+    let cacheName = SW_CONFIG.cache.media;
+    let specialFetch = fetch;
+
+    const url = new URL(request.url);
+
+    if (request.url.startsWith(SW_CONFIG.base_url)) {
+        cacheName = SW_CONFIG.cache.static;
+
+        if (!cacheControl.maxAge) {
+            const isCore = url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html';
+            cacheControl.maxAge = isCore ? SW_CONFIG.ttl['lite-viewer-core'] : SW_CONFIG.ttl['lite-viewer'];
+        }
+    } else if (request.url.startsWith(SW_CONFIG.api_url)) {
+        cacheName = SW_CONFIG.cache.api;
+
+        if (!cacheControl.maxAge) {
+            if (url.pathname.includes('/model-versions/')) {
+                cacheControl.maxAge = SW_CONFIG.ttl['model-version'];
+            } else if (url.pathname.endsWith('/images') && params.imageId) {
+                cacheControl.maxAge = SW_CONFIG.ttl['image-meta'];
+                if (!params.nsfw) specialFetch = fetchImageWithUnknownNSFW;
+            }
+        }
+    } else if (request.url.startsWith(SW_CONFIG.images_url)) {
+        cacheName = SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'];
+    }
+
+    return { cacheName, specialFetch };
+}
+
+function applyContentCachePolicy(blob, request, params, cacheControl) {
+    if (cacheControl.maxAge) return;
+
+    if (blob.type === 'application/json') {
+        if (request.method === 'GET') cacheControl.maxAge = 'max-age=60'; // Agressive caching for 1 minute (only GET requests)
+        else cacheControl.noCache = true;
+        return;
+    }
+
+    if (blob.size < 15_000_000) cacheControl.maxAge = SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown;
+    else cacheControl.maxAge = SW_CONFIG.ttl['large-file'];
+}
+
+async function resolveResponseBlob(request, actualRequest, response) {
+    const contentType = response.headers.get('content-type');
+
+    const isUnexpectedVideo = request.destination === 'image' && contentType?.startsWith('video/');
+    if (!isUnexpectedVideo) return response.blob();
+
+    // Stop downloading if the server decides to return the video to the image
+    response.body?.cancel();
+    console.warn('A video response was received in the image element, download canceled. Attempting to download a poster via a video element.', actualRequest.url);
+
+    const blob = await requestPoster(actualRequest.url)
+    .catch(error => {
+        console.error(error);
+        return null;
+    });
+
+    if (!blob) {
+        console.warn('Failed to load poster via video element.', actualRequest.url);
+        throw new Error('Poster extraction failed');
+    }
+
+    return blob;
 }
 
 // bs:
@@ -343,6 +565,27 @@ async function fetchImageWithUnknownNSFW(request) {
     if (!hit) throw new Error('Image not found for any NSFW level');
 
     return hit.response;
+}
+
+async function requestPoster(url) {
+    const id = crypto.randomUUID();
+    // @ts-ignore
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (!clients.length) throw new Error('No clients');
+
+    clients[0].postMessage({
+        action: 'generate-video-poster',
+        data: { id, url }
+    });
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            pendingPosters.delete(id);
+            reject(new Error('Poster timeout'));
+        }, 30000);
+
+        pendingPosters.set(id, { resolve, reject, timeout });
+    });
 }
 
 
@@ -531,7 +774,7 @@ function getTargetFromUrl(url) {
 function responseFromBlob(blob, cacheControl) {
     const headers = { 'Content-Type': blob.type, 'Content-Length': blob.size, 'Date': new Date().toUTCString() };
     if (cacheControl) {
-        if (cacheControl.noCache) headers['Cache-Control'] = cacheControl;
+        if (cacheControl.noCache) headers['Cache-Control'] = 'no-cache';
         else {
             const v = [];
             if (cacheControl.public) v.push('public');
@@ -767,7 +1010,7 @@ class CacheManager {
                     if (options?.silent || !options?.event) return;
                     if (await this.#compareResponses(responseOld, responseNew)) return;
 
-                    this.#sendMessage(options.event, { type: 'CACHE_UPDATED', url: request.url });
+                    this.#sendMessage(options.event, { action: 'CACHE_UPDATED', data: { url: request.url } });
                 })();
                 return response;
             }
@@ -776,7 +1019,7 @@ class CacheManager {
         if (isHotCache) this.#putInHotCache(request.url, response);
 
         // if (!options?.silent && options?.event) {
-        //     if (this.#xAnimated.includes(cacheName) && response.headers.has('X-Animated')) this.#sendMessage(options.event, { type: 'HAS_ANIMATED_VARIANT', url: request.url });
+        //     if (this.#xAnimated.includes(cacheName) && response.headers.has('X-Animated')) this.#sendMessage(options.event, { action: 'HAS_ANIMATED_VARIANT', { data: url: request.url } });
         // }
 
         return response;

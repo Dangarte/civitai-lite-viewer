@@ -1122,11 +1122,11 @@ footer a {
 }
 
 .tooltip[data-animation="in"] {
-    animation: tooltipFadeIn .15s 1 cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    animation: tooltipFadeIn var(--duration, .15s) 1 cubic-bezier(0.172, 0.72, 0.27, 1.27);
 }
 
 .tooltip[data-animation="out"] {
-    animation: tooltipFadeOut .15s 1 ease-in-out forwards;
+    animation: tooltipFadeOut var(--duration, .15s) 1 cubic-bezier(0.6, -0.27, 0.72, 0.045) forwards;
 }
 
 @keyframes tooltipFadeIn {

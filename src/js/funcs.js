@@ -773,6 +773,73 @@ class Blurhash {
 }
 
 
+// ===
+
+class VideoPosterQueue {
+    static #queue = [];
+    static #activeCount = 0;
+    static #MAX_CONCURRENT = 2;
+
+    static run(task) {
+        return new Promise((resolve, reject) => {
+            this.#queue.push({ ...task, resolve, reject });
+            this.#next();
+        });
+    }
+
+    static async #next() {
+        if (this.#activeCount >= this.#MAX_CONCURRENT || this.#queue.length === 0) return;
+
+        const task = this.#queue.shift();
+        this.#activeCount++;
+
+        try {
+            const bitmap = await generateVideoPoster(task.url);
+            task.resolve(bitmap);
+        } catch (error) {
+            task.reject(error);
+        } finally {
+            this.#activeCount--;
+            this.#next();
+        }
+    }
+}
+
+async function generateVideoPoster(url) {
+    const video = createElement('video', { preload: 'auto', muted: true, playsInline: true, crossOrigin: 'anonymous' });
+
+    try {
+        await new Promise((resolve, reject) => {
+            const onMetadata = () => { video.currentTime = 0.001; };
+            const onSeeked = () => { cleanup(); resolve(); };
+            const onError = () => { cleanup(); reject(new Error('Video load error')); };
+            const cleanup = () => {
+                video.removeEventListener('loadedmetadata', onMetadata);
+                video.removeEventListener('seeked', onSeeked);
+                video.removeEventListener('error', onError);
+            };
+
+            video.addEventListener('loadedmetadata', onMetadata);
+            video.addEventListener('seeked', onSeeked);
+            video.addEventListener('error', onError);
+
+            video.src = url;
+            video.load();
+        });
+
+        if (video.videoWidth === 0 || video.videoHeight === 0) throw new Error('Failed to fetch video dimensions');
+
+        return await createImageBitmap(video);
+    } finally {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+    }
+}
+
+// ===
+
+
 // TODO: search
 // TODO: fix scroll jumps after image load during scrolling (add transform translateY to content during scroll and remove when idle)
 class VirtualList {

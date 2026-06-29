@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 41,
-    updated: '2026-06-17T12:00:00.000Z',
+    version: 42,
+    updated: '2026-06-29T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -414,10 +414,9 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
             const result = data.response?.result?.data ?? data.response;
 
-            // TODO: normal error handling
             if (!result.json) {
                 console.log('[DEBUG] Invalid response. ', result);
-                throw new Error('Invalid response.');
+                throw new Error('Invalid response.', { cause: result });
             }
 
             return result.json;
@@ -1277,7 +1276,9 @@ class Controller {
             'ACE Audio',
             'Lens',
             'Ideogram 4.0', // For some reason, all ideogram models have the "Other" category...
-            
+            'Boogu',
+            'Krea 2',
+
             // API-only models
             'Wan Video 2.5 I2V',
             'Wan Video 2.5 T2V',
@@ -1294,7 +1295,6 @@ class Controller {
             'Kling',
             'HappyHorse',
             'Imagen4',
-            'Krea 2',
             'MAI',
 
             'Other'
@@ -1356,6 +1356,7 @@ class Controller {
             'ZImageTurbo': 'ZIT',
             'ZImageBase': 'ZI',
         },
+        // TODO: add tag 'edit'
         tags: {
             'AuraFlow': ['image', 'weights', 'fal-ai', 'multilingual'],
             'Chroma': ['image', 'weights', 'multilingual'],
@@ -1441,9 +1442,10 @@ class Controller {
             'ACE Audio': ['audio', 'weights', 'ace studio', 'stepfun', 'multilingual'],
             'HappyHorse': ['video', 'closed', 'alibaba'], // multilingual ?
             'Lens': ['image', 'weights', 'microsoft', 'multilingual'],
-            'Krea 2': ['image', 'closed', 'krea.ai', 'multilingual'],
+            'Krea 2': ['image', 'weights', 'krea.ai', 'multilingual'],
             'MAI': ['image', 'closed', 'microsoft', 'multilingual'],
             'Ideogram 4.0': ['image', 'weights', 'censored', 'uncensored', 'multilingual'],
+            'Boogu': ['image', 'weights', 'boogu-team', 'censored', 'uncensored', 'multilingual'], // is it censored?
             'Other': ['misc']
         }
     };
@@ -4291,9 +4293,10 @@ class Controller {
         const { layoutConfig, loadItems, prepareItems, onPointerDown, genEndButtons, labels = {} } = options;
         let promise = null, cursor, firstDraw = false, hiddenItems = 0;
 
-        const REQUEST_MIN_DELAY = 2000;
-        const REQUEST_BEFORE_DELAY = 2;
-        let lastRequestTimestumps = []; // 2 timestumps (x REQUEST_BEFORE_DELAY)
+        const REQUEST_MIN_INTERVAL = 1000;
+        const REQUEST_MIN_DELAY = 6000;
+        const REQUEST_BEFORE_DELAY = 3;
+        let lastRequestTimestumps = []; // 3 timestumps (x REQUEST_BEFORE_DELAY)
 
         const element = createElement('div', { class: 'cards-list' });
 
@@ -4309,19 +4312,51 @@ class Controller {
 
         const layout = new MasonryLayout(element, layoutConfig);
 
+        const scheduleRetry = ({ attempt, maxAttempts = 7, retryAfter = 0, errorBlock, callback }) => {
+            const attemptText = window.languagePack?.text?.retryAttempt || 'Attempt';
+
+            if (attempt >= maxAttempts || attempt < 0) {
+                insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempt} / ${maxAttempts}`);
+                return;
+            }
+
+            if (attempt > 3) {
+                insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempt} / ${maxAttempts}`);
+
+                const button = insertElement('button', errorBlock, { inert: '' }, window.languagePack?.text?.retry || 'Retry');
+                button.prepend(getIcon('reload'));
+                button.addEventListener('click', callback, { once: true });
+
+                setTimeout(() => button.removeAttribute('inert'),500 * attempt * attempt);
+                return;
+            }
+
+            const delay = Math.max(2000 * attempt * attempt, retryAfter) + Math.random() * 2000;
+
+            const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempt} / ${maxAttempts} (`);
+            insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay + 500) });
+            timerSpan.appendChild(document.createTextNode(')'));
+
+            insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
+            setTimeout(callback, delay);
+        };
+
         const loadMore = (attempts = 0) => {
             if (!cursor) return;
 
             const now = Date.now();
             lastRequestTimestumps = lastRequestTimestumps.filter(time => now - time < REQUEST_MIN_DELAY);
+            const lastRequestTime = lastRequestTimestumps[lastRequestTimestumps.length - 1] || 0;
+            const timeSinceLastRequest = now - lastRequestTime;
+            const intervalWaitTime = REQUEST_MIN_INTERVAL - timeSinceLastRequest;
+            let windowWaitTime = 0;
             if (lastRequestTimestumps.length >= REQUEST_BEFORE_DELAY) {
                 const oldestBurstTime = lastRequestTimestumps[0];
-                const timePassed = now - oldestBurstTime;
-                const waitTime = REQUEST_MIN_DELAY - timePassed;
-
-                if (waitTime > 0) {
-                    return new Promise(resolve => setTimeout(() => resolve(loadMore(attempts)), waitTime));
-                }
+                windowWaitTime = REQUEST_MIN_DELAY - (now - oldestBurstTime);
+            }
+            const totalWaitTime = Math.max(intervalWaitTime, windowWaitTime);
+            if (totalWaitTime > 0) {
+                return new Promise(resolve => setTimeout(() => resolve(loadMore(attempts)), totalWaitTime));
             }
             lastRequestTimestumps.push(Date.now());
 
@@ -4330,60 +4365,51 @@ class Controller {
             element.classList.remove('error');
             element.querySelectorAll('.error-block').forEach(block => block.remove());
 
-            if (result instanceof Promise) {
-                const pageNavigation = this.#pageNavigation;
-                document.getElementById('page-loading-bar')?.remove();
-                insertElement('div', document.body, { id: 'page-loading-bar' });
-                return result.then(result => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    document.getElementById('page-loading-bar')?.remove();
-                    cursor = result.cursor;
-                    insertItems(result.items);
-                }).catch(error => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    document.getElementById('page-loading-bar')?.remove();
-                    console.error(error);
-                    console.error('Failed to fetch items:', error?.message ?? error);
-                    element.classList.add('error');
-                    const errorBlock = this.#genErrorPage(error?.message ?? 'Error');
-                    element.appendChild(errorBlock);
-
-                    // Retry attempts
-                    if (attempts < 0) attempts = 0;
-                    attempts++;
-                    const attemptText = window.languagePack?.text?.retryAttempt || 'Attempt';
-                    // fail
-                    if (attempts >= 7) {
-                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} 5 / 7`);
-                        return;
-                    }
-                    // manual
-                    if (attempts > 3) {
-                        insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 7`);
-                        const button = insertElement('button', errorBlock, { inert: '' }, window.languagePack?.text?.retry || 'Retry');
-                        button.prepend(getIcon('reload'));
-                        button.addEventListener('click', () => {
-                            button.setAttribute('inert', '');
-                            loadMore(attempts);
-                        }, { once: true });
-                        setTimeout(() => button.removeAttribute('inert'), 500 * attempts * attempts);
-                        return;
-                    }
-                    // auto
-                    const delay = 4000 * attempts * attempts; // 429 - 30 sec; 4s -> 16s -> 36s
-                    const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempts} / 7 (`);
-                    insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay + 500) });
-                    timerSpan.appendChild(document.createTextNode(')'));
-                    insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
-                    setTimeout(() => {
-                        if (pageNavigation !== this.#pageNavigation) return;
-                        loadMore(attempts);
-                    }, delay);
-                });
-            } else {
+            if (!(result instanceof Promise)) {
                 cursor = result.cursor;
                 insertItems(result.items);
+                return;
             }
+
+            const pageNavigation = this.#pageNavigation;
+            document.getElementById('page-loading-bar')?.remove();
+            insertElement('div', document.body, { id: 'page-loading-bar' });
+            return result.then(result => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                document.getElementById('page-loading-bar')?.remove();
+                cursor = result.cursor;
+                insertItems(result.items);
+            }).catch(error => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                document.getElementById('page-loading-bar')?.remove();
+                console.error(error);
+                console.error('Failed to fetch items:', error?.message ?? error);
+                element.classList.add('error');
+
+                const is429 = error.cause?.status === 429;
+                const error_detail = error.cause?.detail || '';
+                const errorBlock = this.#genErrorPage(is429 ? `Error 429: Rate limit.${error_detail ? ` ${error_detail}` : ''}` : error?.message ?? 'Error');
+                element.appendChild(errorBlock);
+
+                // Retry attempts
+                const retryAfter = Math.min(error.cause?.retry_after || 0, 360) * 1000;
+                const loadMoreAttempt = () => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    const loadMoreTrigger = createElement('div', { id: 'load-more' });
+                    loadMoreTrigger.appendChild(Controller.genLoadingIndecator());
+                    element.appendChild(loadMoreTrigger);
+                    loadMore(attempts).finally(() => loadMoreTrigger.remove());
+                };
+
+                scheduleRetry({
+                    attempt: attempts,
+                    retryAfter,
+                    errorBlock,
+                    callback: loadMoreAttempt
+                });
+
+                return;
+            });
         };
 
         const insertItems = items => {
@@ -4520,52 +4546,79 @@ class Controller {
             });
         };
 
+        let reloadAttempts = 0;
+
         const reload = () => {
             cursor = undefined;
             hiddenItems = 0;
+
             const result = loadItems();
-            if (result instanceof Promise) {
-                const parent = element.parentElement;
-                parent?.classList.add('cards-loading');
-                element.setAttribute('inert', '');
-                element.classList.remove('error');
-                const pageNavigation = this.#pageNavigation;
-
-                document.getElementById('page-loading-bar')?.remove();
-                insertElement('div', document.body, { id: 'page-loading-bar' });
-
-                promise = result.then(result => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    cursor = result.cursor;
-                    promise = animateLayoutChanges(() => {
-                        layout.clear();
-                        insertItems(result.items);
-                    });
-                    parent?.classList.remove('cards-loading'); // Remove loading class immediately after animation starts
-                    return promise;
-                }).catch(error => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    console.error(error);
-                    console.error('Failed to fetch items:', error?.message ?? error);
-                    layout.clear();
-                    element.textContent = '';
-                    element.style.height = '';
-                    element.classList.add('error');
-                    element.appendChild(this.#genErrorPage(error?.message ?? 'Error'));
-                }).finally(() => {
-                    if (pageNavigation !== this.#pageNavigation) return;
-                    document.getElementById('page-loading-bar')?.remove();
-                    parent?.classList.remove('cards-loading');
-                    element.removeAttribute('inert');
-                });
-            } else {
+            if (!(result instanceof Promise)) {
+                reloadAttempts = 0;
                 cursor = result.cursor;
+
                 promise = animateLayoutChanges(() => {
                     layout.clear();
                     insertItems(result.items);
                 });
                 return promise;
             }
+
+            const parent = element.parentElement;
+            parent?.classList.add('cards-loading');
+            element.setAttribute('inert', '');
+            element.classList.remove('error');
+            const pageNavigation = this.#pageNavigation;
+
+            document.getElementById('page-loading-bar')?.remove();
+            insertElement('div', document.body, { id: 'page-loading-bar' });
+
+            promise = result.then(result => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                reloadAttempts = 0;
+                cursor = result.cursor;
+
+                promise = animateLayoutChanges(() => {
+                    layout.clear();
+                    insertItems(result.items);
+                });
+                parent?.classList.remove('cards-loading'); // Remove loading class immediately after animation starts
+                return promise;
+            }).catch(error => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                console.error(error);
+                console.error('Failed to fetch items:', error?.message ?? error);
+                layout.clear();
+                element.textContent = '';
+                element.style.height = '';
+                element.classList.add('error');
+                
+                const is429 = error.cause?.status === 429;
+                const error_detail = error.cause?.detail || '';
+                const errorBlock = this.#genErrorPage(is429 ? `Error 429: Rate limit.${error_detail ? ` ${error_detail}` : ''}` : error?.message ?? 'Error');
+                element.appendChild(errorBlock);
+
+                // Retry attempts
+                const retryAfter = Math.min(error.cause?.retry_after || 0, 360) * 1000;
+                const reloadAttempt = () => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    reload();
+                };
+
+                scheduleRetry({
+                    attempt: reloadAttempts,
+                    retryAfter,
+                    errorBlock,
+                    callback: reloadAttempt
+                });
+
+                return;
+            }).finally(() => {
+                if (pageNavigation !== this.#pageNavigation) return;
+                document.getElementById('page-loading-bar')?.remove();
+                parent?.classList.remove('cards-loading');
+                element.removeAttribute('inert');
+            });
         };
 
         firstDraw = true;
@@ -7263,7 +7316,7 @@ class Controller {
     // TODO: translation for "image_types"
     static #genImagesListFilters(onAnyChange, options = {}) {
         const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
-        const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
+        const modelBadges = { image: 'image', video: 'movie', audio: 'music', edit: 'edit', closed: 'lock' };
         const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
         const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
         const modelsTags = this.#models.tags;
@@ -7344,7 +7397,7 @@ class Controller {
 
     static #genModelsListFilters(onAnyChange, options = {}) {
         const { period = true, types = true, checkpointType = true, baseModels = true } = options;
-        const modelBadges = { image: 'image', video: 'movie', audio: 'music', closed: 'lock' };
+        const modelBadges = { image: 'image', video: 'movie', audio: 'music', edit: 'edit', closed: 'lock' };
         const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
         const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
         const modelsTags = this.#models.tags;
@@ -8148,9 +8201,11 @@ function sendMessageToSW(message, sw = navigator.serviceWorker?.controller) {
 
 // Messages from SW
 function onMessage(e) {
-    const data = e.data ?? {};
+    if (!e.data || typeof e.data !== 'object' || Array.isArray(e.data)) return;
 
-    if (data.type === 'CACHE_UPDATED') {
+    const { action, data } = e.data;
+
+    if (action === 'CACHE_UPDATED') {
         const origin = `${location.origin}${location.pathname}`;
         if (
             (data.url === origin || data.url === `${origin}index.html`)
@@ -8163,12 +8218,36 @@ function onMessage(e) {
         return;
     }
 
-    // if (data.type === 'HAS_ANIMATED_VARIANT') {
+    // if (action === 'HAS_ANIMATED_VARIANT') {
     //     const img = document.querySelector(`img[src="${data.url}"]:not(.image-animated)`);
     //     if (img) img.classList.add('image-animated');
 
     //     return;
     // }
+
+    if (action === 'generate-video-poster') {
+        processGenerateVideoPosterRequest(data);
+        return;
+    }
+}
+
+async function processGenerateVideoPosterRequest(data) {
+    const { id, url } = data;
+    try {
+        const bitmap = await VideoPosterQueue.run({ url });
+        navigator.serviceWorker.controller?.postMessage({
+            action: 'video-poster-success',
+            data: { id, bitmap }
+        }, [bitmap]);
+    } catch (error) {
+        navigator.serviceWorker.controller?.postMessage({
+            action: 'video-poster-error',
+            data: {
+                id,
+                error: error.message
+            }
+        });
+    }
 }
 
 
@@ -9077,7 +9156,6 @@ let prevLilpipeEvenetTime = 0, prevLilpipeTimer = null;
 function startLilpipeEvent(e, options) {
     if (!options) options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null };
     const target = e.eventTarget;
-    const animationDuration = 150;
 
     if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
     prevLilpipeTimer = null;
@@ -9091,6 +9169,7 @@ function startLilpipeEvent(e, options) {
 
     const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
     const render = () => {
+        const animationDuration = document.getElementById('tooltip') ? 100 : 150;
         // Remove old tooltip
         document.getElementById('tooltip')?.remove();
         document.querySelectorAll('[lilpipe-showed],[lilpipe-showed-delay]')?.forEach(item => {item.removeAttribute('lilpipe-showed-delay'); item.removeAttribute('lilpipe-showed')});
@@ -9143,8 +9222,12 @@ function startLilpipeEvent(e, options) {
 
         // Animate new tooltip
         tooltip.setAttribute('data-animation', 'in');
+        tooltip.style.setProperty('--duration', `${animationDuration}ms`);
         setTimeout(() => {
-            if (document.body.contains(tooltip) && tooltip.getAttribute('data-animation') === 'in') tooltip.removeAttribute('data-animation');
+            if (document.body.contains(tooltip) && tooltip.getAttribute('data-animation') === 'in') {
+                tooltip.removeAttribute('data-animation');
+                tooltip.style.setProperty('--duration', '');
+            }
         }, animationDuration);
     };
 
@@ -9175,7 +9258,7 @@ function startLilpipeEvent(e, options) {
             return;
         }
         tooltip.setAttribute('data-animation', 'out');
-        setTimeout(() => tooltip.remove?.(), 100);
+        setTimeout(() => tooltip.remove?.(), 150);
     };
 
     if (options.fromFocus) target.addEventListener('blur', onpointerleave, { passive: true,  once: true, capture: true });
