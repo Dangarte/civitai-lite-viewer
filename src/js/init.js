@@ -3,7 +3,7 @@
 
 
 const CONFIG = {
-    version: 42,
+    version: 43,
     updated: '2026-06-29T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',

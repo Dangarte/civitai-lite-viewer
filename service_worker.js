@@ -52,6 +52,9 @@ const SW_CONFIG = {
                     { width: 1536, maxFileSize: 1.6 * 1024 * 1024 },    // 1.6 mb
                 ]
             },
+        },
+        poster: {
+            maxFileSize: 5 * 1024 * 1024 // 5 mb
         }
     },
     api_key: null,
@@ -240,19 +243,22 @@ async function cacheFetch(request, cacheControl = { public: true }) {
             }
         }
 
-        if (!cacheControl.noCache) cacheControl.immutable =SW_CONFIG.immutableCaches.includes(cacheName);
+        if (!cacheControl.noCache) cacheControl.immutable = SW_CONFIG.immutableCaches.includes(cacheName);
 
         const finalResponse = responseFromBlob(blob, cacheControl);
 
-        if (customHeaders.length) customHeaders.forEach(({ k, v }) => response.headers.set(k, v));
+        if (customHeaders.length) customHeaders.forEach(({ k, v }) => finalResponse.headers.set(k, v));
 
         if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(request, finalResponse.clone(), cacheName);
 
         return finalResponse;
     }
-
     catch (error) {
         console.error(error);
+        if (error?.cause?.code === 'POSTER_EXTRACTION_FAILED') {
+            return new Response(null, { status: 415, statusText: 'A video response was received in the image element, download canceled.' });
+        }
+
         if (request.url.includes('transcode=true') && request.url.includes('.jpeg')) {
             console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
             const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
@@ -519,8 +525,17 @@ async function resolveResponseBlob(request, actualRequest, response) {
     const isUnexpectedVideo = request.destination === 'image' && contentType?.startsWith('video/');
     if (!isUnexpectedVideo) return response.blob();
 
+    const contentLength = Number(response.headers.get('content-length'));
+    const isTooLarge = Number.isFinite(contentLength) && contentLength > SW_CONFIG.fileLimits.poster.maxFileSize;
+
     // Stop downloading if the server decides to return the video to the image
     response.body?.cancel();
+
+    if (isTooLarge) {
+        console.warn('A video response was received in an image request. Poster extraction was skipped because the video is too large.', actualRequest.url);
+        throw new Error('Poster extraction failed. Video too large.', { cause: { code: 'POSTER_EXTRACTION_FAILED', reason: 'VIDEO_TOO_LARGE', } });
+    }
+
     console.warn('A video response was received in the image element, download canceled. Attempting to download a poster via a video element.', actualRequest.url);
 
     const blob = await requestPoster(actualRequest.url)
@@ -531,7 +546,7 @@ async function resolveResponseBlob(request, actualRequest, response) {
 
     if (!blob) {
         console.warn('Failed to load poster via video element.', actualRequest.url);
-        throw new Error('Poster extraction failed');
+        throw new Error('Poster extraction failed.', { cause: { code: 'POSTER_EXTRACTION_FAILED', reason: 'FAILED_TO_FETCH' } });
     }
 
     return blob;
