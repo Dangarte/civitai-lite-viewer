@@ -1788,6 +1788,11 @@ hr.description-xl-item {
     letter-spacing: .5px;
 }
 
+.model-type-badges .has-variants::after {
+    content: '*';
+    color: var(--c-main-text);
+}
+
 .model-availability[data-badge="EarlyAccess"] {
     background: linear-gradient(135deg, var(--c-modelEarlyAccess), var(--c-modelEarlyAccess-bg2)) !important;
 }

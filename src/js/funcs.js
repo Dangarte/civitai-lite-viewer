@@ -1691,8 +1691,8 @@ class MasonryLayout {
             itemWidth: options.itemWidth ?? 300,
             itemHeight: options.itemHeight ?? null,
             gap: options.gap ?? 8,
-            maxOverscanScreens: options.maxOverscanScreens ?? 3,
-            basePaddingFactor: options.basePaddingFactor ?? .7,
+            maxOverscanScreens: options.maxOverscanScreens ?? 2.4,
+            basePaddingFactor: options.basePaddingFactor ?? .6,
             lookAheadTime: options.lookAheadTime ?? 300,
             layerHeight: options.layerHeight ?? 1500,
             stopThreshold: options.stopThreshold ?? 0.1,
@@ -2423,7 +2423,7 @@ class MasonryLayout {
         const vh = this.windowHeight;
 
         // "Dead zone" - at least half a screen on each side, so as not to fall apart during reversal
-        const basePadding = vh * (options.basePaddingFactor ?? .7);
+        const basePadding = vh * options.basePaddingFactor;
 
         // Look-ahead: How many pixels will the user fly through during the system's response time (e.g. 300 ms)
         const lookAheadTime = options.lookAheadTime ?? 300;

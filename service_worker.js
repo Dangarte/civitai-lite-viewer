@@ -532,7 +532,7 @@ async function resolveResponseBlob(request, actualRequest, response) {
     response.body?.cancel();
 
     if (isTooLarge) {
-        console.warn('A video response was received in an image request. Poster extraction was skipped because the video is too large.', actualRequest.url);
+        console.warn('A video response was received in an image request. Poster extraction was skipped because the video is too large.', `${contentLength} b`, actualRequest.url);
         throw new Error('Poster extraction failed. Video too large.', { cause: { code: 'POSTER_EXTRACTION_FAILED', reason: 'VIDEO_TOO_LARGE', } });
     }
 

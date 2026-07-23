@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 43,
-    updated: '2026-06-29T12:00:00.000Z',
+    version: 44,
+    updated: '2026-07-23T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -388,7 +388,6 @@ class CivitaiPublicAPI {
     }
 }
 
-// WIP
 /**
  * The original API class with modified requests via an iframe proxy
  * (with responses converted to the original format)
@@ -412,7 +411,12 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 throw new Error(message);
             }
 
-            const result = data.response?.result?.data ?? data.response;
+            let result = data.response?.result?.data ?? data.response;
+
+            // try to decode "devalue"
+            if (typeof result === 'string') {
+                try {result = { json: this.#parseDevalue(result) };} catch {}
+            }
 
             if (!result.json) {
                 console.log('[DEBUG] Invalid response. ', result);
@@ -425,6 +429,81 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             console.error(`Failed to fetch ${target ?? 'something'}.`);
             throw error;
         }
+    }
+
+    #parseDevalue(input) {
+        let serialized;
+
+        if (typeof input === 'string') {
+            // Remove or escape control characters that break JSON.parse
+            const sanitized = input.replace(/[\u0000-\u001F\u007F-\u009F]/g, match => {
+                if (match === '\n') return '\\n';
+                if (match === '\r') return '\\r';
+                if (match === '\t') return '\\t';
+                return '';
+            });
+            serialized = JSON.parse(sanitized);
+        } else {
+            serialized = input;
+        }
+
+        if (!Array.isArray(serialized)) return serialized;
+
+        // Cache resolved nodes to handle references and circular structures
+        const cache = new Map();
+
+        function revive(index) {
+            if (typeof index !== 'number' || index < 0 || index >= serialized.length) return index;
+
+            if (cache.has(index)) return cache.get(index);
+
+            const val = serialized[index];
+
+            // Return primitive values (string, number, boolean, null, undefined) directly
+            if (val === null || typeof val !== 'object') return val;
+
+            // Resolve arrays and typed tuples
+            if (Array.isArray(val)) {
+                const arr = [];
+                cache.set(index, arr);
+                for (let i = 0; i < val.length; i++) {
+                    arr.push(revive(val[i]));
+                }
+
+                // Convert tagged tuples like ['Date', '2026-07-17...'] into real JS instances
+                if (arr.length === 2 && typeof arr[0] === 'string') {
+                    const [type, payload] = arr;
+
+                    if (type === 'Date' && typeof payload === 'string') {
+                        const parsedDate = new Date(payload);
+                        return isNaN(parsedDate.getTime()) ? payload : parsedDate;
+                    }
+                    if (type === 'Set' && Array.isArray(payload)) {
+                        return new Set(payload);
+                    }
+                    if (type === 'Map' && Array.isArray(payload)) {
+                        return new Map(payload);
+                    }
+                    if (type === 'BigInt' && (typeof payload === 'string' || typeof payload === 'number')) {
+                        return BigInt(payload);
+                    }
+                    if (type === 'undefined') {
+                        return undefined;
+                    }
+                }
+                return arr;
+            }
+
+            // Resolve object of key-reference pairs
+            const obj = {};
+            cache.set(index, obj);
+            for (const key of Object.keys(val)) {
+                obj[key] = revive(val[key]);
+            }
+            return obj;
+        }
+
+        return revive(0);
     }
 
     // "1de4c2db-54a0-4fed-994f-45604bbdf0bc" --> url
@@ -846,6 +925,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 type: item.type,
                 nsfwLevel: item.nsfwLevel,
                 availability: item.availability,
+                baseModels: item.baseModels && Array.isArray(item.baseModels) ? item.baseModels : [],
                 creator: this.#prepareUserBlock(item.user),
                 description: '',
                 modelVersions: [
@@ -1275,7 +1355,7 @@ class Controller {
             'Ernie',
             'ACE Audio',
             'Lens',
-            'Ideogram 4.0', // For some reason, all ideogram models have the "Other" category...
+            'Ideogram 4.0',
             'Boogu',
             'Krea 2',
 
@@ -1296,6 +1376,7 @@ class Controller {
             'HappyHorse',
             'Imagen4',
             'MAI',
+            'Reve',
 
             'Other'
         ],
@@ -1446,6 +1527,7 @@ class Controller {
             'MAI': ['image', 'closed', 'microsoft', 'multilingual'],
             'Ideogram 4.0': ['image', 'weights', 'censored', 'uncensored', 'multilingual'],
             'Boogu': ['image', 'weights', 'boogu-team', 'censored', 'uncensored', 'multilingual'], // is it censored?
+            'Reve': ['image', 'closed', 'reve-ai', 'censored', 'multilingual'], // multilingual?
             'Other': ['misc']
         }
     };
@@ -3225,6 +3307,10 @@ class Controller {
         }
     }
 
+    static goto3DModel(options = {}) {
+        // TODO: When there are more models on the site, I will finish this.
+    }
+
     static createCivitUrl() {
         if (!location.hash.includes('?')) return null;
         try {
@@ -4325,7 +4411,7 @@ class Controller {
 
                 const button = insertElement('button', errorBlock, { inert: '' }, window.languagePack?.text?.retry || 'Retry');
                 button.prepend(getIcon('reload'));
-                button.addEventListener('click', callback, { once: true });
+                button.addEventListener('click', () => callback(attempt), { once: true });
 
                 setTimeout(() => button.removeAttribute('inert'),500 * attempt * attempt);
                 return;
@@ -4338,7 +4424,7 @@ class Controller {
             timerSpan.appendChild(document.createTextNode(')'));
 
             insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
-            setTimeout(callback, delay);
+            setTimeout(() => callback(attempt), delay);
         };
 
         const loadMore = (attempts = 0) => {
@@ -6721,7 +6807,17 @@ class Controller {
                 const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
 
                 // Model Type
-                const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-text': escapeHtml(`${model.type} · ${this.#models.labels[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`) }, `${this.#types.labels[model.type] || model.type} · ${this.#models.labels_short[modelVersion.baseModel] ?? modelVersion.baseModel ?? '?'}`);
+                const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type' }, `${this.#types.labels[model.type] || model.type} · `);
+                const getBaseModelLabel = baseModel => this.#models.labels[baseModel] ?? baseModel ?? '?';
+                const getBaseModelLabelShort = baseModel => this.#models.labels_short[baseModel] ?? baseModel ?? '?';
+                if (model.baseModels?.length && model.baseModels.length > 1) {
+                    const labels = model.baseModels.map(b => `<li${b === modelVersion.baseModel ? ' style="color:var(--c-main-text)"' : ''}>${escapeHtml(getBaseModelLabel(b))}</li>`).join('');
+                    modelTypeWrap.setAttribute('lilpipe-text', `<h4 style="margin:0;">${escapeHtml(model.type)}</h4><ul style="margin:0;">${labels}</ul>`);
+                    insertElement('span', modelTypeWrap, { class: 'has-variants' }, getBaseModelLabelShort(modelVersion.baseModel));
+                } else {
+                    modelTypeWrap.setAttribute('lilpipe-text', `<h4 style="margin:0;">${escapeHtml(model.type)}</h4><ul style="margin:0;"><li>${escapeHtml(getBaseModelLabel(modelVersion.baseModel))}</li></ul>`);
+                    insertElement('span', modelTypeWrap, undefined, getBaseModelLabelShort(modelVersion.baseModel));
+                }
 
                 // Availability
                 let availabilityBadge = null;
