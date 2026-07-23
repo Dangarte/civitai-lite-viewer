@@ -767,7 +767,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return {
             items: this.#convertImages(data.items, browsingLevel),
             metadata: {
-                nextCursor: data.nextCursor
+                nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
         };
     }
@@ -828,7 +828,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return {
             items,
             metadata: {
-                nextCursor: data.nextCursor
+                nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
         };
     }
@@ -956,7 +956,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return {
             items,
             metadata: {
-                nextCursor: data.nextCursor
+                nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
         };
     }
@@ -1184,7 +1184,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return {
             items: data.comments.map(c => this.#parseComment(c)),
             metadata: {
-                nextCursor: data.nextCursor
+                nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
         };
     }
@@ -1224,7 +1224,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return {
             items: data.comments.map(c => this.#parseComment(c)),
             metadata: {
-                nextCursor: data.nextCursor
+                nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
         };
     }
@@ -4471,6 +4471,13 @@ class Controller {
                 console.error(error);
                 console.error('Failed to fetch items:', error?.message ?? error);
                 element.classList.add('error');
+
+                const badRequest = error?.message?.startsWith('Invalid ');
+                if (badRequest) {
+                    const errorBlock = this.#genErrorPage(error?.message ?? 'Error');
+                    element.appendChild(errorBlock);
+                    return;
+                }
 
                 const is429 = error.cause?.status === 429;
                 const error_detail = error.cause?.detail || '';

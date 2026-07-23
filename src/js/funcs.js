@@ -140,7 +140,10 @@ async function fetchJSON(url, options = {}) {
         if (!res.ok) {
             // Try to extract the error message from the response
             let error;
-            try { error = (await res.json()).error; } catch(_) {}
+            try {
+                const json = await res.json();
+                error = json.error || json.message;
+            } catch(_) {}
             if (typeof error !== 'string') console.log(`${error?.name ?? 'Error'}: `, error?.issues ?? error);
             throw new Error(error || `HTTP ${res.status}`);
         }
