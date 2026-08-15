@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 44,
-    updated: '2026-07-23T12:00:00.000Z',
+    version: 45,
+    updated: '2026-08-15T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -473,22 +473,27 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 // Convert tagged tuples like ['Date', '2026-07-17...'] into real JS instances
                 if (arr.length === 2 && typeof arr[0] === 'string') {
                     const [type, payload] = arr;
+                    let resolved;
+                    let isTagged = true;
 
                     if (type === 'Date' && typeof payload === 'string') {
                         const parsedDate = new Date(payload);
-                        return isNaN(parsedDate.getTime()) ? payload : parsedDate;
+                        resolved = isNaN(parsedDate.getTime()) ? payload : parsedDate;
+                    } else if (type === 'Set' && Array.isArray(payload)) {
+                        resolved = new Set(payload);
+                    } else if (type === 'Map' && Array.isArray(payload)) {
+                        resolved = new Map(payload);
+                    } else if (type === 'BigInt' && (typeof payload === 'string' || typeof payload === 'number')) {
+                        resolved = BigInt(payload);
+                    } else if (type === 'undefined') {
+                        resolved = undefined;
+                    } else {
+                        isTagged = false;
                     }
-                    if (type === 'Set' && Array.isArray(payload)) {
-                        return new Set(payload);
-                    }
-                    if (type === 'Map' && Array.isArray(payload)) {
-                        return new Map(payload);
-                    }
-                    if (type === 'BigInt' && (typeof payload === 'string' || typeof payload === 'number')) {
-                        return BigInt(payload);
-                    }
-                    if (type === 'undefined') {
-                        return undefined;
+
+                    if (isTagged) {
+                        cache.set(index, resolved);
+                        return resolved;
                     }
                 }
                 return arr;
@@ -1358,6 +1363,8 @@ class Controller {
             'Ideogram 4.0',
             'Boogu',
             'Krea 2',
+            'MageFlow',
+            'MiniMax H3',
 
             // API-only models
             'Wan Video 2.5 I2V',
@@ -1436,6 +1443,7 @@ class Controller {
             'HiDream-O1': 'HiD-O1',
             'ZImageTurbo': 'ZIT',
             'ZImageBase': 'ZI',
+            'MiniMax H3': 'H3',
         },
         // TODO: add tag 'edit'
         tags: {
@@ -1528,6 +1536,8 @@ class Controller {
             'Ideogram 4.0': ['image', 'weights', 'censored', 'uncensored', 'multilingual'],
             'Boogu': ['image', 'weights', 'boogu-team', 'censored', 'uncensored', 'multilingual'], // is it censored?
             'Reve': ['image', 'closed', 'reve-ai', 'censored', 'multilingual'], // multilingual?
+            'MageFlow': ['image', 'weights', 'microsoft', 'censored', 'multilingual'],
+            'MiniMax H3': ['video', 'weights', 'minimax', 'uncensored', 'multilingual'], // multilingual?
             'Other': ['misc']
         }
     };
@@ -1876,7 +1886,10 @@ class Controller {
                 loaded = false;
                 result.promise
                     .then(r => finishPageLoading(r, deep + 1))
-                    .catch(error => this.#gotoError(error));
+                    .catch(error => {
+                        if (navigationState.id !== this.#state.id) return hideTimeError();
+                        return this.#gotoError(error);
+                    });
             }
 
             processNavigation(result, loaded);
@@ -4377,7 +4390,7 @@ class Controller {
 
     static #genInfinityScroll(options) {
         const { layoutConfig, loadItems, prepareItems, onPointerDown, genEndButtons, labels = {} } = options;
-        let promise = null, cursor, firstDraw = false, hiddenItems = 0;
+        let promise = null, cursor, firstDraw = false, hiddenItems = 0, emptyResultAttempts = 0;
 
         const REQUEST_MIN_INTERVAL = 1000;
         const REQUEST_MIN_DELAY = 6000;
@@ -4413,7 +4426,7 @@ class Controller {
                 button.prepend(getIcon('reload'));
                 button.addEventListener('click', () => callback(attempt), { once: true });
 
-                setTimeout(() => button.removeAttribute('inert'),500 * attempt * attempt);
+                setTimeout(() => button.removeAttribute('inert'), 500 * attempt * attempt);
                 return;
             }
 
@@ -4430,6 +4443,7 @@ class Controller {
         const loadMore = (attempts = 0) => {
             if (!cursor) return;
 
+            const pageNavigation = this.#pageNavigation;
             const now = Date.now();
             lastRequestTimestumps = lastRequestTimestumps.filter(time => now - time < REQUEST_MIN_DELAY);
             const lastRequestTime = lastRequestTimestumps[lastRequestTimestumps.length - 1] || 0;
@@ -4442,7 +4456,10 @@ class Controller {
             }
             const totalWaitTime = Math.max(intervalWaitTime, windowWaitTime);
             if (totalWaitTime > 0) {
-                return new Promise(resolve => setTimeout(() => resolve(loadMore(attempts)), totalWaitTime));
+                return new Promise(resolve => setTimeout(() => {
+                    if (pageNavigation !== this.#pageNavigation) return;
+                    resolve(loadMore(attempts));
+                }, totalWaitTime));
             }
             lastRequestTimestumps.push(Date.now());
 
@@ -4457,7 +4474,6 @@ class Controller {
                 return;
             }
 
-            const pageNavigation = this.#pageNavigation;
             document.getElementById('page-loading-bar')?.remove();
             insertElement('div', document.body, { id: 'page-loading-bar' });
             return result.then(result => {
@@ -4509,6 +4525,15 @@ class Controller {
             const result = prepareItems(items);
             items = result.items;
             hiddenItems += result.hidden;
+
+            // Stop download attempts if too many (all, several times in a row) are hidden
+            if (items.length > 0) emptyResultAttempts = 0;
+            else emptyResultAttempts++;
+            if (emptyResultAttempts >= 4) {
+                const errorBlock = this.#genErrorPage(result.hidden === 0 ? 'Many requests returned an empty response, or all their elements were hidden by filters.' : 'Many requests had all elements hidden by filters.');
+                element.appendChild(errorBlock);
+                return;
+            }
 
             layout.addItems(items, firstDraw);
 
@@ -4767,6 +4792,7 @@ class Controller {
                 const baseModels = !EXTENSION_INSTALLED || isSpecific ? [] : SETTINGS.baseModels_images;
                 query = {
                     limit: CONFIG.perRequestLimits.images,
+                    withMeta: true,
                     sort: SETTINGS.sort_images,
                     period: forcedPeriod || SETTINGS.period_images,
                     browsingLevel: SETTINGS.browsingLevel,
