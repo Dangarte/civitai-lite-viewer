@@ -27,9 +27,10 @@ function insertAfter(element, target) {
     target.parentNode.insertBefore(element, target.nextSibling);
 }
 
-function emptyElement(element) {
-    element.textContent = '';
-    return element;
+function unwrapElement(element) {
+    const parent = element.parentNode;
+    while (element.firstChild) parent.insertBefore(element.firstChild, element);
+    element.remove();
 }
 
 function insertTextNode(text, parent) {
@@ -90,15 +91,20 @@ function filesizeToString(size) {
     return `0 ${l.b ?? 'b'}`;
 }
 
+// function safeParseHTML(html) {
+//     const parser = new DOMParser();
+//     const body = parser.parseFromString(html, 'text/html').body;
+//     body.querySelectorAll('script, iframe, object, embed, style, link, meta').forEach(el => el.remove());
+//     const fragment = new DocumentFragment();
+//     while (body.firstChild) fragment.appendChild(body.firstChild);
+//     return fragment;
+// }
+
 function safeParseHTML(html) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-
-    doc.querySelectorAll('script, iframe, object, embed, style, link, meta').forEach(el => el.remove());
-
-    const fragment = new DocumentFragment();
-    Array.from(doc.body.childNodes).forEach(node => fragment.appendChild(node));
-
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const fragment = template.content;
+    fragment.querySelectorAll('script, iframe, object, embed, style, link, meta').forEach(el => el.remove());
     return fragment;
 }
 
@@ -166,7 +172,7 @@ function parseParams(paramString) {
 const TIME_UNITS = [
     { step: 31536000, key: 'year'   },
     { step: 2592000,  key: 'month'  },
-    { step: 604800,   key: 'week'   },
+    // { step: 604800,   key: 'week'   },
     { step: 86400,    key: 'day'    },
     { step: 3600,     key: 'hour'   },
     { step: 60,       key: 'minute' },
@@ -1677,6 +1683,7 @@ class MasonryLayout {
     #readScroll;
     #readResize;
     #onKeydown;
+    #onPointerdown;
 
     #onElementRemove;
     #getResizedOptions;
@@ -1717,10 +1724,9 @@ class MasonryLayout {
         this.#onScroll = this.#handleScroll.bind(this);
         this.#onResize = this.#handleResize.bind(this);
         this.#onKeydown = this.#handleKeydown.bind(this);
+        this.#onPointerdown = this.#handlerPointerDown.bind(this);
         this.#readScroll = this.#handleReadScroll.bind(this);
         this.#readResize = this.#handleReadResize.bind(this);
-
-        this.#container.addEventListener('pointerdown', this.#handlerPointerDown.bind(this), { passive: true });
 
         this.#lastScrollTop = Number(options.state?.currentScrollTop || 0);
 
@@ -1859,7 +1865,6 @@ class MasonryLayout {
 
         const cardHeightMin = options.itemWidth * .6;
         const cardHeightMax = this.windowHeight * .8;
-        const cardHeightClamp = cardHeight => Math.max(Math.min(cardHeight, cardHeightMax), cardHeightMin);
 
         items.forEach(item => {
             if (this.#itemsById.has(item.id)) {
@@ -1868,7 +1873,8 @@ class MasonryLayout {
             }
 
             const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
-            const cardHeight = cardHeightClamp(options.itemHeight ?? (options.itemWidth / item.aspectRatio));
+            const cardHeightRaw = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
+            const cardHeight = cardHeightRaw > cardHeightMax ? cardHeightMax : cardHeightRaw < cardHeightMin ? cardHeightMin : cardHeightRaw;
 
             const gridItem = {
                 id: item.id,
@@ -1967,6 +1973,7 @@ class MasonryLayout {
             document.removeEventListener('resize', this.#onResize);
         }
         this.#container.removeEventListener('keydown', this.#onKeydown);
+        this.#container.removeEventListener('pointerdown', this.#onPointerdown);
         this.#queueClear();
         this.#items.forEach(item => {
             if (!item.element) return;
@@ -2005,6 +2012,7 @@ class MasonryLayout {
             document.addEventListener('resize', this.#onResize, { passive: true });
         }
         this.#container.addEventListener('keydown', this.#onKeydown, { capture: true });
+        this.#container.addEventListener('pointerdown', this.#onPointerdown, { passive: true });
 
         this.resize();
     }
@@ -2747,6 +2755,10 @@ class InfiniteCarousel {
         options.onScroll?.(this.#items[realIndex]?.id);
     }
 
+    getItemElementByIndex(index) {
+        return this.#renderedItems.get(index)?.element ?? null;
+    }
+
     #renderItem(virtualIndex) {
         const realIndex = this.#getCircularIndex(virtualIndex);
         const item = this.#items[realIndex];
@@ -2772,14 +2784,9 @@ class InfiniteCarousel {
 class RelativeTime extends HTMLElement {
     static observedAttributes = ["datetime"];
 
-    #target;
-    #tickHandle;
-
-    constructor(datetime = null) {
-        super();
-        this.#target = null;
-        if (datetime !== null) this.setAttribute('datetime', datetime);
-    }
+    #target = null;
+    #lastSec = null;
+    #tickHandle = null;
 
     #tick(now) {
         if (!this.isConnected) {
@@ -2796,9 +2803,9 @@ class RelativeTime extends HTMLElement {
     }
 
     connectedCallback() {
-        this.#parse();
         this.#clear();
-        this.#tickHandle = Ticker.add(now => this.#tick(now), { every: 1000 });
+        const next = this.#update(Date.now());
+        this.#tickHandle = Ticker.add(now => this.#tick(now), next !== null ? { at: next } : { every: 1000 });
     }
 
     disconnectedCallback() {
@@ -2812,7 +2819,7 @@ class RelativeTime extends HTMLElement {
             if (this.#tickHandle) {
                 if (next !== null && this.#tickHandle.next !== next) this.#tickHandle = Ticker.update(this.#tickHandle, { at: next });
                 else if (next === null && this.#tickHandle.step !== 1000) this.#tickHandle = Ticker.update(this.#tickHandle, { every: 1000 });
-            } if (this.isConnected) {
+            } else if (this.isConnected) {
                 this.#tickHandle = Ticker.add(now => this.#tick(now), next !== null ? { at: next } : { every: 1000 });
             }
         }
@@ -2822,11 +2829,15 @@ class RelativeTime extends HTMLElement {
         const value = this.getAttribute("datetime");
         const t = value ? Date.parse(value) : NaN;
         this.#target = Number.isFinite(t) ? t : null;
+        this.#lastSec = null;
     }
 
     #update(now) {
         if (this.#target === null) {
-            this.textContent = "—";
+            if (this.#lastSec !== null) {
+                this.textContent = "—";
+                this.#lastSec = null;
+            }
             this.#clear();
             return null;
         }
@@ -2836,7 +2847,11 @@ class RelativeTime extends HTMLElement {
         const nowSec = (now / 1000) | 0;
         const targetSec = (this.#target / 1000) | 0;
         const s = targetSec - nowSec;
-        this.textContent = timeAgo(-s);
+
+        if (s !== this.#lastSec) {
+            this.textContent = timeAgo(-s);
+            this.#lastSec = s;
+        }
 
         // <= 1 minute -> refresh every second
         if (absMs <= 60000) return null;
@@ -2846,7 +2861,7 @@ class RelativeTime extends HTMLElement {
             return null;
         }
 
-        const unitMs = absMs >= 86400000 ? 86400000 : absMs >= 3600000 ? 3600000 : 60000;
+        const unitMs = absMs >= 3600000 ? 3600000 : 60000;
         const rem = absMs % unitMs;
         const stepMs = rem === 0 ? unitMs : rem;
         const next = now + stepMs;
@@ -2857,6 +2872,8 @@ class RelativeTime extends HTMLElement {
     get datetimeAsNumber() {
         return this.#target;
     }
-}
 
-customElements.define('relative-time', RelativeTime);
+    static {
+        customElements.define('relative-time', RelativeTime);
+    }
+}

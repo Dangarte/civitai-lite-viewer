@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 45,
-    updated: '2026-08-15T12:00:00.000Z',
+    version: 46,
+    updated: '2026-08-22T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -144,6 +144,7 @@ const SETTINGS = {
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
     hideImagesWithoutResources: false,
+    hideVideosOnImageModels: true,
     colorCorrection: true,
     showLogs: true,
     civitaiLinksAltClickByDefault: false,
@@ -433,76 +434,84 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
     #parseDevalue(input) {
         let serialized;
-
         if (typeof input === 'string') {
-            // Remove or escape control characters that break JSON.parse
-            const sanitized = input.replace(/[\u0000-\u001F\u007F-\u009F]/g, match => {
-                if (match === '\n') return '\\n';
-                if (match === '\r') return '\\r';
-                if (match === '\t') return '\\t';
-                return '';
-            });
-            serialized = JSON.parse(sanitized);
+            if (/[\x00-\x1f\x7f-\x9f]/.test(input)) {
+                input = input.replace(/[\x00-\x1f\x7f-\x9f]/g, m => {
+                    return m === '\n' ? '\\n' : m === '\r' ? '\\r' : m === '\t' ? '\\t' : '\\u00' + m.charCodeAt(0).toString(16).padStart(2, '0');
+                });
+            }
+            serialized = JSON.parse(input);
         } else {
             serialized = input;
         }
 
         if (!Array.isArray(serialized)) return serialized;
 
-        // Cache resolved nodes to handle references and circular structures
-        const cache = new Map();
+        const len = serialized.length;
+        const cache = new Array(len);
 
         function revive(index) {
-            if (typeof index !== 'number' || index < 0 || index >= serialized.length) return index;
-
-            if (cache.has(index)) return cache.get(index);
+            if (typeof index !== 'number' || index < 0 || index >= len) return index;
+            if (cache[index] !== undefined) return cache[index];
 
             const val = serialized[index];
-
-            // Return primitive values (string, number, boolean, null, undefined) directly
             if (val === null || typeof val !== 'object') return val;
 
-            // Resolve arrays and typed tuples
             if (Array.isArray(val)) {
-                const arr = [];
-                cache.set(index, arr);
-                for (let i = 0; i < val.length; i++) {
-                    arr.push(revive(val[i]));
+                const valLen = val.length;
+
+                if (valLen === 2 && typeof val[0] === 'string') {
+                    const tag = val[0];
+                    const payloadIdx = val[1];
+
+                    if (tag === 'Date') {
+                        const payload = revive(payloadIdx);
+                        const parsedDate = new Date(payload);
+                        const res = isNaN(parsedDate.getTime()) ? payload : parsedDate;
+                        return (cache[index] = res);
+                    }
+                    if (tag === 'BigInt') {
+                        return (cache[index] = BigInt(revive(payloadIdx)));
+                    }
+                    if (tag === 'Set') {
+                        const set = new Set();
+                        cache[index] = set;
+                        const payload = revive(payloadIdx);
+                        if (Array.isArray(payload)) {
+                            for (let i = 0; i < payload.length; i++) set.add(payload[i]);
+                        }
+                        return set;
+                    }
+                    if (tag === 'Map') {
+                        const map = new Map();
+                        cache[index] = map;
+                        const payload = revive(payloadIdx);
+                        if (Array.isArray(payload)) {
+                            for (let i = 0; i < payload.length; i++) {
+                                const entry = payload[i];
+                                if (Array.isArray(entry)) map.set(entry[0], entry[1]);
+                            }
+                        }
+                        return map;
+                    }
+                } else if (valLen === 1 && val[0] === 'undefined') {
+                    cache[index] = undefined;
+                    return undefined;
                 }
 
-                // Convert tagged tuples like ['Date', '2026-07-17...'] into real JS instances
-                if (arr.length === 2 && typeof arr[0] === 'string') {
-                    const [type, payload] = arr;
-                    let resolved;
-                    let isTagged = true;
-
-                    if (type === 'Date' && typeof payload === 'string') {
-                        const parsedDate = new Date(payload);
-                        resolved = isNaN(parsedDate.getTime()) ? payload : parsedDate;
-                    } else if (type === 'Set' && Array.isArray(payload)) {
-                        resolved = new Set(payload);
-                    } else if (type === 'Map' && Array.isArray(payload)) {
-                        resolved = new Map(payload);
-                    } else if (type === 'BigInt' && (typeof payload === 'string' || typeof payload === 'number')) {
-                        resolved = BigInt(payload);
-                    } else if (type === 'undefined') {
-                        resolved = undefined;
-                    } else {
-                        isTagged = false;
-                    }
-
-                    if (isTagged) {
-                        cache.set(index, resolved);
-                        return resolved;
-                    }
+                const arr = new Array(valLen);
+                cache[index] = arr;
+                for (let i = 0; i < valLen; i++) {
+                    arr[i] = revive(val[i]);
                 }
                 return arr;
             }
 
-            // Resolve object of key-reference pairs
             const obj = {};
-            cache.set(index, obj);
-            for (const key of Object.keys(val)) {
+            cache[index] = obj;
+            const keys = Object.keys(val);
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i];
                 obj[key] = revive(val[key]);
             }
             return obj;
@@ -1287,7 +1296,8 @@ class Controller {
         articles: new Map(),        // articles
         collections: new Map(),     // collections
         modelVersions: new Map(),   // model versions
-        history: new Map()          // History cache (for fast back and forth)
+        history: new Map(),         // History cache (for fast back and forth)
+        badPosters: new Set()       // List of bad video poster urls (can't resolve poster)
     };
     static #models = {
         options: [
@@ -1888,7 +1898,8 @@ class Controller {
                     .then(r => finishPageLoading(r, deep + 1))
                     .catch(error => {
                         if (navigationState.id !== this.#state.id) return hideTimeError();
-                        return this.#gotoError(error);
+                        const errorPage = this.#gotoError(error);
+                        finishPageLoading(errorPage, deep + 1);
                     });
             }
 
@@ -1907,12 +1918,14 @@ class Controller {
 
             if (parts[0]) errorContainer.appendChild(document.createTextNode(parts[0]));
             insertElement('a', errorContainer, { href: CONFIG.api_status_url, target: '_blank' }, 'CivitaAI API Status');
-            if (parts[1]) errorContainer.appendChild(document.createTextNode(parts[0]));
+            if (parts[1]) errorContainer.appendChild(document.createTextNode(parts[1]));
 
             document.querySelector('body header').appendChild(errorContainer);
         };
 
         const hideTimeError = () => {
+            if (navigationState.id !== this.#state.id) return;
+
             if (this.#errorTimer) {
                 clearTimeout(this.#errorTimer);
                 this.#errorTimer = null;
@@ -1954,13 +1967,13 @@ class Controller {
             }
         }
 
-        if (key !== null) {
+        if (key !== null && promise instanceof Promise) {
             this.#preClickResults[key] = promise;
             promise.then(result => {
                 if (this.#preClickResults[key] === promise) {
                     this.#preClickResults[`${key}-result`] = result;
                 }
-            });
+            }).catch(() => {});
         }
     }
 
@@ -2292,6 +2305,19 @@ class Controller {
             }).element,
         });
 
+        // Hide video preview on image-only models
+        addSetting({
+            description: tempHome.hideVideosOnImageModelsDescription ?? 'Hide video preview on image-only models in list. If the preview only contains video, filtering is skipped for this model.',
+            toggleElement: this.#genBoolean({
+                onchange: ({ newValue }) => {
+                    SETTINGS.hideVideosOnImageModels = newValue;
+                    savePageSettings();
+                },
+                value: SETTINGS.hideVideosOnImageModels,
+                label: tempHome.hideVideosOnImageModels ?? 'Hide video on image-only models'
+            }).element,
+        });
+
         // Autoplay
         addSetting({
             description: tempHome.autoplayDescription ?? 'If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.',
@@ -2472,20 +2498,11 @@ class Controller {
             this.#log('Loaded articles:', articles);
 
             const hiddenBefore = hiddenArticles;
-            if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
-                let blackListTagIds = [...SETTINGS.blackListTagIds];
-                if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
-                if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
-                if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
+            const articleFilters = this.#getActiveFilters('articles');
+            if (articleFilters.length > 0) {
                 const countAll = articles.length;
-                const normalizedBlaclistTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
 
-                articles = filterItems(articles, [
-                    { key: 'tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
-                    { key: 'coverImage.tagIds', conditions: normalizedBlaclistTagIds, type: 'number' },
-                    SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
-                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
-                ]);
+                articles = filterItems(articles, articleFilters);
 
                 if (countAll !== articles.length) {
                     hiddenArticles += countAll - articles.length;
@@ -2495,8 +2512,9 @@ class Controller {
 
             if (SETTINGS.blackListUserIds.length) {
                 const countAll = articles.length;
+                const userBlacklist = new Set(SETTINGS.blackListUserIds);
 
-                articles = articles.filter(article => !SETTINGS.blackListUserIds.includes(article?.userId ?? article?.creator?.id));
+                articles = articles.filter(article => !userBlacklist.has(article?.userId ?? article?.creator?.id));
 
                 if (articles.length !== countAll) {
                     this.#log(`Due to the users blacklist, ${countAll - articles.length} article(s) were hidden`);
@@ -2537,7 +2555,7 @@ class Controller {
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndicator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
 
             if (!this.#isAppEmpty()) {
@@ -3214,68 +3232,86 @@ class Controller {
             const hiddenBefore = hiddenModels;
             const countAll = models.length;
 
-            if (EXTENSION_INSTALLED) {
-                if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
+            const userBlacklist = new Set(SETTINGS.blackListUserIds);
+            const tagBlacklist = new Set(SETTINGS.blackListTags);
 
-                    // A shallow copy of the list of models and images in versions (a full copy is too expensive)
-                    // (since they can be filtered, and this filtering must not be passed through to the original object taken from the cache)
-                    models = models.map(model => {
-                        model = {...model};
-                        model.modelVersions = model.modelVersions.map(version => {
-                            version = {...version};
-                            if (version.images) version.images = [...version.images];
-                            return version;
-                        });
-                        return model;
-                    });
-
-                    let blackListTagIds = [...SETTINGS.blackListTagIds];
-                    if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
-                    if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
-                    if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
-                    blackListTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
-
-                    // Filter images in each model
-                    models = models.filter(model => {
-                        const modelVersion = model.modelVersions[0];
-                        if (!modelVersion.images.length) return true;
-                        modelVersion.images = this.#filterImages(modelVersion.images, { blackListTagIds });
-                        return modelVersion.images.length;
-                    });
-
-                    // Filter models
-                    models = filterItems(models, [
-                        { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
-                        // { key: 'modelVersions.0.images.0.tagIds', conditions: blackListTagIds, type: 'number' } // filtered above
-                    ]);
-                }
-            } else {
-                models = models.filter(model => (model?.modelVersions?.length && !model.tags?.some(tag => SETTINGS.blackListTags.includes(tag))));
-            }
-
-            if (models.length !== countAll) {
-                this.#log(`Due to the selected tags for hiding, ${countAll - models.length} model(s) were hidden`);
-                hiddenModels += countAll - models.length;
-            }
-
-            if (SETTINGS.blackListUserIds.length) {
-                const countAll = models.length;
-
-                models = models.filter(model => !SETTINGS.blackListUserIds.includes(model?.creator?.id));
-
-                if (models.length !== countAll) {
-                    this.#log(`Due to the users blacklist, ${countAll - models.length} model(s) were hidden`);
-                    hiddenModels += countAll - models.length;
+            const imageModels = new Set();
+            if (SETTINGS.hideVideosOnImageModels) {
+                const modelTags = this.#models.tags;
+                for (const baseModel in modelTags) {
+                    const tags = modelTags[baseModel];
+                    if (tags.includes('image') && !tags.includes('video') && !tags.includes('audio')) {
+                        imageModels.add(baseModel);
+                    }
                 }
             }
 
-            models.forEach(model => {
-                if (modelById.has(model.id)) return;
-                modelById.set(model.id, model);
-            });
+            const imageFilters = EXTENSION_INSTALLED ? this.#getActiveFilters('images') : [];
+            const compiledImageFilters = imageFilters.length ? compileFilterItemsRules(imageFilters) : null;
+            const modelFilters = EXTENSION_INSTALLED ? this.#getActiveFilters('models') : [];
+            const hasTagFilters = EXTENSION_INSTALLED && (imageFilters.length || modelFilters.length);
 
-            const items = models.map(data => ({ id: data.id, data }));
+            const resultModels = [];
 
+            for (let i = 0; i < models.length; i++) {
+                const originalModel = models[i];
+
+                // Basic empty check
+                if (!originalModel?.modelVersions?.length) continue;
+
+                // Blacklist checks
+                if (userBlacklist.has(originalModel?.creator?.id)) continue;
+
+                if (!EXTENSION_INSTALLED && originalModel.tags?.some(tag => tagBlacklist.has(tag))) {
+                    continue;
+                }
+
+                // Shallow clone
+                const model = {
+                    ...originalModel,
+                    modelVersions: originalModel.modelVersions.map(version => ({
+                        ...version,
+                        images: version.images ? [...version.images] : undefined
+                    }))
+                };
+
+                const firstVersion = model.modelVersions[0];
+
+                // Hide video previews
+                if (SETTINGS.hideVideosOnImageModels && firstVersion.images?.length) {
+                    const baseModel = firstVersion.baseModel || (Array.isArray(model.baseModels) ? model.baseModels[0] : null);
+                    if (imageModels.has(baseModel)) {
+                        const filteredImages = firstVersion.images.filter(media => media.type === 'image');
+                        if (filteredImages.length) {
+                            firstVersion.images = filteredImages;
+                        }
+                    }
+                }
+
+                // Filter by tagIds
+                if (hasTagFilters) {
+                    if (firstVersion.images?.length) {
+                        firstVersion.images = this.#filterImages(firstVersion.images, { filters: imageFilters, compiledFilters: compiledImageFilters });
+                        if (!firstVersion.images.length) continue;
+                    }
+                }
+
+                resultModels.push(model);
+            }
+
+            let finalModels = hasTagFilters ? filterItems(resultModels, modelFilters) : resultModels;
+
+            const hiddenCount = countAll - finalModels.length;
+            hiddenModels += hiddenCount;
+
+            for (let i = 0; i < finalModels.length; i++) {
+                const model = finalModels[i];
+                if (!modelById.has(model.id)) {
+                    modelById.set(model.id, model);
+                }
+            }
+
+            const items = finalModels.map(data => ({ id: data.id, data }));
             return { items, hidden: hiddenModels - hiddenBefore };
         };
 
@@ -3293,7 +3329,7 @@ class Controller {
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', appContent, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndicator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
 
             if (!this.#isAppEmpty()) {
@@ -3516,6 +3552,9 @@ class Controller {
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         if (!cache.descriptionImages) cache.descriptionImages = new Map();
 
+        // Field for transferring data about the current version and its information to the custom download script
+        page.__exportData = { model, modelVersion };
+
         // Model name
         const modelNameWrap = insertElement('div', page, { class: 'model-name' });
         const modelNameH1 = insertElement('h1', modelNameWrap, undefined, model.name);
@@ -3590,10 +3629,19 @@ class Controller {
         };
         if (this.#state.model_tags || model.tags.join('').length <= 80) updateTags(model.tags);
         else {
-            updateTags(model.tags.reduce((acc, tag) => (acc.join('').length + tag.length <= 80 ? [...acc, tag] : acc), []));
+            let currentLength = 0;
+            const visibleTags = [];
+            for (let i = 0; i < model.tags.length; i++) {
+                const tag = model.tags[i];
+                if (currentLength + tag.length > 80) break;
+                visibleTags.push(tag);
+                currentLength += tag.length;
+            }
+            updateTags(visibleTags);
+
             const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
             showMore.appendChild(getIcon('arrow_down'));
-            insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - 12}`);
+            insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - visibleTags.length}`);
             showMore.addEventListener('click', () => {
                 this.#state.model_tags = true;
                 updateTags(model.tags);
@@ -3607,12 +3655,44 @@ class Controller {
             const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '' });
 
             const isActive = version.id === modelVersion.id;
-            const isDifferentBase = version.baseModel !== modelVersion.baseModel;
-            const updatedAt = new Date(version.publishedAt ?? version.createdAt);
-            const updatedAtISO = isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
-            const lilpipeText = updatedAtISO ? `<div><b>${window.languagePack?.text?.Updated ?? 'Updated'}</b> <span class="dark-text">(<relative-time datetime="${updatedAtISO}"></relative-time>)</span></div><div>${updatedAt.toLocaleDateString()} <span class="dark-text">${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></div>${isDifferentBase ? `<div style="margin-block-start:.5em;">${this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base'}</div>` : ''}` : '';
+            const rawDate = version.publishedAt ?? version.createdAt;
 
-            if (lilpipeText && !isActive) button.setAttribute('lilpipe-text', lilpipeText);
+            if (rawDate && !isActive) {
+                assignDynamicLilpipe(button, () => {
+                    const updatedAt = new Date(rawDate);
+                    if (isNaN(updatedAt.getTime())) return null;
+
+                    const isDifferentBase = version.baseModel !== modelVersion.baseModel;
+                    const updatedLabel = window.languagePack?.text?.Updated ?? 'Updated';
+                    const baseLabel = this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base';
+
+                    const fragment = document.createDocumentFragment();
+
+                    // label and relative-time element
+                    const row1 = createElement('div');
+                    const bold = createElement('b', undefined, updatedLabel);
+                    const relSpan = createElement('span', { class: 'dark-text' });
+                    const relTime = createElement('relative-time', { datetime: updatedAt.toISOString() });
+                    relSpan.append(' (', relTime, ')');
+                    row1.append(bold, relSpan);
+
+                    // Formatted date and time
+                    const row2 = createElement('div', undefined, `${updatedAt.toLocaleDateString()} `);
+                    const timeSpan = createElement('span', { class: 'dark-text' }, updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                    row2.append(timeSpan);
+
+                    fragment.append(row1, row2);
+
+                    // Base model info
+                    if (isDifferentBase) {
+                        const row3 = createElement('div', { style: 'margin-block-start:.5em;' }, baseLabel);
+                        fragment.append(row3);
+                    }
+
+                    return fragment;
+                });
+            }
+
             if (version.publishedAt > CONFIG.minDateForNewBadge) button.classList.add('recently-updated');
             if (isActive) button.classList.add('active');
 
@@ -3621,7 +3701,8 @@ class Controller {
         });
         modelVersionsElements[0]?.setAttribute('tabindex', 0);
 
-        let fakeIndex = 0;
+        const activeVersionIndex = model.modelVersions.findIndex(v => v.id === modelVersion.id);
+        let fakeIndex = activeVersionIndex !== -1 ? activeVersionIndex : 0;
         const setFakeFocus = index => {
             modelVersionsWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
             modelVersionsElements[index].setAttribute('tabindex', 0);
@@ -3645,9 +3726,6 @@ class Controller {
         if (modelVersion.images?.length) {
             const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
             const previewImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-            // const rawImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
-            // const filteredImages = this.#filterImages(rawImages, { results: true });
-            // const previewImages = filteredImages.filter(it => it.ok).map(it => it.item);
             const generateMediaPreview = item => {
                 const media = item.data;
                 const element = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
@@ -3667,14 +3745,6 @@ class Controller {
                 return { id: media.id, data: media, aspectRatio: this.#round(media.width/media.height) };
             });
 
-            // Try to insert a picture from the previous page, if available
-            for (let i = 0; i < CONFIG.appearance.modelPage.carouselItemsCount; i++) {
-                const item = previewList[i];
-                if (!item?.element) break;
-                this.#genMediaPreviewFromPrevPage(item.element, item.id);
-            }
-
-
             const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
             const carousel = new InfiniteCarousel(previewList, {
                 gap: CONFIG.appearance.modelPage.carouselGap,
@@ -3687,6 +3757,13 @@ class Controller {
                 visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
             });
             modelPreviewWrap.appendChild(carousel.element);
+
+            // Try to insert a picture from the previous page, if available
+            for (let i = 0; i < CONFIG.appearance.modelPage.carouselItemsCount; i++) {
+                const element = carousel.getItemElementByIndex(i);
+                if (!element || !previewList[i]) break;
+                this.#genMediaPreviewFromPrevPage(element, previewList[i].id);
+            }
         }
 
         const mountDescription = (descriptionId, descriptionFragment, container) => {
@@ -3897,7 +3974,7 @@ class Controller {
                     .then(r => {
                         if (button) button.remove();
                         if (r === 'timeout') {
-                            indicator = this.genLoadingIndecator();
+                            indicator = this.genLoadingIndicator();
                             tagsBlock.appendChild(indicator);
                             return promise;
                         }
@@ -3945,6 +4022,9 @@ class Controller {
 
         // Full image
         const mediaElement = mediaGenerator(carouselItems[0] || { id: media.id, data: media });
+        if (media.type === 'video') {
+            playVideo(mediaElement, 'data-autoplay').catch(() => null);
+        }
         // Try to insert a picture from the previous page, if available
         this.#genMediaPreviewFromPrevPage(mediaElement, media.id);
 
@@ -3966,7 +4046,7 @@ class Controller {
         const videoSettings = loadVideoSettings();
 
         const setVolume = (video, fade = true) => {
-            if (!video) return;
+            if (!video || !video.isConnected) return;
             if (video._fadeTimer) clearInterval(video._fadeTimer);
 
             const { volume: targetVolume, muted: isMuted } = videoSettings;
@@ -3989,14 +4069,18 @@ class Controller {
             const startVolume = video.volume;
             const delta = Math.abs(targetVolume - startVolume);
 
-            if (delta === 0) return;
+            if (delta < 0.01) {
+                video.volume = targetVolume;
+                return;
+            }
 
             const steps = Math.max(1, Math.ceil(delta / step));
             const interval = duration / steps;
 
             video._fadeTimer = setInterval(() => {
-                if (!document.contains(video)) {
+                if (!video.isConnected || !document.contains(video)) {
                     clearInterval(video._fadeTimer);
+                    video._fadeTimer = null;
                     return;
                 }
 
@@ -4309,7 +4393,7 @@ class Controller {
                             ])
                             .then(r => {
                                 if (r === 'timeout') {
-                                    indicator = this.genLoadingIndecator();
+                                    indicator = this.genLoadingIndicator();
                                     repliesContainer.appendChild(indicator);
                                     return result;
                                 }
@@ -4356,7 +4440,7 @@ class Controller {
                 .then(r => {
                     if (button) button.remove();
                     if (r === 'timeout') {
-                        indicator = this.genLoadingIndecator();
+                        indicator = this.genLoadingIndicator();
                         container.appendChild(indicator);
                         return result;
                     }
@@ -4395,7 +4479,7 @@ class Controller {
         const REQUEST_MIN_INTERVAL = 1000;
         const REQUEST_MIN_DELAY = 6000;
         const REQUEST_BEFORE_DELAY = 3;
-        let lastRequestTimestumps = []; // 3 timestumps (x REQUEST_BEFORE_DELAY)
+        let lastRequestTimestamps = []; // 3 timestumps (x REQUEST_BEFORE_DELAY)
 
         const element = createElement('div', { class: 'cards-list' });
 
@@ -4433,10 +4517,10 @@ class Controller {
             const delay = Math.max(2000 * attempt * attempt, retryAfter) + Math.random() * 2000;
 
             const timerSpan = insertElement('span', errorBlock, { class: 'dark-text' }, `${attemptText} ${attempt} / ${maxAttempts} (`);
-            insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay + 500) });
+            insertElement('relative-time', timerSpan, { datetime: new Date(Date.now() + delay) });
             timerSpan.appendChild(document.createTextNode(')'));
 
-            insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay + 500}ms;` });
+            insertElement('div', errorBlock, { class: 'error-block-retry-bar', style: `--delay: ${delay}ms;` });
             setTimeout(() => callback(attempt), delay);
         };
 
@@ -4445,13 +4529,13 @@ class Controller {
 
             const pageNavigation = this.#pageNavigation;
             const now = Date.now();
-            lastRequestTimestumps = lastRequestTimestumps.filter(time => now - time < REQUEST_MIN_DELAY);
-            const lastRequestTime = lastRequestTimestumps[lastRequestTimestumps.length - 1] || 0;
+            lastRequestTimestamps = lastRequestTimestamps.filter(time => now - time < REQUEST_MIN_DELAY);
+            const lastRequestTime = lastRequestTimestamps[lastRequestTimestamps.length - 1] || 0;
             const timeSinceLastRequest = now - lastRequestTime;
             const intervalWaitTime = REQUEST_MIN_INTERVAL - timeSinceLastRequest;
             let windowWaitTime = 0;
-            if (lastRequestTimestumps.length >= REQUEST_BEFORE_DELAY) {
-                const oldestBurstTime = lastRequestTimestumps[0];
+            if (lastRequestTimestamps.length >= REQUEST_BEFORE_DELAY) {
+                const oldestBurstTime = lastRequestTimestamps[0];
                 windowWaitTime = REQUEST_MIN_DELAY - (now - oldestBurstTime);
             }
             const totalWaitTime = Math.max(intervalWaitTime, windowWaitTime);
@@ -4461,7 +4545,7 @@ class Controller {
                     resolve(loadMore(attempts));
                 }, totalWaitTime));
             }
-            lastRequestTimestumps.push(Date.now());
+            lastRequestTimestamps.push(Date.now());
 
             const result = loadItems({ cursor });
 
@@ -4505,9 +4589,9 @@ class Controller {
                 const loadMoreAttempt = () => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     const loadMoreTrigger = createElement('div', { id: 'load-more' });
-                    loadMoreTrigger.appendChild(Controller.genLoadingIndecator());
+                    loadMoreTrigger.appendChild(Controller.genLoadingIndicator());
                     element.appendChild(loadMoreTrigger);
-                    loadMore(attempts).finally(() => loadMoreTrigger.remove());
+                    loadMore(attempts + 1).finally(() => loadMoreTrigger.remove());
                 };
 
                 scheduleRetry({
@@ -4540,7 +4624,7 @@ class Controller {
             if (cursor) {
                 const pageNavigation = this.#pageNavigation;
                 const loadMoreTrigger = insertElement('div', element, { id: 'load-more' });
-                loadMoreTrigger.appendChild(Controller.genLoadingIndecator());
+                loadMoreTrigger.appendChild(Controller.genLoadingIndicator());
                 onTargetInViewport(loadMoreTrigger, () => {
                     if (pageNavigation !== this.#pageNavigation) return;
                     const promise = loadMore();
@@ -4720,6 +4804,7 @@ class Controller {
                 const retryAfter = Math.min(error.cause?.retry_after || 0, 360) * 1000;
                 const reloadAttempt = () => {
                     if (pageNavigation !== this.#pageNavigation) return;
+                    reloadAttempts++;
                     reload();
                 };
 
@@ -4851,6 +4936,7 @@ class Controller {
             const countHidden = { noMeta: 0, noPositivePrompt: 0, noNegativePrompt: 0, noResources: 0, badTags: 0, badUsers: 0, noTagIds: 0, _badTags: [] };
             const hiddenBefore = hiddenImages;
             const countAll = images.length;
+
             if (SETTINGS.hideImagesWithoutPositivePrompt || SETTINGS.hideImagesWithoutNegativePrompt || SETTINGS.hideImagesWithoutResources) {
                 images = images.filter(image => {
                     // For some reason the API started returning meta.meta...
@@ -4896,21 +4982,17 @@ class Controller {
             }
 
             if (SETTINGS.blackListUserIds.length) {
+                const userBlacklist = new Set(SETTINGS.blackListUserIds);
                 const countBefore = images.length;
-                images = images.filter(image => !SETTINGS.blackListUserIds.includes(image?.userId));
+                images = images.filter(image => image && !userBlacklist.has(image.userId));
                 if (images.length !== countBefore) countHidden.badUsers = countBefore - images.length;
             }
 
-            if (SETTINGS.blackListTagIds.length > 0 || SETTINGS.hideFurry || SETTINGS.hideExtreme || SETTINGS.hideGay) {
+            const imageFilters = this.#getActiveFilters('images');
+            if (imageFilters.length > 0) {
                 const countBefore = images.length;
-                const results = this.#filterImages(images, { results: true });
-                images = results.filter(r => r.ok).map(r => r.item);
-                if (countBefore !== images.length) {
-                    countHidden.badTags = countBefore - images.length;
-                    // const triggeredRules = results.filter(r => !r.ok);
-                    // countHidden._badTags = triggeredRules.map(r => ({ id: r.item?.id, rule: r.rule }));
-                    // this.#log('Triggered blacklist items', countHidden._badTags);
-                }
+                images = this.#filterImages(images, { filters: imageFilters });
+                if (countBefore !== images.length) countHidden.badTags = countBefore - images.length;
             }
 
             if (images.length < countAll) {
@@ -5021,7 +5103,7 @@ class Controller {
 
         if (infinityScroll.promise instanceof Promise) {
             const firstLoadingPlaceholder = insertElement('div', fragment, { id: 'load-more', style: 'position: absolute; width: 100%;' });
-            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndecator());
+            firstLoadingPlaceholder.appendChild(Controller.genLoadingIndicator());
             infinityScroll.promise.finally(() => firstLoadingPlaceholder.remove());
         }
 
@@ -5031,25 +5113,14 @@ class Controller {
     }
 
     static #filterImages(images, options) {
-        if (!options) options = { blackListTagIds: null, results: false };
-        if (!SETTINGS.blackListTagIds.length && !SETTINGS.hideFurry && !SETTINGS.hideExtreme && !SETTINGS.hideGay) return options.results ? images.map(it => ({ item: it, ok: true })) : images;
-        let blackListTagIds = options.blackListTagIds;
+        if (!options) options = { results: false, filters: null, compiledFilters: null };
 
-        if (!blackListTagIds) {
-            blackListTagIds = [...SETTINGS.blackListTagIds];
-            if (SETTINGS.hideFurry) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideFurry);
-            if (SETTINGS.hideExtreme) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideExtreme);
-            if (SETTINGS.hideGay) blackListTagIds = blackListTagIds.concat(...CONFIG.filters.tagBlacklistPresets.hideGay);
-            blackListTagIds = blackListTagIds.map(id => id.match(/[\+\-\|\&\?]/) ? id : `+${id}`);
-        }
+        let filters = options.filters;
+        if (!filters) filters = this.#getActiveFilters('images');
 
-        const result = filterItems(images, [
-            { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
-            SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.nsfwLevel >= 2 } : null,
-            // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
-        ], { results: options.results });
+        if (filters.length === 0) return images;
 
-        return result;
+        return filterItems(images, filters, { compiledRules: options.compiledFilters || null });
     }
 
     static #genStats(stats, hideEmpty = false) {
@@ -5159,17 +5230,14 @@ class Controller {
 
     static #analyzeModelDescription(description, cache) {
         const cacheDescriptionImages = cache?.descriptionImages ?? new Map();
+        const regexNotSpace = /\S/;
 
         // Remove garbage (empty elements, duplicates and all unnecessary things)
         description.querySelectorAll('p, h3, hr + hr').forEach(el => {
-            if (el.tagName === 'HR') {
-                el.remove();
-                return;
-            }
-            if (!el.children.length && !el.textContent.trim()) el.remove();
+            if (!el.firstElementChild && (!el.firstChild || !regexNotSpace.test(el.textContent))) el.remove();
         });
 
-        if (!description.children.length) {
+        if (!description.firstElementChild) {
             const text = description.textContent;
             description.textContent = '';
             if (text) insertElement('p', description, undefined, text);
@@ -5178,7 +5246,7 @@ class Controller {
 
         // Remove extra nesting (paragraph in list item is extra)
         description.querySelectorAll('li>p:only-child').forEach(p => {
-            p.replaceWith(...p.childNodes);
+            unwrapElement(p);
         });
 
         const headers = description.querySelectorAll('h1, h2, h3');
@@ -5187,7 +5255,7 @@ class Controller {
         headers.forEach(header => {
             const hText = header.textContent.trim();
             header.querySelectorAll('strong, u, em, b, i').forEach(el => {
-                if (el.textContent.trim() === hText) el.replaceWith(...el.childNodes);
+                if (el.textContent.trim() === hText) unwrapElement(el);
             });
         });
 
@@ -5222,7 +5290,7 @@ class Controller {
         // Remove bad styles (font family, font size)
         // Reduce unnecessary nesting and extra styles from empty (space-only) spans
         description.querySelectorAll('span').forEach(span => {
-            if (!span.textContent.trim().length) {
+            if (!regexNotSpace.test(span.textContent)) {
                 const rawText = span.textContent;
                 let rootToDelete = span;
 
@@ -5238,29 +5306,21 @@ class Controller {
                 return;
             }
 
-            if (span.hasAttribute('style')) {
+            const style = span.getAttribute('style');
+            if (style && style.includes('font')) {
                 const s = span.style;
-                if (s.fontSize) s.removeProperty('font-size');
-                if (s.fontFamily) s.removeProperty('font-family');
-                if (s.fontWeight) s.removeProperty('font-weight');
+                s.removeProperty('font-size');
+                s.removeProperty('font-family');
+                s.removeProperty('font-weight');
+                if (!s.length) span.removeAttribute('style');
             }
         });
 
         // useless wrappers
         description.querySelectorAll('span, strong, b, i, em, u, small, mark, sub, sup').forEach(el => {
-            const meaningfulNodes = [...el.childNodes].filter(n => !(n.nodeType === Node.TEXT_NODE && !n.textContent.trim()));
-
-            // <em><br></em> (new line)
-            if (meaningfulNodes.length === 1 && meaningfulNodes[0].nodeName === 'BR') {
-                el.replaceWith(...el.childNodes);
-                return;
-            }
-
-            // <em> </em> (spaces)
-            if (!el.textContent.trim()) {
-                if (el.childNodes.length) el.replaceWith(...el.childNodes);
+            if (!regexNotSpace.test(el.textContent)) {
+                if (el.firstChild) unwrapElement(el);
                 else el.remove();
-                return;
             }
         });
 
@@ -5278,7 +5338,7 @@ class Controller {
                 parent.replaceWith(current);
             }
 
-            let src = img.getAttribute('src');
+            let src = img.getAttribute('src') || '';
             img.removeAttribute('src');
             img.setAttribute('decoding', 'async');
 
@@ -5374,7 +5434,7 @@ class Controller {
             let node = root.firstChild;
             while (node) {
                 if (node.nodeType === 3) { // Node.TEXT_NODE
-                    if (node.textContent?.trim()) return node;
+                    if (regexNotSpace.test(node.nodeValue)) return node;
                 } else if (node.nodeType === 1) { // Node.ELEMENT_NODE
                     const nested = findFirstNonEmptyTextNode(node);
                     if (nested) return nested;
@@ -5383,7 +5443,6 @@ class Controller {
             }
             return null;
         };
-        const regexNotSpace = /\S/;
         const linkPreviewOriginal = getIcon('civitai');
         linkPreviewOriginal.classList.add('link-preview-position');
         const setLinkPreview = a => {
@@ -5510,7 +5569,7 @@ class Controller {
 
         // Remove underscores that are too large (they don't make sense if they're on multiple lines)
         description.querySelectorAll('u').forEach(u => {
-            if (u.textContent.length >= 40) u.replaceWith(...u.childNodes);
+            if (u.textContent.length >= 40) unwrapElement(u);
         });
 
         // Try to fix the incorrect formatting of the code block
@@ -6530,6 +6589,8 @@ class Controller {
     }
 
     static #formatModelVersionName(modelVersionName) {
+        if (!modelVersionName) return document.createTextNode('');
+
         const fragment = document.createDocumentFragment();
         let matched = false;
 
@@ -6544,39 +6605,42 @@ class Controller {
             buffer = '';
         };
 
-        while (i < modelVersionName.length) {
+        for (let i = 0; i < modelVersionName.length; i++) {
             const char = modelVersionName[i];
 
             if (char === '[' || char === '(') {
                 pushBuffer();
                 stack.push({ type: char, content: '' });
             } else if (
-                (char === ']' && stack.length && stack[stack.length - 1].type === '[') ||
-                (char === ')' && stack.length && stack[stack.length - 1].type === '(')
+                (char === ']' && stack.length > 0 && stack[stack.length - 1].type === '[') ||
+                (char === ')' && stack.length > 0 && stack[stack.length - 1].type === '(')
             ) {
                 pushBuffer();
                 const stackItem = stack.pop();
                 if (stack.length === 0) {
-                    if (stackItem.type === '[') insertElement('strong', fragment, undefined, `[${stackItem.content}]`);
-                    else insertElement('em', fragment, undefined, `(${stackItem.content})`);
+                    const tag = stackItem.type === '[' ? 'strong' : 'em';
+                    const open = stackItem.type;
+                    const close = char;
+                    insertElement(tag, fragment, undefined, `${open}${stackItem.content}${close}`);
                     matched = true;
                 } else {
-                    stack[stack.length - 1].content += (stackItem.type === '[' ? '[' : '(') + stackItem.content + char;
+                    const open = stackItem.type;
+                    stack[stack.length - 1].content += `${open}${stackItem.content}${char}`;
                 }
             } else {
                 buffer += char;
             }
-
-            i++;
         }
 
         pushBuffer();
 
         while (stack.length > 0) {
-            const { type, content } = stack.shift();
-            const open = type;
-            const close = type === '[' ? ']' : ')';
-            fragment.appendChild(document.createTextNode(open + content + close));
+            const item = stack.pop();
+            const close = item.type === '[' ? ']' : ')';
+            const restoredText = item.type + item.content + close;
+
+            if (stack.length === 0) fragment.appendChild(document.createTextNode(restoredText));
+            else stack[stack.length - 1].content += restoredText;
         }
 
         return matched ? fragment : document.createTextNode(modelVersionName);
@@ -6856,8 +6920,8 @@ class Controller {
                 let availabilityBadge = null;
                 if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
                 else {
-                    if (model.modelUpdatedRecently === undefined) model.modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
-                    if (model.modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
+                    if (model._modelUpdatedRecently === undefined) model._modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
+                    if (model._modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
                 }
                 if (availabilityBadge) {
                     const badge = insertElement('div', cardContentTop, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
@@ -6865,9 +6929,9 @@ class Controller {
                     if (modelVersion.availability === 'EarlyAccess' && modelVersion.earlyAccessDeadline) {
                         date = new Date(modelVersion.earlyAccessDeadline);
                         modelName = modelVersion.name;
-                    } else if (modelVersion.availability === 'Public' && model.modelUpdatedRecently) {
-                        date = new Date(model.modelUpdatedRecently.publishedAt ?? model.modelUpdatedRecently.createdAt);
-                        modelName = model.modelUpdatedRecently.name;
+                    } else if (modelVersion.availability === 'Public' && model._modelUpdatedRecently) {
+                        date = new Date(model._modelUpdatedRecently.publishedAt ?? model._modelUpdatedRecently.createdAt);
+                        modelName = model._modelUpdatedRecently.name;
                     }
                     if (date) {
                         const updatedAtISO = date.toISOString();
@@ -6914,7 +6978,7 @@ class Controller {
     ];
 
     static #genModelCard(model, options) {
-        // Note: Adds a "modelUpdatedRecently" field to the model object
+        // Note: Adds a "_modelUpdatedRecently" field to the model object
         const ctx = { data: model, ...options };
         this.#genModelCardProgressive.forEach(step => step.generator(ctx));
         return ctx.card;
@@ -7118,11 +7182,34 @@ class Controller {
             return createElement('span', undefined, 'Invalid Date');
         }
 
+        const tooltipGenerator = () => {
+            const fragment = document.createDocumentFragment();
 
-        const tooltip = sorted.map((d, i) =>  `<div style="margin-block-start:.5em"><div><b>${window.languagePack?.text?.[d.label] || d.label}</b>${` <span class="dark-text">(<relative-time datetime="${d.date.toISOString()}"></relative-time>)</span>`}</div><div>${formatDate(d.date)} <span class="dark-text">${formatTime(d.date)}</span></div></div>`).join('');
+            for (const d of sorted) {
+                const itemDiv = createElement('div', { style: 'margin-block-start:.5em' });
+
+                const topDiv = createElement('div');
+                const bold = createElement('b', undefined, window.languagePack?.text?.[d.label] || d.label);
+                const relTimeSpan = createElement('span', { class: 'dark-text' });
+                const relTimeEl = createElement('relative-time', { datetime: d.date.toISOString() });
+                relTimeSpan.append(' (', relTimeEl, ')');
+                topDiv.append(bold, relTimeSpan);
+
+                const bottomDiv = createElement('div', undefined, `${formatDate(d.date)} `);
+                const timeSpan = createElement('span', { class: 'dark-text' }, formatTime(d.date));
+                bottomDiv.append(timeSpan);
+
+                itemDiv.append(topDiv, bottomDiv);
+                fragment.appendChild(itemDiv);
+            }
+            
+            return fragment;
+        };
 
         if (typeof minDiffMs !== 'number' || sorted.length === 1) {
-            return createElement('relative-time', { 'lilpipe-text': tooltip, datetime: sorted[0].date.toISOString() });
+            const relativeTime = createElement('relative-time', { datetime: sorted[0].date.toISOString() });
+            assignDynamicLilpipe(relativeTime, tooltipGenerator);
+            return relativeTime;
         }
 
         const first = sorted[0];
@@ -7130,10 +7217,13 @@ class Controller {
         const diff = first.date - last.date;
 
         if (diff < minDiffMs || timeAgoSameBucket(last.date, first.date)) {
-            return createElement('relative-time', { 'lilpipe-text': tooltip, datetime: first.date.toISOString() });
+            const relativeTime = createElement('relative-time', { datetime: first.date.toISOString() });
+            assignDynamicLilpipe(relativeTime, tooltipGenerator);
+            return relativeTime;
         }
 
-        const wrapper = createElement('span', { class: 'relative-time-multi', 'lilpipe-text': tooltip });
+        const wrapper = createElement('span', { class: 'relative-time-multi' });
+        assignDynamicLilpipe(wrapper, tooltipGenerator);
         const firstEl = createElement('relative-time', { datetime: first.date.toISOString() });
         const secondWrap = createElement('span', { class: 'relative-time-secondary' });
         const secondEl = createElement('relative-time', { datetime: last.date.toISOString() });
@@ -7222,11 +7312,18 @@ class Controller {
 
             // Force the poster to be resized to what the server should return anyway (it doesn't always return the correct size)
             if (!resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${realWidth}&quality=.84&format=webp`;
-            const poster = src = `${source.replace(this.#regex.urlEndsOnMp4, '.jpeg')}${paramString}`;
+
+            const posterBaseRaw = source.replace(this.#regex.urlEndsOnMp4, '.jpeg');
+            const posterBase = original ? posterBaseRaw.replace('/original=true/', '/anim=false,transcode=true,optimized=true/') : posterBaseRaw;
+            let poster = src = `${posterBase}${paramString}`;
+
+            if (this.#cache.badPosters.has(posterBase)) {
+                poster = src = '';
+            }
 
             mediaContainer.setAttribute('data-src', videoSrc);
             mediaContainer.setAttribute('data-poster', poster);
-            mediaContainer.setAttribute('data-timestump', 0);
+            mediaContainer.setAttribute('data-timestamp', 0);
             if (playsinline) mediaContainer.setAttribute('data-playsinline', true);
             if (controls) mediaContainer.setAttribute('data-controls', true);
 
@@ -7259,22 +7356,22 @@ class Controller {
         const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]:not([data-resize])`); // The resizing animation seems extremely unpleasant and out of place
         // const mediaOriginal = this.appElement.querySelector(`.media-container[data-id="${mediaId}"]`);
         let previewImageOriginal = mediaOriginal?.querySelector(`.media-element`);
-        if (!(previewImageOriginal instanceof HTMLElement)) return;
+        if (!(previewImageOriginal instanceof HTMLElement)) return Promise.resolve();
 
         const fullMedia = mediaElement.querySelector('.media-element');
-        const isImage = fullMedia?.tagName === 'IMG';
-        if (!fullMedia) return;
+        if (!fullMedia) return Promise.resolve();
 
+        const isImage = fullMedia.tagName === 'IMG';
         const resized = mediaOriginal.getAttribute('data-resize')?.split(':').map(c => +c);
 
-        let timestump = 0;
+        let timestamp = 0;
         if (mediaElement.classList.contains('media-video')) {
-            timestump = +(
+            timestamp = +(
                 previewImageOriginal instanceof HTMLVideoElement
                 ? previewImageOriginal.currentTime
-                : mediaOriginal.getAttribute('data-timestump')
+                : mediaOriginal.getAttribute('data-timestamp')
             ) || 0;
-            mediaElement.setAttribute('data-timestump', timestump);
+            mediaElement.setAttribute('data-timestamp', timestamp);
         }
 
         if (previewImageOriginal.tagName === 'VIDEO') {
@@ -7283,8 +7380,8 @@ class Controller {
             previewImageOriginal = mediaOriginal.querySelector(`.media-element`);
         }
 
-        const previewImage = (previewImageOriginal?.cloneNode(true));
-        if (!(previewImage instanceof HTMLElement)) return;
+        const previewImage = previewImageOriginal?.cloneNode(true);
+        if (!(previewImage instanceof HTMLElement)) return Promise.resolve();
 
         previewImage.classList.add('media-preview-image');
         previewImage.setAttribute('inert', '');
@@ -7294,18 +7391,26 @@ class Controller {
         previewWrap.appendChild(previewImage);
         if (previewImage instanceof HTMLVideoElement) {
             if (!previewImage.paused) previewImage.pause();
-            if (timestump) previewImage.currentTime = timestump;
-        } else if (previewImage instanceof HTMLCanvasElement) {
+            if (timestamp) previewImage.currentTime = timestamp;
+            if (!previewImage.hasAttribute('src')) return Promise.resolve();
+        } else if (previewImage instanceof HTMLImageElement) {
+            if (!previewImage.hasAttribute('src')) return Promise.resolve();
+        } else if (previewImage instanceof HTMLCanvasElement && previewImageOriginal instanceof HTMLCanvasElement) {
+            previewImage.width = previewImageOriginal.width;
+            previewImage.height = previewImageOriginal.height;
             const ctx = previewImage.getContext('2d');
-            // hide this ts fake-error
-            ctx.drawImage(/** @type {HTMLCanvasElement} */ (previewImageOriginal), 0, 0 );
+            ctx.drawImage(previewImageOriginal, 0, 0);
         }
-        previewWrap.appendChild(Controller.genLoadingIndecator());
 
-        let isReady = false, onReady = null, loadingStart = Date.now();
+        previewWrap.appendChild(Controller.genLoadingIndicator());
+
+        let isReady = false, onReady = null;
+        const loadingStart = Date.now();
+
         const onFullMediaReady = () => {
             if (isReady) return;
             isReady = true;
+
             const isInstant = Date.now() - loadingStart <= 10;
             requestAnimationFrame(() => {
                 if (isInstant) {
@@ -7337,26 +7442,50 @@ class Controller {
                     easing: 'ease'
                 }).then(() => previewWrap.remove());
             });
-            // onReady?.();
+            onReady?.();
         };
+
         const waitForReady = () => {
             if (!mediaElement.contains(fullMedia)) {
                 onFullMediaReady();
                 return;
             }
 
+            let posterImg = null, timeoutId = null;
+
             const cleanup = () => {
+                if (timeoutId) clearTimeout(timeoutId);
+                fullMedia.removeEventListener('error', onload);
                 fullMedia.removeEventListener('load', onload);
                 fullMedia.removeEventListener('canplay', onload);
+                if (posterImg) {
+                    posterImg.removeEventListener('load', onload);
+                    posterImg.removeEventListener('error', onload);
+                    posterImg = null;
+                }
                 observer.disconnect();
             };
-            const onload = () => {
+            const onload = e => {
                 cleanup();
-                let promise;
-                if (isImage && mediaElement.contains(fullMedia)) promise = fullMedia.decode?.().catch(() => {});
-                if (promise) promise.finally(onFullMediaReady);
-                else onFullMediaReady();
+
+                if (e && e.type === 'error') {
+                    onFullMediaReady();
+                    return;
+                }
+
+                if (isImage && mediaElement.contains(fullMedia)) {
+                    fullMedia.decode?.().catch(() => {}).finally(onFullMediaReady);
+                } else {
+                    onFullMediaReady();
+                }
             }
+
+            // Force fallback if loading takes longer than 5 seconds
+            timeoutId = setTimeout(() => {
+                console.log('Preview hidden - timeout.');
+                cleanup();
+                onFullMediaReady();
+            }, 8000);
 
             // This is necessary because the image can be replaced with a video when it is ready
             const observer = new MutationObserver(() => {
@@ -7368,6 +7497,9 @@ class Controller {
 
             observer.observe(mediaElement, { childList: true, subtree: false });
 
+            // Error handling
+            fullMedia.addEventListener('error', onload, { once: true });
+
             // There is always an image here, because mediaElement no longer creates videos, they are created elsewhere when they hit the screen
             if (!isImage) {
                 if (fullMedia.readyState >= 3) return onload();
@@ -7375,8 +7507,9 @@ class Controller {
                 // since the video may have preload=none, need to track at least the loading of the poster
                 const posterUrl = fullMedia.poster;
                 if (posterUrl) {
-                    const posterImg = new Image();
+                    posterImg = new Image();
                     posterImg.addEventListener('load', onload, { once: true });
+                    posterImg.addEventListener('error', onload, { once: true });
                     posterImg.src = posterUrl;
                 }
 
@@ -7384,7 +7517,7 @@ class Controller {
                 return;
             }
 
-            if (!mediaElement.classList.contains('media-video') || !timestump) {
+            if (!mediaElement.classList.contains('media-video') || !timestamp) {
                 if (fullMedia.complete && fullMedia.naturalWidth !== 0) onload();
                 else fullMedia.addEventListener('load', onload, { once: true });
                 return;
@@ -7395,18 +7528,18 @@ class Controller {
 
             // Start and stop the video to get the correct frame if autoplay is off
             observer.disconnect();
-            return playVideo(mediaElement, 'data-autoplay').then(() => {
-                pauseVideo(mediaElement, 'data-autoplay');
-                onload();
-            });
+            return playVideo(mediaElement, 'data-autoplay')
+            .then(() => pauseVideo(mediaElement, 'data-autoplay'))
+            .catch(() => null)
+            .finally(() => onload());
         };
 
         mediaElement.prepend(previewWrap);
         waitForReady();
 
-        // return new Promise(resolve => {
-        //     onReady = resolve;
-        // });
+        return new Promise(resolve => {
+            onReady = resolve;
+        });
     }
 
     static #genArticlesListFilters(onAnyChange, options = {}) {
@@ -7422,7 +7555,7 @@ class Controller {
             },
             period_articles ? { type: 'list',
                 key: 'period_articles',
-                label: window.languagePack?.text?.period ?? 'Pediod',
+                label: window.languagePack?.text?.period ?? 'Period',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
             } : null,
@@ -7504,7 +7637,7 @@ class Controller {
             },
             period_images ? { type: 'list',
                 key: 'period_images',
-                label: window.languagePack?.text?.period ?? 'Pediod',
+                label: window.languagePack?.text?.period ?? 'Period',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
             } : null,
@@ -7576,7 +7709,7 @@ class Controller {
             },
             period ? { type: 'list',
                 key: 'period',
-                label: window.languagePack?.text?.period ?? 'Pediod',
+                label: window.languagePack?.text?.period ?? 'Period',
                 options: this.#listFilters.periodOptions,
                 labels: this.#listFilters.genLabels(this.#listFilters.periodOptions, 'periodOptions')
             } : null,
@@ -7672,7 +7805,7 @@ class Controller {
     }
 
     // TODO: not boring loading indicator
-    static genLoadingIndecator() {
+    static genLoadingIndicator() {
         const indicator = createElement('div', { class: 'media-loading-indicator' });
         return indicator;
     }
@@ -7797,10 +7930,10 @@ class Controller {
         const list = {};
         const listElements = {};
         options.forEach(key => list[key] = labels[key] ?? key);
-        let listVisible = false, focusIndex = 0, displayedList = [], forceReturnFocus = false, isClicking = false;
+        let listVisible = false, focusIndex = 0, displayedList = [], isClicking = false;
 
         const selectedOptionElement = insertElement('div', element, { class: 'list-selected' }, label ? `${label}: ` : '');
-        const searchInput = insertElement('input', element, { type: 'text', class: 'list-search', hidden: '' });
+        const searchInput = insertElement('input', element, { type: 'text', class: 'list-search hidden', hidden: '' });
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
         const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
@@ -7840,7 +7973,7 @@ class Controller {
 
         const searchForText = (q = '') => {
             q = normalizeTag(q);
-            searchInput.toggleAttribute('hidden', !q);
+            searchInput.classList.toggle('hidden', !q);
             const currentIndex = listElements[displayedList[focusIndex]]?.index ?? null;
             if (q) {
                 displayedList = Object.keys(listElements).filter(key => {
@@ -7888,6 +8021,18 @@ class Controller {
             if (focusIndex < 0) focusIndex = 0;
             if (currentIndex !== null && currentIndex !== listElements[displayedList[focusIndex]]?.index) setFakeFocus();
         };
+        let pendingSearchText = '', pendingSearchFrame = null;
+        const searchForTextInFrame = (q = '') => {
+            pendingSearchText = q;
+
+            if (pendingSearchFrame) return;
+
+            pendingSearchFrame = requestAnimationFrame(() => {
+                pendingSearchFrame = null;
+                searchForText(pendingSearchText);
+                pendingSearchText = '';
+            });
+        };
         const scrollToOption = option => optionsListElement.scrollTo({ top: option.offsetTop - optionsListElement.offsetHeight/2 + option.offsetHeight/2 });
         const setFakeFocus = () => {
             const key = displayedList[focusIndex];
@@ -7901,6 +8046,7 @@ class Controller {
             selectedOptionElement.classList.add('list-visible');
             if (!isClicking) selectedOptionElement.classList.add('keyboard-focus');
             searchInput.value = '';
+            searchInput.removeAttribute('hidden');
             optionsListElement.querySelector('.option-focus')?.classList.remove('option-focus');
             searchForText();
             if (listElements[currentValue]) scrollToOption(listElements[currentValue].element);
@@ -7908,16 +8054,12 @@ class Controller {
             isClicking = false;
         };
         const onfocusout = e => {
-            if (forceReturnFocus) {
-                forceReturnFocus = false;
-                searchInput.focus();
-                return;
-            }
             if (!listVisible) return;
             optionsListElement.classList.remove('list-visible');
             selectedOptionElement.classList.remove('list-visible');
             selectedOptionElement.classList.remove('keyboard-focus');
             searchInput.setAttribute('hidden', '');
+            searchInput.classList.add('hidden');
             listVisible = false;
             isClicking = false;
         };
@@ -7941,9 +8083,9 @@ class Controller {
             } else if (e.code === 'Escape') {
                 element.blur();
                 onfocusout(e);
-            } else forceReturnFocus = Boolean(e.code === 'Backspace');
+            }
         };
-        const oninput = () => searchForText(searchInput.value);
+        const oninput = () => searchForTextInFrame(searchInput.value);
         const onclick = e => {
             const key = e.target.closest('.list-option[data-option]')?.getAttribute('data-option');
             if (key) {
@@ -8012,6 +8154,51 @@ class Controller {
         return { element, setValue };
     }
 
+    static #getActiveFilters(target) {
+        // skip filtering if all disabled
+        if (SETTINGS.blackListTagIds.length === 0 && !SETTINGS.hideFurry && !SETTINGS.hideExtreme && !SETTINGS.hideGay) return [];
+
+        const regexHasOperators =  /[\+\-\|\&\?]/;
+        const normalizeTagId = id => regexHasOperators.test(id) ? id : `+${id}`;
+
+        const blackListTagIds = SETTINGS.blackListTagIds.map(id => normalizeTagId(id));
+        if (SETTINGS.hideFurry) {
+            for (const rule of CONFIG.filters.tagBlacklistPresets.hideFurry) blackListTagIds.push(normalizeTagId(rule));
+        }
+        if (SETTINGS.hideExtreme) {
+            for (const rule of CONFIG.filters.tagBlacklistPresets.hideExtreme) blackListTagIds.push(normalizeTagId(rule));
+        }
+        if (SETTINGS.hideGay) {
+            for (const rule of CONFIG.filters.tagBlacklistPresets.hideGay) blackListTagIds.push(normalizeTagId(rule));
+        }
+
+        switch (target) {
+            case 'images':
+                return [
+                    { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
+                    SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.nsfwLevel >= 2 } : null,
+                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                ];
+
+            case 'models':
+                return [
+                    { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
+                    SETTINGS.blackListTags.length ? { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) } : null,
+                    // { key: 'modelVersions.0.images.0.tagIds', conditions: blackListTagIds, type: 'number' } // filtered in separated pass for images
+                ]
+
+            case 'articles':
+                return [
+                    { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
+                    { key: 'coverImage.tagIds', conditions: blackListTagIds, type: 'number' },
+                    SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
+                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                ];
+
+            default: return [];
+        }
+    }
+
     static #getNearestServerSize(size) {
         // The server can return any requested height and only limits the width to a set of values
         // Anything above 2200 width is returned by the server at the requested width
@@ -8059,11 +8246,17 @@ class Controller {
         document.title = mainContent ? `${mainContent} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
     }
 
+    static markVideoMediaAsBad(url) {
+        this.#cache.badPosters.add(url);
+    }
+
+    // TODO: Implementing this correctly, updating the history every half a second is not correct, but simply waiting for the scroll to complete is also wrong.
+    // (navigating through the history or clicking on links directly during or immediately after scrolling)
     static #saveStateTimer = null;
     static #saveStateRequestTime = null;
     static #saveStateRequestId = null;
     static #saveStateThrottle() {
-        const DELAY = 400;
+        const DELAY = 500;
 
         this.#saveStateRequestTime = Date.now();
         this.#saveStateRequestId = this.#state.id;
@@ -8235,7 +8428,7 @@ const videPlaybackObservedElements = new Set();
 const videPlaybackObserver = new IntersectionObserver(entries => {
     entries.forEach(entry => {
         const mediaContainer = entry.target;
-        if (entry.isIntersecting) playVideo(mediaContainer, 'data-autoplay');
+        if (entry.isIntersecting) playVideo(mediaContainer, 'data-autoplay').catch(() => null);
         else pauseVideo(mediaContainer, 'data-autoplay');
     });
 }, { threshold: .35 });
@@ -8354,6 +8547,11 @@ function onMessage(e) {
     //     return;
     // }
 
+    if (action === 'video-on-image-request-critical') {
+        processVideoOnImageRequest(data);
+        return;
+    }
+
     if (action === 'generate-video-poster') {
         processGenerateVideoPosterRequest(data);
         return;
@@ -8377,6 +8575,10 @@ async function processGenerateVideoPosterRequest(data) {
             }
         });
     }
+}
+
+async function processVideoOnImageRequest(data) {
+    if (data.url) Controller.markVideoMediaAsBad(data.url);
 }
 
 
@@ -8418,23 +8620,33 @@ function getIcon(name, original = false) {
  * - AND is implicit between blocks
  * - Only '|' is allowed inside a block
  */
-function filterItems(items, rules, options = { results: false }) {
-    if (!Array.isArray(items) || items.length === 0) return [];
-    if (!Array.isArray(rules) || rules.length === 0) return items;
-
-    const getValueByPath = (obj, path) => {
-        let cur = obj;
-        for (let i = 0; i < path.length && cur != null; i++) {
-            cur = cur[path[i]];
-        }
-        return cur;
-    };
+function compileFilterItemsRules(rules) {
+    if (!Array.isArray(rules) || rules.length === 0) return [];
 
     const blocksRegex = /[+\-][^+\-]+/g;
-    const compiledRules = rules.map((rule, ruleIndex) => {
+
+    return rules.map((rule, ruleIndex) => {
         if (!rule || !Array.isArray(rule.conditions)) return null;
 
         const parseTag = rule.type === 'number' ? v => Number(v) : v => String(v);
+
+        // Pre-compile property accessor
+        let getValue;
+        const path = rule.path || (rule.key.includes('.') ? rule.key.split('.') : null);
+        
+        if (path) {
+            if (path.length === 1) getValue = item => item?.[path[0]];
+            else if (path.length === 2) getValue = item => item?.[path[0]]?.[path[1]];
+            else if (path.length === 3) getValue = item => item?.[path[0]]?.[path[1]]?.[path[2]];
+            else getValue = item => {
+                let cur = item;
+                for (let i = 0; i < path.length && cur != null; i++) cur = cur[path[i]];
+                return cur;
+            };
+        } else {
+            const key = rule.key;
+            getValue = item => item?.[key];
+        }
 
         const conditionMatchers = rule.conditions.map(conditionStr => {
             const blocks = conditionStr.match(blocksRegex);
@@ -8448,90 +8660,101 @@ function filterItems(items, rules, options = { results: false }) {
                 const tags = content.split('|').filter(Boolean).map(parseTag);
                 if (tags.length === 0) return null;
 
-                let check;
-                if (tags.length === 1) {
-                    const tag = tags[0];
-                    if (prefix === '+') check = itemTags => itemTags.includes(tag);
-                    else if (prefix === '-') check =  itemTags => !itemTags.includes(tag);
-                } else {
-                    if (prefix === '+') check = itemTags => tags.some(tag => itemTags.includes(tag));
-                    else if (prefix === '-') check = itemTags => !tags.some(tag => itemTags.includes(tag));
-                }
+                const tagSet = new Set(tags);
+                const isPlus = prefix === '+';
+                const singleTag = tags[0];
+                const isSingle = tags.length === 1;
 
-                if (!check) {
-                    console.warn('Bad rule block', block);
-                    return null;
-                }
+                // Allocation-free block matcher
+                return (rawTags) => {
+                    if (rawTags == null) return !isPlus;
 
-                return { raw: block, prefix, tags, check };
+                    // Handle array of tags on the item
+                    if (Array.isArray(rawTags)) {
+                        const len = rawTags.length;
+                        if (len === 0) return !isPlus;
+
+                        if (isPlus) {
+                            if (isSingle) return rawTags.includes(singleTag);
+                            for (let i = 0; i < len; i++) {
+                                if (tagSet.has(rawTags[i])) return true;
+                            }
+                            return false;
+                        } else {
+                            if (isSingle) return !rawTags.includes(singleTag);
+                            for (let i = 0; i < len; i++) {
+                                if (tagSet.has(rawTags[i])) return false;
+                            }
+                            return true;
+                        }
+                    }
+
+                    // Handle primitive value (string/number)
+                    return isPlus ? tagSet.has(rawTags) : !tagSet.has(rawTags);
+                };
             }).filter(Boolean);
 
             if (parsedBlocks.length === 0) return null;
 
-            return {
-                raw: conditionStr,
-                blocks: parsedBlocks,
-                check(itemTags) {
-                    const failedBlocks = [];
+            const numBlocks = parsedBlocks.length;
 
-                    for (const block of parsedBlocks) {
-                        if (!block.check(itemTags)) failedBlocks.push(block);
-                    }
-
-                    return {
-                        // AND between blocks
-                        ok: failedBlocks.length === 0,
-                        failedBlocks
-                    };
+            // AND evaluation between blocks inside one condition
+            return function checkCondition(rawTags) {
+                for (let i = 0; i < numBlocks; i++) {
+                    if (!parsedBlocks[i](rawTags)) return false;
                 }
+                return true;
             };
         }).filter(Boolean);
 
-        if (conditionMatchers.length === 0) {
-            console.warn('Bad filter rule', rule);
-            return null;
-        }
+        if (conditionMatchers.length === 0) return null;
+
+        const numMatchers = conditionMatchers.length;
+        const shouldApply = typeof rule.shouldApply === 'function' ? rule.shouldApply : null;
 
         return {
-            key: rule.key,
             index: ruleIndex,
-            path: rule.key.includes('.') ? rule.key.split('.') : null,
-            conditionMatchers,
-            shouldApply: typeof rule.shouldApply === 'function' ? rule.shouldApply : () => true
+            // Returns true if item matches filter condition (item should be hidden)
+            isMatch(item) {
+                if (shouldApply && !shouldApply(item)) return false;
+
+                const rawTags = getValue(item);
+
+                // OR evaluation between condition strings
+                for (let i = 0; i < numMatchers; i++) {
+                    if (conditionMatchers[i](rawTags)) return true;
+                }
+                return false;
+            }
         };
     }).filter(Boolean);
+}
 
-    const requireAll = options.results ?? false;
+function filterItems(items, rules, options) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const compiledRules = (options && options.compiledRules) ? options.compiledRules : compileFilterItemsRules(rules);
+
+    if (!compiledRules || compiledRules.length === 0) return items;
+
+    const numRules = compiledRules.length;
+    const numItems = items.length;
     const result = [];
-    for(const item of items) {
-        const matchInfo = [];
-        const isFilteredOut = compiledRules.some(rule => {
-            if (!rule.shouldApply(item)) return false;
 
-            const rawTags = rule.path ? getValueByPath(item, rule.path) : item[rule.key];
-            const tags = Array.isArray(rawTags) ? rawTags : rawTags != null ? [rawTags] : [];
+    for (let i = 0; i < numItems; i++) {
+        const item = items[i];
+        let isFilteredOut = false;
 
-            // OR between condition strings
-            for (let i = 0; i < rule.conditionMatchers.length; i++) {
-                const condition = rule.conditionMatchers[i];
-                const res = condition.check(tags);
-
-                if (res.ok) {
-                    matchInfo.push({
-                        ruleIndex: rule.index,
-                        key: rule.key,
-                        condition: condition.raw,
-                        matchedBlocks: res.failedBlocks.map(b => b.raw)
-                    });
-                    return true;
-                }
+        for (let r = 0; r < numRules; r++) {
+            if (compiledRules[r].isMatch(item)) {
+                isFilteredOut = true;
+                break;
             }
-            return false;
-        });
+        }
 
-        if (requireAll) {
-            result.push({ item, ok: !isFilteredOut, rule: isFilteredOut ? matchInfo : null });
-        } else if (!isFilteredOut) result.push(item);
+        if (!isFilteredOut) {
+            result.push(item);
+        }
     }
 
     return result;
@@ -8698,16 +8921,14 @@ function onBodyPointerOver(e) {
     // tooltips
     const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     if (lilpipe) {
-        e.eventTarget = lilpipe;
-        return startLilpipeEvent(e);
+        return startLilpipeEvent(e, { target: lilpipe });
     }
 
     // link previews
     if (e.altKey) {
         const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
         if (preview) {
-            e.eventTarget = preview;
-            return startLinkPreviewEvent(e);
+            return startLinkPreviewEvent(e, { target: preview });
         }
     }
 
@@ -8724,15 +8945,13 @@ function onBodyFocus(e) {
     // tooltips
     const lilpipe = e.target.closest('[lilpipe-text]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     if (lilpipe) {
-        e.eventTarget = lilpipe;
-        return startLilpipeEvent(e, { fromFocus: true });
+        return startLilpipeEvent(e, { fromFocus: true, target: lilpipe });
     }
 
     // link previews
     // const preview = e.target.closest('[data-link-preview]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
     // if (preview) {
-    //     e.eventTarget = preview;
-    //     return startLinkPreviewEvent(e, { fromFocus: true });
+    //     return startLinkPreviewEvent(e, { fromFocus: true, target: preview });
     // }
 
     // videos
@@ -9072,34 +9291,40 @@ function onDragleave(e) {
 }
 
 function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
-    if (mediaContainer.hasAttribute(attrCheck)) return;
+    if (mediaContainer.hasAttribute(attrCheck)) return Promise.reject();
     mediaContainer.setAttribute(attrCheck, '');
 
     const src = mediaContainer.getAttribute('data-src');
-    const timestump = mediaContainer.getAttribute('data-timestump');
+    const timestamp = mediaContainer.getAttribute('data-timestamp');
 
-    const video = createElement('video', { class: 'media-element',  muted: '', loop: '', draggable: 'true' });
+    if (mediaContainer.querySelector('video')) return Promise.reject();
+
+    const video = createElement('video', { class: 'media-element', draggable: 'true' });
     if (!SETTINGS.disableCrossorigin) video.setAttribute('crossorigin', 'anonymous');
-    video.volume = 0;
-    video.muted = true;
+    video.volume = Number(mediaContainer.getAttribute('data-volume')) || 0;
+    video.muted = mediaContainer.getAttribute('data-muted') !== 'false';
+    video.playbackRate = Number(mediaContainer.getAttribute('data-playback-rate')) || 1;
     video.loop = true;
-    if (mediaContainer.hasAttribute('data-playsinline')) video.playsinline = true;
+    if (mediaContainer.hasAttribute('data-playsinline')) video.playsInline = true;
     if (mediaContainer.hasAttribute('data-controls')) video.controls = true;
 
     video.setAttribute('src', src);
-    video.currentTime = +timestump;
+    video.currentTime = +timestamp;
     video.play().catch(() => null);
 
-    return new Promise(resolve => {
-        const canplayEventName = +timestump > 0 ? 'seeked' : 'canplay';
+    return new Promise((resolve, reject) => {
+        const canplayEventName = +timestamp > 0 ? 'seeked' : 'canplay';
         const play = e => {
             video.removeEventListener(canplayEventName, play);
             video.removeEventListener('error', play);
             if (!mediaContainer.hasAttribute(attrCheck)) {
                 video.src = '';
-                resolve();
+                reject();
                 return;
             }
+
+            // Check that the target time has not changed during the download
+            if (timestamp !== mediaContainer.getAttribute('data-timestamp')) video.currentTime = Number(mediaContainer.getAttribute('data-timestamp'));
 
             mediaContainer.classList.toggle('error', e.type === 'error');
             const mediaElement = mediaContainer.querySelector('.media-element:not([inert])');
@@ -9118,9 +9343,13 @@ function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
     mediaContainer.removeAttribute(attrCheck);
 
     const video = mediaContainer.querySelector('video:not([inert])');
-    if (!video) return;
+    if (!video || video.paused) return;
 
     video.pause();
+
+    mediaContainer.setAttribute('data-volume', String(video.volume));
+    mediaContainer.setAttribute('data-muted', String(video.muted));
+    mediaContainer.setAttribute('data-playback-rate', String(video.playbackRate));
 
     // Resize if enabled
     let { videoWidth: width, videoHeight: height } = video;
@@ -9138,7 +9367,7 @@ function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
     canvas.style.cssText = video.style.cssText;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, offsetX, offsetY, cropWidth, cropHeight, 0, 0, targetWidth, targetHeight);
-    mediaContainer.setAttribute('data-timestump', video.currentTime);
+    mediaContainer.setAttribute('data-timestamp', video.currentTime);
     video.replaceWith(canvas);
 }
 
@@ -9217,7 +9446,7 @@ function replaceImageElement(img, newUrl, options) {
 }
 
 function startVideoPlayEvent(target, options = { fromFocus: false }) {
-    const selector = '.media-container[data-src][data-poster][data-timestump]:not([data-focus-play]):not([data-focus-play-timer])';
+    const selector = '.media-container[data-src][data-poster][data-timestamp]:not([data-focus-play]):not([data-focus-play-timer])';
     const container = target.matches(selector) ? target : target.querySelector(selector);
     if (!container) return;
 
@@ -9227,11 +9456,11 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
     container.setAttribute('data-focus-play-timer', '');
 
     // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
-    const isFirstPlay = container.getAttribute('data-timestump') === '0';
+    const isFirstPlay = container.getAttribute('data-timestamp') === '0';
     setTimeout(() => {
         if (!container.hasAttribute('data-focus-play-timer')) return;
 
-        playVideo(container, 'data-focus-play');
+        playVideo(container, 'data-focus-play').catch(() => null);
     }, isFirstPlay ? 250 : 100);
 
     target.addEventListener('blur', stopVideoPlayEvent, { passive: true });
@@ -9249,8 +9478,11 @@ function stopVideoPlayEvent(e) {
     e.target.removeEventListener('pointerleave', stopVideoPlayEvent);
 }
 
-function startLinkPreviewEvent(e, options = { fromFocus: false }) {
-    const target = e.eventTarget;
+function startLinkPreviewEvent(e, options) {
+    if (!options) options = { fromFocus: false, target: null };
+    const target = e.target || e.target.closest('a[href]');
+    if (!target) return;
+
     const result = Controller.createLinkPreview(target.getAttribute('href'));
 
     if (!result) {
@@ -9259,7 +9491,7 @@ function startLinkPreviewEvent(e, options = { fromFocus: false }) {
     }
 
     const previewElement = createElement('div', { class: 'link-preview loading', inert: '' });
-    previewElement.appendChild(Controller.genLoadingIndecator());
+    previewElement.appendChild(Controller.genLoadingIndicator());
     let positionTarget = target.querySelector('.link-preview-position');
 
     const showPreview = element => {
@@ -9281,10 +9513,16 @@ function startLinkPreviewEvent(e, options = { fromFocus: false }) {
     startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget });
 }
 
-let prevLilpipeEvenetTime = 0, prevLilpipeTimer = null;
+const lilpipeGenerators = new WeakMap();
+function assignDynamicLilpipe(element, callback) {
+    element.setAttribute('lilpipe-text', '@dynamic');
+    lilpipeGenerators.set(element, callback);
+}
+let prevLilpipeEventTime = 0, prevLilpipeTimer = null;
 function startLilpipeEvent(e, options) {
-    if (!options) options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null };
-    const target = e.eventTarget;
+    if (!options) options = { fromFocus: false, type: null, element: null, delay: null, positionTarget: null, target: null };
+    const target = options.target || e.target.closest('[lilpipe-text]:not([lilpipe-showed]):not([lilpipe-showed-delay])');
+    if (!target) return;
 
     if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
     prevLilpipeTimer = null;
@@ -9293,8 +9531,22 @@ function startLilpipeEvent(e, options) {
     const type = options.type || target.getAttribute('lilpipe-type') || 'default';
     const tooltip = createElement('div', { id: 'tooltip', class: `tooltip tooltip-${type}` });
 
-    if (options.element && options.element instanceof HTMLElement) tooltip.appendChild(options.element);
-    else tooltip.innerHTML = target.getAttribute('lilpipe-text') || '';
+    if (options.element && options.element instanceof HTMLElement) {
+        tooltip.appendChild(options.element);
+    } else {
+        const html = target.getAttribute('lilpipe-text');
+        if (html === '@dynamic') {
+            const generator = lilpipeGenerators.get(target);
+            if (!generator) return;
+
+            const fragment = generator(target);
+            if (!fragment) return;
+            tooltip.appendChild(fragment);
+        } else if (html) {
+            const fragment = safeParseHTML(html);
+            tooltip.appendChild(fragment);
+        }
+    }
 
     const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
     const render = () => {
@@ -9361,7 +9613,7 @@ function startLilpipeEvent(e, options) {
     };
 
     const delay = e.altKey || options.fromFocus ? 0 : typeof options.delay === 'number' ? options.delay : Number(target.getAttribute('lilpipe-delay') ?? 400);
-    if (delay > 0 && Date.now() - prevLilpipeEvenetTime > 400) {
+    if (delay > 0 && Date.now() - prevLilpipeEventTime > 400) {
         target.setAttribute('lilpipe-showed-delay', '');
         prevLilpipeTimer = setTimeout(() => {
             prevLilpipeTimer = null;
@@ -9374,7 +9626,7 @@ function startLilpipeEvent(e, options) {
 
     const onpointerleave = e => {
         if (prevLilpipeTimer !== null) clearTimeout(prevLilpipeTimer);
-        else prevLilpipeEvenetTime = Date.now();
+        else prevLilpipeEventTime = Date.now();
 
         target.removeEventListener('blur', onpointerleave);
         target.removeEventListener('pointerleave', onpointerleave);

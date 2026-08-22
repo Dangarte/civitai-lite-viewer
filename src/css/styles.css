@@ -2034,6 +2034,10 @@ hr.description-xl-item {
     display: block;
     position: relative;
     isolation: isolate;
+
+    /* hide anti-aliasing artifact (sometimes line on right side) */
+    outline: 2px solid var(--c-bg-body);
+    outline-offset: -2px;
 }
 
 .media-full-preview .media-element {
@@ -3060,10 +3064,11 @@ a.link-button.link-open-civitai::after {
     transition: all .3s cubic-bezier(0, 1.4, 1, 1), accent-color 0s;
 }
 
-.list-search[hidden] {
+.list-search.hidden {
     display: block;
     opacity: 0;
     transform: translateY(100%);
+    user-select: none;
 }
 
 .list-options {
@@ -3754,6 +3759,11 @@ p .link-with-favicon .icon {
 
     .config-container {
         grid-template-columns: 1fr;
+    }
+
+    #app .app-content {
+        padding-inline: .5em;
+        max-width: min(var(--app-width), calc(100vw - 1em));
     }
 }
 

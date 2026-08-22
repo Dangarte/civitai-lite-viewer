@@ -533,6 +533,7 @@ async function resolveResponseBlob(request, actualRequest, response) {
 
     if (isTooLarge) {
         console.warn('A video response was received in an image request. Poster extraction was skipped because the video is too large.', `${contentLength} b`, actualRequest.url);
+        await markPosterLinkAsBad(actualRequest.url);
         throw new Error('Poster extraction failed. Video too large.', { cause: { code: 'POSTER_EXTRACTION_FAILED', reason: 'VIDEO_TOO_LARGE', } });
     }
 
@@ -546,6 +547,7 @@ async function resolveResponseBlob(request, actualRequest, response) {
 
     if (!blob) {
         console.warn('Failed to load poster via video element.', actualRequest.url);
+        await markPosterLinkAsBad(actualRequest.url);
         throw new Error('Poster extraction failed.', { cause: { code: 'POSTER_EXTRACTION_FAILED', reason: 'FAILED_TO_FETCH' } });
     }
 
@@ -580,6 +582,19 @@ async function fetchImageWithUnknownNSFW(request) {
     if (!hit) throw new Error('Image not found for any NSFW level');
 
     return hit.response;
+}
+
+async function markPosterLinkAsBad(url) {
+    // @ts-ignore
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (!clients.length) throw new Error('No clients');
+
+    for (const client of clients) {
+        client.postMessage({
+            action: 'video-on-image-request-critical',
+            data: { url }
+        });
+    }
 }
 
 async function requestPoster(url) {
