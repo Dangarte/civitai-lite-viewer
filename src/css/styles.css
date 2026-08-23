@@ -2952,7 +2952,7 @@ a.link-button.link-open-civitai::after {
     flex-direction: row;
     align-items: center;
     flex-wrap: nowrap;
-    gap: .5ch;
+    gap: 1ch;
     cursor: pointer;
 }
 
@@ -2978,6 +2978,7 @@ a.link-button.link-open-civitai::after {
 .switch {
     width: 2em;
     position: relative;
+    flex-shrink: 0;
 }
 
 .switch .switch-background {

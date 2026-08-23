@@ -18,6 +18,7 @@
         "view_post": "View Post",
         "period": "Period",
         "type": "Type",
+        "imageType": "Type",
         "origin": "Origin",
         "copied": "Copied",
         "model": "Model",
@@ -82,6 +83,11 @@
             "All": "All",
             "Trained": "Trained",
             "Merge": "Merged"
+        },
+        "imageTypeOptions": {
+            "All": "All",
+            "image": "Image",
+            "video": "Video"
         }
     },
     "errors": {
@@ -139,12 +145,23 @@
                 "linkNotSupported": "This link is not supported",
                 "wipPlaceholder": "[WIP] In development, currently only link conversion and hash search"
             },
+            "imagesFilter": "Images filter",
+            "tagsSeparatedByCommas": "Tags separated by commas",
+            "tagIdsSeparatedByCommas": "Tag IDs separated by commas",
             "hideFurry": "Hide Furry",
             "hideExtreme": "Hide Extreme/Fetish",
             "hideGay": "Hide Gay/Yaoi",
             "settingsDescription": "Settings",
             "blackListTagsDescription": "List of tags to hide (separated by commas)",
             "blackListTagsNote": "This works only on the model list, since the image API does not return a list of tags.",
+            "unpopularModelsDescription": "Hide old and unpopular models from the list",
+            "hideUnpopularModels": "Hide unpopular models",
+            "hideVideosOnImageModelsDescription": "Hide video preview on image-only models in the list. If the preview only contains video, filtering is skipped for this model.",
+            "hideVideosOnImageModels": "Hide video on image-only models",
+            "hideWithoutTagIdsDescription": "Hide untagded images from the infinite feed (tags are probably present, but the server returned an image without tags)",
+            "hideWithoutTagIds": "Hide without tags",
+            "blackListTagIdsDescription": "List of tagIds to hide (separated by commas)",
+            "blackListTagIdsNote": "A list of numeric tag IDs, used to hide images with these tags (only works if the extension (located in the \"apiProxyExtension\" folder in the project repository) is installed to use the original API, since the public API does not return any tags)",
             "autoplay": "Autoplay",
             "autoplayDescription": "If autoplay is disabled, cards won’t show GIFs, and videos on all pages will be paused by default, only playing on hover.",
             "autoplayNote": "⚠ Strong impact on performance.",

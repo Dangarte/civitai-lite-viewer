@@ -18,6 +18,7 @@
         "view_post": "查看帖子",
         "period": "周期",
         "type": "类型",
+        "imageType": "类型",
         "origin": "来源",
         "copied": "已复制",
         "model": "模型",
@@ -82,6 +83,11 @@
             "All": "全部",
             "Trained": "已训练",
             "Merge": "已合并"
+        },
+        "imageTypeOptions": {
+            "All": "全部",
+            "image": "图片",
+            "video": "视频"
         }
     },
     "errors": {
@@ -139,12 +145,23 @@
                 "linkNotSupported": "不支持此链接",
                 "wipPlaceholder": "[WIP] 开发中，目前仅支持链接转换和哈希搜索"
             },
+            "imagesFilter": "图片筛选",
+            "tagsSeparatedByCommas": "标签用逗号分隔",
+            "tagIdsSeparatedByCommas": "标签 ID 用逗号分隔",
             "hideFurry": "隐藏 兽人 (Furry)",
             "hideExtreme": "隐藏 异常比例/恋物",
             "hideGay": "隐藏 男同 (Gay/Yaoi)",
             "settingsDescription": "设置",
             "blackListTagsDescription": "要隐藏的标签列表（以逗号分隔）",
             "blackListTagsNote": "这仅适用于模型列表，因为图像 API 不会返回标签列表。",
+            "unpopularModelsDescription": "从列表中隐藏旧的和冷门的模型",
+            "hideUnpopularModels": "隐藏冷门模型",
+            "hideVideosOnImageModelsDescription": "在列表中隐藏仅图像模型上的视频预览。如果预览仅包含视频，则跳过对此模型的筛选。",
+            "hideVideosOnImageModels": "在仅图像模型上隐藏视频",
+            "hideWithoutTagIdsDescription": "从无限滚动流中隐藏无标签的图片（标签可能存在，但服务器返回了不带标签的图片）",
+            "hideWithoutTagIds": "隐藏无标签图片",
+            "blackListTagIdsDescription": "要隐藏的标签 ID 列表（用逗号分隔）",
+            "blackListTagIdsNote": "数字标签 ID 列表，用于隐藏带有这些标签的图片（仅在安装了项目存储库“apiProxyExtension”文件夹中的扩展程序以使用原始 API 时生效，因为公共 API 不返回任何标签）",
             "autoplay": "自动播放",
             "autoplayDescription": "如果关闭自动播放，卡片页面将不会显示 GIF，所有页面的视频默认暂停，仅在悬停时播放。",
             "autoplayNote": "⚠ 对性能有很大影响。",

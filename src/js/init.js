@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 46,
-    updated: '2026-08-22T12:00:00.000Z',
+    version: 47,
+    updated: '2026-08-23T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -140,7 +140,7 @@ const SETTINGS = {
     hideFurry: false,
     hideGay: false,
     hideExtreme: false,
-    hideWitoutTagIds: true,
+    hideWithoutTagIds: true,
     hideImagesWithoutPositivePrompt: true,
     hideImagesWithoutNegativePrompt: false,
     hideImagesWithoutResources: false,
@@ -1322,6 +1322,7 @@ class Controller {
             'LTXV',
             'LTXV2',
             'LTXV 2.3',
+            'LTXV 2.5',
             'Lumina',
             'Mochi',
             'NoobAI',
@@ -1537,6 +1538,7 @@ class Controller {
             'Seedance': ['video', 'closed', 'seedance-ai', 'multilingual', 'censored'],
             'LTXV2': ['video', 'weights', 'lightricks', 'multilingual'],
             'LTXV 2.3': ['video', 'weights', 'lightricks', 'multilingual'],
+            'LTXV 2.5': ['video', 'weights', 'lightricks', 'multilingual'],
             'Ernie': ['image', 'weights', 'baidu', 'multilingual'],
             'ACE Audio': ['audio', 'weights', 'ace studio', 'stepfun', 'multilingual'],
             'HappyHorse': ['video', 'closed', 'alibaba'], // multilingual ?
@@ -1620,6 +1622,7 @@ class Controller {
         urlParamWidth: /\/width=\d+\//,             // /width=NUMBER/
         urlParamAnimFalse: /anim=false,?/,          // anim=false, or anim=false
         urlEndsOnMp4: /.mp4$/,                      // ends on .mp4
+        emojiRegex: /\p{Emoji_Presentation}|\p{Extended_Pictographic}|\u200d|\ufe0f/gu, // any emoji
     };
 
     static #pages = [
@@ -1799,12 +1802,20 @@ class Controller {
     static updateMainMenu() {
         const menu = document.querySelector('#main-menu .menu');
 
-        menu.querySelector('a[href="#home"]').textContent = window.languagePack?.text?.home ?? 'Home';
-        menu.querySelector('a[href="#models"]').textContent = window.languagePack?.text?.models ?? 'Models';
-        menu.querySelector('a[href="#articles"]').textContent = window.languagePack?.text?.articles ?? 'Articles';
-        menu.querySelector('a[href="#images"]').textContent = window.languagePack?.text?.images ?? 'Images';
+        const updateMenuItemLabel = (href, label) => {
+            const item = menu.querySelector(`a[href="${href}"]`);
+            if (!item) return;
+            item.textContent = label;
+            item.setAttribute('data-draggable-title', this.#prepareTitle(label));
+        };
 
-        document.querySelector('#drop-link-container .drop-wrap span').textContent = window.languagePack?.text?.dragAndDrop ?? 'Drop a CivitAI link here to open in lite mode';
+        updateMenuItemLabel('#home', window.languagePack?.text?.home ?? 'Home');
+        updateMenuItemLabel('#models', window.languagePack?.text?.models ?? 'Models');
+        updateMenuItemLabel('#articles', window.languagePack?.text?.articles ?? 'Articles');
+        updateMenuItemLabel('#images', window.languagePack?.text?.images ?? 'Images');
+
+        const dropContainerTitleElement = document.querySelector('#drop-link-container .drop-wrap span');
+        if (dropContainerTitleElement) dropContainerTitleElement.textContent = window.languagePack?.text?.dragAndDrop ?? 'Drop a CivitAI link here to open in lite mode';
     }
 
     static gotoPage(page, savedState) {
@@ -2240,8 +2251,7 @@ class Controller {
                 });
 
                 const descriptionContainer = insertElement('div', container, { class: 'config-description' });
-                insertElement('p', descriptionContainer, undefined, 'Images filter (WIP)');
-                // insertElement('blockquote', descriptionContainer, undefined, '...');
+                insertElement('p', descriptionContainer, undefined, tempHome.imagesFilter ?? 'Images filter');
                 settingsContainer.appendChild(container);
             } catch (_) {
                 console.error(_);
@@ -2250,29 +2260,29 @@ class Controller {
 
             // Hide untagded images
             addSetting({
-                description: tempHome.hideWitoutTagIdsDescription ?? 'Hide untagded images from the infinite feed (tags are probably present, but the server returned an image without tags)',
+                description: tempHome.hideWithoutTagIdsDescription ?? 'Hide untagded images from the infinite feed (tags are probably present, but the server returned an image without tags)',
                 toggleElement: this.#genBoolean({
                     onchange: ({ newValue }) => {
-                        SETTINGS.hideWitoutTagIds = newValue;
+                        SETTINGS.hideWithoutTagIds = newValue;
                         savePageSettings();
                     },
-                    value: SETTINGS.hideWitoutTagIds,
-                    label: tempHome.hideWitoutTagIds ?? 'Hide without tags'
+                    value: SETTINGS.hideWithoutTagIds,
+                    label: tempHome.hideWithoutTagIds ?? 'Hide without tags'
                 }).element,
             });
 
             // Blacklist tagIds
             if (DEVMODE) {
                 addSetting({
-                    description: 'List of tagIds to hide (separated by commas) (WIP)',
-                    blockquote: 'A list of numeric ID tags, used to hide images with these tags (only works if the extension (located in the "apiProxyExtension" folder in the project repository) is installed to use the original API, since the public API does not return any tags)',
+                    description: tempHome.blackListTagIdsDescription ?? 'List of tagIds to hide (separated by commas)',
+                    blockquote: tempHome.blackListTagIdsNote ?? 'A list of numeric tag IDs, used to hide images with these tags (only works if the extension (located in the "apiProxyExtension" folder in the project repository) is installed to use the original API, since the public API does not return any tags)',
                     toggleElement: this.#genStringInput({
                         onchange: ({ newValue }) => {
                             SETTINGS.blackListTagIds = newValue.split(',').map(tag => tag.trim()).filter(tag => tag) ?? [];
                             savePageSettings();
                         },
                         value: SETTINGS.blackListTagIds.join(', '),
-                        placeholder: 'tagIds separated by commas'
+                        placeholder: tempHome.tagIdsSeparatedByCommas ?? 'Tag IDs separated by commas'
                     }).element
                 });
             }
@@ -2288,7 +2298,7 @@ class Controller {
                     savePageSettings();
                 },
                 value: SETTINGS.blackListTags.join(', '),
-                placeholder: 'tags separated by commas'
+                placeholder: tempHome.tagsSeparatedByCommas ?? 'Tags separated by commas'
             }).element
         });
 
@@ -2307,7 +2317,7 @@ class Controller {
 
         // Hide video preview on image-only models
         addSetting({
-            description: tempHome.hideVideosOnImageModelsDescription ?? 'Hide video preview on image-only models in list. If the preview only contains video, filtering is skipped for this model.',
+            description: tempHome.hideVideosOnImageModelsDescription ?? 'Hide video preview on image-only models in the list. If the preview only contains video, filtering is skipped for this model.',
             toggleElement: this.#genBoolean({
                 onchange: ({ newValue }) => {
                     SETTINGS.hideVideosOnImageModels = newValue;
@@ -3153,7 +3163,7 @@ class Controller {
             this.#cache.models.set(`${id}`, model);
         };
         const sortByDownloads = () => {
-            // Sort by most downloaded first version (not newest, but first in list)
+            // Sort by most downloaded first version (not newest, but first in the list)
             console.log('Sort loaded models by most downloaded version');
             const items = infinityScroll.layout.getItems();
             const sorted = items.sort((a, b) => {
@@ -3652,7 +3662,7 @@ class Controller {
         const modelVersionsElements = [];
         model.modelVersions.forEach(version => {
             const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
-            const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '' });
+            const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '', 'data-draggable-title': this.#prepareTitle([ model.name, version.name, version.baseModel ]) });
 
             const isActive = version.id === modelVersion.id;
             const rawDate = version.publishedAt ?? version.createdAt;
@@ -4915,12 +4925,19 @@ class Controller {
             return this.api.fetchImages(query).then(data => {
                 cursor = data.metadata?.nextCursor ?? null;
 
-                // Delete the large comfy field (I don't break it down into additional meta information in the script),
-                // and if you need to copy it, it's often in the image and can be dragged onto comfy.
+                // 1. Delete the large comfy field (I don't break it down into additional meta information in the script),
+                //    and if you need to copy it, it's often in the image and can be dragged onto comfy.
+                // 2. validate image size if possible
                 data.items.forEach(img => {
-                    if (img.meta?.comfy) img.meta.comfy = true;
-                    if (img.meta?.meta?.comfy) img.meta.meta.comfy = true;
-                    return img;
+                    const meta = img.meta?.meta ?? img.meta;
+                    if (!meta) return;
+
+                    // 1
+                    meta.comfy = true;
+
+                    // 2
+                    if (!img.width) img.width = meta.width ?? meta.aspectRatio?.width ?? null;
+                    if (!img.height) img.height = meta.height ?? meta.aspectRatio?.height ?? null;
                 });
 
                 cache.nextCursor = cursor;
@@ -4975,7 +4992,7 @@ class Controller {
                 });
             }
 
-            if (EXTENSION_INSTALLED && SETTINGS.hideWitoutTagIds) {
+            if (EXTENSION_INSTALLED && SETTINGS.hideWithoutTagIds) {
                 const countBefore = images.length;
                 images = images.filter(image => image.tagIds?.length);
                 if (images.length !== countBefore) countHidden.noTagIds = countBefore - images.length;
@@ -5244,7 +5261,7 @@ class Controller {
             return;
         }
 
-        // Remove extra nesting (paragraph in list item is extra)
+        // Remove extra nesting (paragraph in the list item is extra)
         description.querySelectorAll('li>p:only-child').forEach(p => {
             unwrapElement(p);
         });
@@ -7575,7 +7592,6 @@ class Controller {
         return this.#genFilters(list, onAnyChange);
     }
 
-    // TODO: translation for "image_types"
     static #genImagesListFilters(onAnyChange, options = {}) {
         const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
         const modelBadges = { image: 'image', video: 'movie', audio: 'music', edit: 'edit', closed: 'lock' };
@@ -7623,9 +7639,9 @@ class Controller {
             } : null,
             EXTENSION_INSTALLED && image_types ? { type: 'list',
                 key: 'image_types',
-                label: window.languagePack?.text?.imagesType ?? 'Type',
+                label: window.languagePack?.text?.imageType ?? 'Type',
                 options: imagesTypeOptions,
-                labels: this.#listFilters.genLabels(imagesTypeOptions, 'imageTypes'),
+                labels: this.#listFilters.genLabels(imagesTypeOptions, 'imageTypeOptions'),
                 setValue: newValue => SETTINGS.image_types = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.image_types.length ? (SETTINGS.image_types.length > 1 ? SETTINGS.image_types : SETTINGS.image_types[0]) : 'All'
             } : null,
@@ -8236,14 +8252,25 @@ class Controller {
         }
     }
 
-    static #setTitle(input) {
+    static #prepareTitle(input) {
         const SEPARATOR = '•';
         const ESCAPED_SEP = '·';
-        const emojiRegex = /\p{Emoji_Presentation}|\p{Extended_Pictographic}|\u200d|\ufe0f/gu;
-        const parts = (Array.isArray(input) ? input : [input]).filter(Boolean);
-        const cleanedParts = parts.map(part => part.replace(emojiRegex, '').replace(new RegExp(SEPARATOR, 'g'), ESCAPED_SEP).trim());
-        const mainContent = cleanedParts.join(` ${SEPARATOR} `);
-        document.title = mainContent ? `${mainContent} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
+        const list = Array.isArray(input) ? input : [input];
+        const cleanedParts = [];
+
+        for (let i = 0; i < list.length; i++) {
+            const part = list[i];
+            if (!part) continue;
+
+            const cleaned = part.replace(this.#regex.emojiRegex, '').replaceAll(SEPARATOR, ESCAPED_SEP).trim();
+            if (cleaned) cleanedParts.push(cleaned);
+        }
+
+        return cleanedParts.length > 0 ? `${cleanedParts.join(` ${SEPARATOR} `)} ${SEPARATOR} ${CONFIG.title}` : CONFIG.title;
+    }
+
+    static #setTitle(input) {
+        document.title = this.#prepareTitle(input);
     }
 
     static markVideoMediaAsBad(url) {

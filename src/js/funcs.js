@@ -1698,8 +1698,8 @@ class MasonryLayout {
         this.#container = container;
         this.#isPassive = options.passive ?? false;
         this.#options = {
-            itemWidth: options.itemWidth ?? 300,
-            itemHeight: options.itemHeight ?? null,
+            itemWidth: options.itemWidth || 300,
+            itemHeight: options.itemHeight || null,
             gap: options.gap ?? 8,
             maxOverscanScreens: options.maxOverscanScreens ?? 2.4,
             basePaddingFactor: options.basePaddingFactor ?? .6,
@@ -1863,8 +1863,8 @@ class MasonryLayout {
         const options = this.#options;
         const itemsToUpdate = new Map();
 
-        const cardHeightMin = options.itemWidth * .6;
-        const cardHeightMax = this.windowHeight * .8;
+        const cardHeightMin = Math.max(options.itemWidth * .6, 1);
+        const cardHeightMax = Math.max(this.windowHeight * .8, 1);
 
         items.forEach(item => {
             if (this.#itemsById.has(item.id)) {
@@ -1875,6 +1875,11 @@ class MasonryLayout {
             const targetColumn = this.#columns.reduce((minCol, col) => col.height < minCol.height ? col : minCol, this.#columns[0]);
             const cardHeightRaw = options.itemHeight ?? (options.itemWidth / item.aspectRatio);
             const cardHeight = cardHeightRaw > cardHeightMax ? cardHeightMax : cardHeightRaw < cardHeightMin ? cardHeightMin : cardHeightRaw;
+
+            if (isNaN(cardHeight) || !Number.isFinite(cardHeight)) {
+                console.warn('MasonryLayout: Skip added item - bad dimensions', item);
+                return;
+            }
 
             const gridItem = {
                 id: item.id,
@@ -2017,39 +2022,45 @@ class MasonryLayout {
         this.resize();
     }
 
-    #findStartIndex(overscanTop) {
+    #findVisibleRange(overscanTop, overscanBottom) {
+        const total = this.#items.length;
+        if (!total) return { startIndex: -1, endIndex: -1 };
+
+        // Max potential height from addItems()
+        const cardHeightMax = this.windowHeight * 0.8;
+        const minTopTarget = overscanTop - cardHeightMax;
+
+        // Binary search for the first potential candidate
         let low = 0;
-        let high = this.#items.length - 1;
-        let result = this.#items.length;
+        let high = total - 1;
+        let candidateIndex = 0;
 
         while (low <= high) {
             const mid = (low + high) >> 1;
-            if (this.#items[mid].boundBottom >= overscanTop) {
-                result = mid;
-                high = mid - 1;
+            if (this.#items[mid].boundTop >= minTopTarget) {
+                candidateIndex = mid;
+                high = mid - 1; // Keep searching left to find the earliest match
             } else {
                 low = mid + 1;
             }
         }
 
-        return result;
-    }
+        // Linear scan downwards from candidateIndex to find actual bounds
+        let startIndex = -1;
+        let endIndex = -1;
 
-    #findEndIndex(overscanBottom, startIndex = 0) {
-        let low = startIndex;
-        let high = this.#items.length - 1;
-        let result = -1;
+        for (let i = candidateIndex; i < total; i++) {
+            const item = this.#items[i];
 
-        while (low <= high) {
-            const mid = (low + high) >> 1;
-            if (this.#items[mid].boundTop <= overscanBottom) {
-                result = mid;
-                low = mid + 1;
-            } else {
-                high = mid - 1;
+            if (item.boundTop > overscanBottom) break;
+
+            if (item.boundBottom >= overscanTop) {
+                if (startIndex === -1) startIndex = i;
+                endIndex = i;
             }
         }
-        return result;
+
+        return { startIndex, endIndex };
     }
 
     #setTabIndex(item) {
@@ -2462,8 +2473,13 @@ class MasonryLayout {
         const screenTop = currentScrollTop;
         const screenBottom = currentScrollTop + vh;
 
-        const newStartIndex = this.#findStartIndex(overscanTop);
-        const newEndIndex = this.#findEndIndex(overscanBottom, newStartIndex);
+        const { startIndex: newStartIndex, endIndex: newEndIndex } = this.#findVisibleRange(overscanTop, overscanBottom);
+
+        // Guard check against empty results
+        if (newStartIndex === -1 || newEndIndex === -1) {
+            for (const item of this.#inViewport) this.#hideItem(item);
+            return currentScrollTop;
+        }
 
         // Remove items that are no longer visible
         for (const item of this.#inViewport) {
