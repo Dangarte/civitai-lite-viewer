@@ -43,6 +43,7 @@
         "hiddenModels": "Due to the selected hide tags, {count} were hidden",
         "hiddenImages": "Some images were hidden due to the selected filter settings ({count})",
         "language": "Language",
+        "all": "All",
         "sortOptions": {
             "Most Bookmarks": "Most Bookmarks",
             "Recently Updated": "Recently Updated",

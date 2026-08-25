@@ -174,7 +174,7 @@
 
 .keyboard-focus,
 :focus-visible {
-    outline: 1px solid var(--c-main-text, #63adf7) !important;
+    outline: 2px solid var(--c-main-text, #63adf7) !important;
 }
 
 html {
@@ -795,7 +795,7 @@ nav ul.menu li a:hover {
 }
 
 nav ul.menu li a:focus-visible {
-    outline: 1px solid var(--c-main) !important;
+    outline: 2px solid var(--c-main) !important;
 }
 
 nav ul.menu li a.active {
@@ -1252,14 +1252,14 @@ footer a {
 
 .separated-right:not(:last-child) {
     position: relative;
-    margin-inline-end: .25em;
+    margin-inline-end: var(--separator-offset, .25em);
 }
 
 .separated-right:not(:last-child)::after {
     content: '';
     position: absolute;
     pointer-events: none;
-    inset-inline-end: calc(-.25em - 1px);
+    inset-inline-end: calc(-1 * var(--separator-offset, .25em) - 1px);
     inset-block: 0;
     width: 2px;
     border-radius: 1px;
@@ -1347,6 +1347,7 @@ footer a {
     line-height: 0;
     font-size: 0;
     position: relative;
+    border-radius: var(--radius);
 }
 
 .model-description a.only-image::after {
@@ -1628,6 +1629,7 @@ hr.description-xl-item {
     font-weight: 700;
 }
 
+.card:focus-visible .card-content,
 .card:focus-visible {
     outline: .25em solid var(--c-main) !important;
     outline-offset: -.25em;
@@ -2391,7 +2393,7 @@ a[href].meta-resource:hover .meta-resource-name {
 }
 
 .meta-other .meta-other-item {
-    color: var(--c-text-dark);
+    color: var(--c-text-darker);
     padding: .5em;
     border-radius: var(--radius);
 }
@@ -2403,6 +2405,7 @@ a[href].meta-resource:hover .meta-resource-name {
 
 .meta-other .meta-other-item .meta-value {
     color: var(--c-text);
+    font-weight: 600;
 }
 
 .meta-other .badge[data-badge="ComfyUI"] {
@@ -2731,8 +2734,13 @@ code.prompt-positive::before {
     color: var(--c-text-dark);
 }
 
+.model-versions .badge.selected,
 .model-versions .badge.recently-updated {
     position: relative;
+}
+
+.model-versions .badge.selected {
+    padding-inline-start: 1.5em;
 }
 
 .model-versions .badge.recently-updated::after {
@@ -2742,9 +2750,21 @@ code.prompt-positive::before {
     height: .25em;
     border-radius: 50%;
     background-color: var(--c-main);
-    box-shadow: 0 0 4px var(--c-main-bg);
-    inset-inline-end: calc(var(--radius)/2);
-    inset-block-start: calc(var(--radius)/2);
+    box-shadow: 0 0 4px 1px var(--c-main-bg);
+    inset-inline-end: calc(var(--radius) * .5);
+    inset-block-start: calc(var(--radius) * .5);
+}
+
+.model-versions .badge.selected::after {
+    content: '';
+    position: absolute;
+    width: .5em;
+    height: .5em;
+    border-radius: 50%;
+    background-color: var(--c-main);
+    box-shadow: 0 0 4px 1px var(--c-main-bg);
+    inset-inline-start: .5em;
+    inset-block-start: calc(50% - .25em);
 }
 
 .model-updated-time {
@@ -2767,6 +2787,14 @@ code.prompt-positive::before {
     -webkit-line-clamp: 1;
     line-clamp: 1;
     -webkit-box-orient: vertical;
+}
+
+.model-tags a.badge::before {
+    font-size: .8em;
+    font-weight: 400;
+    content: '#';
+    margin-inline-end: .125em;
+    color: var(--c-text-darker);
 }
 
 .model-tags .user-info {
@@ -2879,13 +2907,19 @@ a.badge[href]:hover {
     --c-nsfw-level-bg2: var(--c-nsfw-xxx-alt-gl, var(--c-nsfw-xxx-alt));
 }
 
-.model-versions .badge.active {
+.model-versions {
+    display: flex;
+    flex-direction: column;
+    gap: .5em;
+}
+
+.model-versions-list .badge.active {
     background-color: var(--c-bg-lighter) !important;
     color: var(--c-main-text);
     position: relative;
 }
 
-.model-versions .badge.active::before {
+.model-versions-list .badge.active::before {
     content: '';
     position: absolute;
     inset-inline: calc(var(--radius) - 2px);
@@ -2896,13 +2930,70 @@ a.badge[href]:hover {
     box-shadow: 0 -2px 4px var(--c-main-bg);
 }
 
-.model-versions .badge.show-more {
+.model-versions-list .badge.show-more {
     background-color: var(--c-bg-dark);
 }
 
-.model-versions .badge.show-more:focus-visible,
-.model-versions .badge.show-more:hover {
+.model-versions-list .badge.show-more:focus-visible,
+.model-versions-list .badge.show-more:hover {
     background-color: var(--c-main-bg);
+}
+
+.model-versions .base-model {
+    background-color: transparent;
+}
+
+.model-versions .base-model.separated-right {
+    background-color: var(--c-bg);
+    --separator-offset: .75em;
+}
+
+.model-versions .base-model.separated-right .version-count {
+    background-color: var(--c-bg-light);
+}
+
+.model-versions .base-model.separated-right + .badge {
+    margin-inline-start: .5em; /* margin .5em + gap .25em = offset .75em */
+}
+
+.model-versions .base-model:hover,
+.model-versions .base-model:focus-visible {
+    background-color: var(--c-bg-light);
+}
+
+.model-versions .base-model.active {
+    background-color: var(--c-bg-lighter);
+}
+
+.model-version-versions.versions-inline {
+    display: flex;
+    flex-direction: row;
+    gap: 1em;
+    --separator-offset: 1em;
+}
+
+.base-model-inline {
+    display: flex;
+    align-items: center;
+    gap: .5em;
+}
+
+.base-model-inline .base-model-label {
+    color: var(--c-text-dark);
+}
+
+.version-count {
+    margin-inline-start: 1ch;
+    color: var(--c-text-darker);
+    background-color: var(--c-bg);
+    padding-inline: .5em;
+    border-radius: inherit;
+    font-family: monospace;
+}
+
+.model-versions .base-model.active .version-count {
+    background-color: var(--c-main-bg-dark);
+    color: var(--c-main-text);
 }
 
 .link-button {
@@ -3151,7 +3242,7 @@ a.link-button.link-open-civitai::after {
 }
 
 .list-option.option-focus {
-    outline: 1px solid var(--c-main-text);
+    outline: 2px solid var(--c-main-text);
 }
 
 .list-option.option-focus,

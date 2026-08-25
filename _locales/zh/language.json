@@ -41,6 +41,7 @@
         "retry": "重试",
         "noMeta": "没有生成信息",
         "language": "语言",
+        "all": "全部",
         "hiddenModels": "由于所选的隐藏标签，{count} 已被隐藏",
         "hiddenImages": "由于所选的筛选设置，部分图片已被隐藏（{count}）",
         "sortOptions": {

@@ -3,7 +3,7 @@
 
 
 const CONFIG = {
-    version: 47,
+    version: 48,
     updated: '2026-08-23T12:00:00.000Z',
     extensionVertsion: 4,
     logo: 'src/icons/logo.svg',
@@ -408,8 +408,19 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             const error = data.error ?? data.response?.error;
             if (error) {
                 if (error instanceof Error) throw error;
-                const message = error.message ?? error.json?.message;
-                throw new Error(message);
+                let message = '';
+
+                // try to decode "devalue" error
+                if (typeof error === 'string') {
+                    try {
+                        const jsonError = this.#parseDevalue(error);
+                        message = jsonError.message;
+                    } catch {}
+                } else {
+                    message = error.message ?? error.json?.message;
+                }
+
+                throw new Error(message || 'Unknown error');
             }
 
             let result = data.response?.result?.data ?? data.response;
@@ -1662,25 +1673,7 @@ class Controller {
                     };
                 }
 
-                const forcedPeriod = params.collection ? 'AllTime' : null;
-                const forcedType = params.collection ? [] : null;
-                const forcedCheckpountType = params.collection ? 'All' : null;
-                const forcedBaseModel = params.collection ? [] : null;
-                const query = {
-                    limit: CONFIG.perRequestLimits.models,
-                    tag: params.tag ?? '',
-                    query: params.query,
-                    collectionId: params.collection || null,
-                    username: params.username || params.user,
-                    types: forcedType || SETTINGS.types,
-                    sort: SETTINGS.sort,
-                    period: forcedPeriod || SETTINGS.period,
-                    checkpointType: forcedCheckpountType || SETTINGS.checkpointType,
-                    baseModels: forcedBaseModel || SETTINGS.baseModels,
-                    browsingLevel: SETTINGS.browsingLevel,
-                    nsfw: SETTINGS.nsfw,
-                    combineWithPublicData: EXTENSION_INSTALLED && SETTINGS.showCurrentModelVersionStats
-                };
+                const query = this.#buildModelsQuery(params);
 
                 return {
                     key: JSON.stringify(query),
@@ -1697,6 +1690,26 @@ class Controller {
                     username: params.username,
                     collectionId: params.collection,
                 });
+            },
+            prepare: ({ pageId, params }) => {
+                if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
+                    return { key: null, promise: null };
+                }
+
+                if (params.article) {
+                    if (this.#cache.articles?.has(`${params.article}`)) return { key: null, promise: null };
+                    return {
+                        key: params.article,
+                        promise: this.api.fetchArticle(Number(params.article))
+                    };
+                }
+
+                const query = this.#buildArticlesQuery(params);
+
+                return {
+                    key: JSON.stringify(query),
+                    promise: this.api.fetchArticles(query)
+                };
             }
         },
         { // #images
@@ -1751,8 +1764,12 @@ class Controller {
                     };
                 }
 
+                const query = this.#buildImagesQuery(params);
 
-                return { key: null, promise: null };
+                return {
+                    key: JSON.stringify(query),
+                    promise: this.api.fetchImages(query)
+                };
             }
         }
     ];
@@ -2422,6 +2439,25 @@ class Controller {
         };
     }
 
+    static #buildArticlesQuery(rawParams = {}) {
+        const collectionId = rawParams.collectionId || rawParams.collection || null;
+        const username = rawParams.username || rawParams.user || undefined;
+        const tag = rawParams.tag;
+
+        const forcedPeriod = collectionId ? 'AllTime' : null;
+
+        return {
+            limit: CONFIG.perRequestLimits.articles,
+            sort: SETTINGS.sort_articles,
+            period: forcedPeriod || SETTINGS.period_articles,
+            browsingLevel: SETTINGS.browsingLevel,
+            nsfw: SETTINGS.nsfw,
+            tags: tag ? [+tag] : [],
+            collectionId,
+            username
+        };
+    }
+
     static gotoArticles(options = {}) {
         if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
             const appContent = createElement('div', { class: 'app-content' });
@@ -2464,16 +2500,7 @@ class Controller {
 
         const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
-                query = {
-                    limit: CONFIG.perRequestLimits.articles,
-                    sort: SETTINGS.sort_articles,
-                    period: forcedPeriod || SETTINGS.period_articles,
-                    browsingLevel: SETTINGS.browsingLevel,
-                    nsfw: SETTINGS.nsfw,
-                    tags: tag ? [+tag] : [],
-                    collectionId,
-                    username,
-                };
+                query = this.#buildArticlesQuery(options);
                 state.filter = JSON.stringify(query);
 
                 hiddenArticles = 0;
@@ -3106,6 +3133,34 @@ class Controller {
         return { promise };
     }
 
+    static #buildModelsQuery(rawParams = {}) {
+        const collectionId = rawParams.collectionId || rawParams.collection || null;
+        const tag = rawParams.tag ?? '';
+        const searchQuery = rawParams.query;
+        const username = rawParams.username || rawParams.searchUsername || rawParams.user || undefined;
+
+        const forcedPeriod = collectionId ? 'AllTime' : null;
+        const forcedType = collectionId ? [] : null;
+        const forcedCheckpointType = collectionId ? 'All' : null;
+        const forcedBaseModel = collectionId ? [] : null;
+
+        return {
+            limit: CONFIG.perRequestLimits.models,
+            tag,
+            query: searchQuery,
+            collectionId,
+            username,
+            types: forcedType || SETTINGS.types,
+            sort: SETTINGS.sort,
+            period: forcedPeriod || SETTINGS.period,
+            checkpointType: forcedCheckpointType || SETTINGS.checkpointType,
+            baseModels: forcedBaseModel || SETTINGS.baseModels,
+            browsingLevel: SETTINGS.browsingLevel,
+            nsfw: SETTINGS.nsfw,
+            combineWithPublicData: EXTENSION_INSTALLED && SETTINGS.showCurrentModelVersionStats
+        };
+    }
+
     static gotoModels(options = {}) {
         const { tag = '', query: searchQuery, username: searchUsername, collectionId = null } = options;
         const navigationState = copyThis(this.#state);
@@ -3190,21 +3245,7 @@ class Controller {
 
         const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
-                query = {
-                    limit: CONFIG.perRequestLimits.models,
-                    tag,
-                    query: searchQuery,
-                    collectionId,
-                    username: searchUsername,
-                    types: forcedType || SETTINGS.types,
-                    sort: SETTINGS.sort,
-                    period: forcedPeriod || SETTINGS.period,
-                    checkpointType: forcedCheckpountType || SETTINGS.checkpointType,
-                    baseModels: forcedBaseModel || SETTINGS.baseModels,
-                    browsingLevel: SETTINGS.browsingLevel,
-                    nsfw: SETTINGS.nsfw,
-                    combineWithPublicData: EXTENSION_INSTALLED && SETTINGS.showCurrentModelVersionStats
-                };
+                query = this.#buildModelsQuery(options);
                 state.filter = JSON.stringify(query);
 
                 modelById = new Map();
@@ -3637,7 +3678,7 @@ class Controller {
             relativeTime.className = 'badge model-category separated-right';
             modelTagsWrap.prepend(relativeTime);
         };
-        if (this.#state.model_tags || model.tags.join('').length <= 80) updateTags(model.tags);
+        if (navigationState.model_tags || model.tags.join('').length <= 80) updateTags(model.tags);
         else {
             let currentLength = 0;
             const visibleTags = [];
@@ -3658,79 +3699,192 @@ class Controller {
             }, { once: true });
         }
 
-        const modelVersionsWrap = insertElement('div', page, { class: 'badges model-versions' });
-        const modelVersionsElements = [];
+        const modelVersionSelector = insertElement('div', page, { class: 'model-versions' });
+        const modelVersionSelectorMenu = insertElement('div', modelVersionSelector, { class: 'badges model-version-base-models' });
+        const modelVersionSelectorList = insertElement('div', modelVersionSelector, { class: 'model-version-versions' });
+        const modelVersionsByBaseModel = {};
         model.modelVersions.forEach(version => {
-            const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
-            const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '', 'data-draggable-title': this.#prepareTitle([ model.name, version.name, version.baseModel ]) });
+            const baseModel = version.baseModel || '';
+            if (!modelVersionsByBaseModel[baseModel]) modelVersionsByBaseModel[baseModel] = [];
+            modelVersionsByBaseModel[baseModel].push(version);
+        });
 
-            const isActive = version.id === modelVersion.id;
-            const rawDate = version.publishedAt ?? version.createdAt;
+        const applyFakeFocusSelector = (container, itemSelector = '.badge') => {
+            if (!container) return;
 
-            if (rawDate && !isActive) {
-                assignDynamicLilpipe(button, () => {
-                    const updatedAt = new Date(rawDate);
-                    if (isNaN(updatedAt.getTime())) return null;
+            const items = container.querySelectorAll(itemSelector);
+            const len = items.length;
+            if (!len) return;
 
-                    const isDifferentBase = version.baseModel !== modelVersion.baseModel;
-                    const updatedLabel = window.languagePack?.text?.Updated ?? 'Updated';
-                    const baseLabel = this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base';
+            let activeIndex = 0;
+            for (let i = 0; i < len; i++) {
+                if (items[i].classList.contains('active')) {
+                    activeIndex = i;
+                    break;
+                }
+            }
 
-                    const fragment = document.createDocumentFragment();
+            for (let i = 0; i < len; i++) {
+                items[i].setAttribute('tabindex', i === activeIndex ? '0' : '-1');
+            }
 
-                    // label and relative-time element
-                    const row1 = createElement('div');
-                    const bold = createElement('b', undefined, updatedLabel);
-                    const relSpan = createElement('span', { class: 'dark-text' });
-                    const relTime = createElement('relative-time', { datetime: updatedAt.toISOString() });
-                    relSpan.append(' (', relTime, ')');
-                    row1.append(bold, relSpan);
+            const setFocusIndex = (newIndex) => {
+                if (newIndex === activeIndex) return;
+                items[activeIndex].setAttribute('tabindex', '-1');
+                activeIndex = newIndex;
+                items[activeIndex].setAttribute('tabindex', '0');
+                items[activeIndex].focus();
+            };
 
-                    // Formatted date and time
-                    const row2 = createElement('div', undefined, `${updatedAt.toLocaleDateString()} `);
-                    const timeSpan = createElement('span', { class: 'dark-text' }, updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-                    row2.append(timeSpan);
+            container.addEventListener('keydown', (e) => {
+                if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-                    fragment.append(row1, row2);
+                let nextIndex = activeIndex;
 
-                    // Base model info
-                    if (isDifferentBase) {
-                        const row3 = createElement('div', { style: 'margin-block-start:.5em;' }, baseLabel);
-                        fragment.append(row3);
+                switch (e.key) {
+                    case 'ArrowRight':
+                    case 'ArrowDown':
+                        e.preventDefault();
+                        nextIndex = (activeIndex + 1) % len;
+                        break;
+                    case 'ArrowLeft':
+                    case 'ArrowUp':
+                        e.preventDefault();
+                        nextIndex = (len + activeIndex - 1) % len;
+                        break;
+                    case 'Home':
+                        e.preventDefault();
+                        nextIndex = 0;
+                        break;
+                    case 'End':
+                        e.preventDefault();
+                        nextIndex = len - 1;
+                        break;
+                    default:
+                        return;
+                }
+
+                setFocusIndex(nextIndex);
+            });
+
+            container.addEventListener('click', (e) => {
+                const target = e.target.closest(itemSelector);
+                if (!target || !container.contains(target)) return;
+
+                for (let i = 0; i < len; i++) {
+                    if (items[i] === target) {
+                        setFocusIndex(i);
+                        break;
                     }
-
-                    return fragment;
-                });
-            }
-
-            if (version.publishedAt > CONFIG.minDateForNewBadge) button.classList.add('recently-updated');
-            if (isActive) button.classList.add('active');
-
-            button.appendChild(this.#formatModelVersionName(version.name));
-            modelVersionsElements.push(button);
-        });
-        modelVersionsElements[0]?.setAttribute('tabindex', 0);
-
-        const activeVersionIndex = model.modelVersions.findIndex(v => v.id === modelVersion.id);
-        let fakeIndex = activeVersionIndex !== -1 ? activeVersionIndex : 0;
-        const setFakeFocus = index => {
-            modelVersionsWrap.querySelector('[tabindex="0"]')?.setAttribute('tabindex', -1);
-            modelVersionsElements[index].setAttribute('tabindex', 0);
-            modelVersionsElements[index].focus();
+                }
+            });
         };
-        modelVersionsWrap.addEventListener('keydown', e => {
-            if (e.ctrlKey) return;
 
-            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                e.preventDefault();
-                fakeIndex = (fakeIndex + 1) % model.modelVersions.length;
-                setFakeFocus(fakeIndex);
-            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                fakeIndex = (model.modelVersions.length + fakeIndex - 1) % model.modelVersions.length;
-                setFakeFocus(fakeIndex);
+        const genBaseModelVersionsList = (container, baseModel = null) => {
+            const modelVersions = modelVersionsByBaseModel[baseModel] || model.modelVersions;
+
+            modelVersionSelectorMenu.querySelector('.active')?.classList.remove('active');
+            modelVersionSelectorMenu.querySelector(`.badge[data-base-model="${baseModel}"]`)?.classList.add('active');
+
+            container.textContent = '';
+            const modelVersionsWrap = insertElement('div', container, { class: 'badges model-versions-list' });
+
+            const modelVersionsElements = [];
+            modelVersions.forEach(version => {
+                const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
+                const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '', 'data-draggable-title': this.#prepareTitle([ model.name, version.name, version.baseModel ]) });
+
+                const isActive = version.id === modelVersion.id;
+                const isDifferentBase = version.baseModel !== modelVersion.baseModel;
+                const rawDate = version.publishedAt ?? version.createdAt;
+
+                if (rawDate && !isActive) {
+                    assignDynamicLilpipe(button, () => {
+                        const updatedAt = new Date(rawDate);
+                        if (isNaN(updatedAt.getTime())) return null;
+
+                        const updatedLabel = window.languagePack?.text?.Updated ?? 'Updated';
+                        const baseLabel = this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base';
+
+                        const fragment = document.createDocumentFragment();
+
+                        // label and relative-time element
+                        const row1 = createElement('div');
+                        const bold = createElement('b', undefined, updatedLabel);
+                        const relSpan = createElement('span', { class: 'dark-text' });
+                        const relTime = createElement('relative-time', { datetime: updatedAt.toISOString() });
+                        relSpan.append(' (', relTime, ')');
+                        row1.append(bold, relSpan);
+
+                        // Formatted date and time
+                        const row2 = createElement('div', undefined, `${updatedAt.toLocaleDateString()} `);
+                        const timeSpan = createElement('span', { class: 'dark-text' }, updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                        row2.append(timeSpan);
+
+                        fragment.append(row1, row2);
+
+                        // Base model info
+                        if (isDifferentBase) {
+                            const row3 = createElement('div', { style: 'margin-block-start:.5em;' }, baseLabel);
+                            fragment.append(row3);
+                        }
+
+                        return fragment;
+                    });
+                }
+
+                if (version.publishedAt > CONFIG.minDateForNewBadge) button.classList.add('recently-updated');
+                if (isDifferentBase) button.classList.add('different-basemodel');
+                if (isActive) button.classList.add('active');
+
+                button.appendChild(this.#formatModelVersionName(version.name));
+                modelVersionsElements.push(button);
+            });
+            applyFakeFocusSelector(modelVersionsWrap);
+        };
+
+        const baseModelsCount = Object.keys(modelVersionsByBaseModel).length;
+        if (baseModelsCount > 1 && model.modelVersions.length > 4) {
+            modelVersionsByBaseModel['All'] = model.modelVersions;
+
+            const specificModelLabels = { 'All': window.languagePack?.text?.all || 'All' };
+
+            Object.keys(modelVersionsByBaseModel).forEach(baseModel => {
+                const isActive = baseModel === modelVersion.baseModel;
+                const button = insertElement('button', modelVersionSelectorMenu, { class: 'badge base-model', 'data-base-model': baseModel }, specificModelLabels[baseModel] || this.#models.labels[baseModel] || baseModel);
+                insertElement('span', button, { class: 'version-count' }, modelVersionsByBaseModel[baseModel].length);
+                if (isActive) button.classList.add('active', 'selected');
+            });
+
+            // Move "All" to start
+            const buttonAll = modelVersionSelectorMenu.querySelector('.base-model[data-base-model="All"]');
+            if (buttonAll) {
+                buttonAll.classList.add('separated-right');
+                modelVersionSelectorMenu.prepend(buttonAll);
             }
-        });
+
+            modelVersionSelectorMenu.addEventListener('click', e => {
+                if (!(e.target instanceof HTMLElement)) return;
+                const target = e.target.closest('.base-model[data-base-model]:not(.active)');
+                const baseModel = target.getAttribute('data-base-model');
+                genBaseModelVersionsList(modelVersionSelectorList, baseModel);
+                this.#state.selectedBaseModel = baseModel;
+            });
+            applyFakeFocusSelector(modelVersionSelectorMenu, '.base-model');
+            genBaseModelVersionsList(modelVersionSelectorList, navigationState.selectedBaseModel || modelVersion.baseModel);
+        } else if (baseModelsCount > 1) {
+            modelVersionSelectorMenu.remove();
+            modelVersionSelectorList.classList.add('versions-inline');
+            Object.keys(modelVersionsByBaseModel).forEach(baseModel => {
+                const baseModelWrap = insertElement('div', modelVersionSelectorList, { class: 'base-model-inline separated-right' });
+                const label = createElement('div', { class: 'base-model-label', 'data-base-model': baseModel }, this.#models.labels[baseModel] || baseModel);
+                genBaseModelVersionsList(baseModelWrap, baseModel);
+                baseModelWrap.prepend(label);
+            });
+        } else {
+            modelVersionSelectorMenu.remove();
+            genBaseModelVersionsList(modelVersionSelectorList, modelVersion.baseModel);
+        }
 
         // Model preview
         if (modelVersion.images?.length) {
@@ -3777,23 +3931,80 @@ class Controller {
         }
 
         const mountDescription = (descriptionId, descriptionFragment, container) => {
-            if (this.#state[`long_description_${descriptionId}`] || descriptionFragment.children.length < 40) {
+            if (navigationState[`long_description_${descriptionId}`] || descriptionFragment.children.length < 40) {
                 if (VirtualList.getItems(descriptionFragment).length > 400) fixDescriptionXL(descriptionId, descriptionFragment, container);
                 else container.appendChild(descriptionFragment);
                 return;
             }
 
-            container.appendChild(descriptionFragment);
+            const MAX_MEASURE_COUNT = 60;
+            const measureFragment = new DocumentFragment();
+            const itemsToMeasure = Array.from(descriptionFragment.children).slice(0, MAX_MEASURE_COUNT);
+            itemsToMeasure.forEach(child => measureFragment.appendChild(child));
+
+            container.appendChild(measureFragment);
             container.classList.add('hide-long-description');
+
             const showMore = createElement('button', { class: 'show-more' });
             showMore.appendChild(getIcon('arrow_down'));
             container.appendChild(showMore);
-            showMore.addEventListener('click', () => {
-                this.#state[`long_description_${descriptionId}`] = true;
-                container.classList.remove('hide-long-description');
-                showMore.remove();
-                if (VirtualList.getItems(container).length > 400) fixDescriptionXL(descriptionId, container);
-            }, { once: true });
+
+            requestAnimationFrame(() => {
+                if (navigationState.id !== this.#state.id) return;
+                if (!container.isConnected) console.error('Container is not connected - can\'t measure.');
+
+                const containerRect = container.isConnected ? container.getBoundingClientRect() : { height: 0 };
+
+                if (containerRect.height === 0 || container.clientHeight === 0) {
+                    if (descriptionFragment.hasChildNodes()) container.appendChild(descriptionFragment);
+                    container.classList.remove('hide-long-description');
+                    return;
+                }
+
+                const containerBottom = containerRect.top + container.clientHeight;
+
+                let firstOverflowIndex = -1;
+                for (let i = 0; i < itemsToMeasure.length; i++) {
+                    if (itemsToMeasure[i].getBoundingClientRect().bottom > containerBottom + 1) {
+                        firstOverflowIndex = i;
+                        break;
+                    }
+                }
+
+                const safetyBuffer = 2;
+                const overflowElements = firstOverflowIndex !== -1 ? itemsToMeasure.slice(Math.max(0, firstOverflowIndex - safetyBuffer)) : [];
+
+                if (overflowElements.length > 0) {
+                    const overflowFragment = new DocumentFragment();
+                    overflowElements.forEach(child => overflowFragment.appendChild(child));
+                    descriptionFragment.insertBefore(overflowFragment, descriptionFragment.firstChild);
+                } else {
+                    if (descriptionFragment.hasChildNodes()) {
+                        container.appendChild(descriptionFragment);
+                        container.appendChild(showMore);
+                    } else {
+                        container.classList.remove('hide-long-description');
+                        showMore.remove();
+                        return;
+                    }
+                }
+
+                showMore.addEventListener('click', () => {
+                    this.#state[`long_description_${descriptionId}`] = true;
+                    container.classList.remove('hide-long-description');
+                    showMore.remove();
+
+                    const totalItems = VirtualList.getItems(container).length + VirtualList.getItems(descriptionFragment).length;
+                    if (totalItems > 400) {
+                        const fullFragment = new DocumentFragment();;
+                        while (container.firstChild) fullFragment.appendChild(container.firstChild);
+                        fullFragment.appendChild(descriptionFragment);
+                        fixDescriptionXL(descriptionId, fullFragment, container);
+                    } else {
+                        if (descriptionFragment.hasChildNodes()) container.appendChild(descriptionFragment);
+                    }
+                }, { once: true });
+            });
         };
         const fixDescriptionXL = (id, description, container = description) => {
             const isMounted = description === container;
@@ -3862,7 +4073,7 @@ class Controller {
             const modelVersionWrap = insertElement('div', modelVersionDescription, { class: 'model-description model-version-description-wrap' });
             const description = this.#analyzeModelDescriptionString(modelVersion.description);
             const modelVersionFragment = safeParseHTML(description);
-            this.#analyzeModelDescription(modelVersionFragment, cache);
+            this.#analyzeModelDescription(modelVersionFragment, cache, modelVersion);
             if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
             mountDescription('modelVersion', modelVersionFragment, modelVersionWrap);
         }
@@ -3872,7 +4083,7 @@ class Controller {
             const modelDescription = insertElement('div', page, { class: 'model-description' });
             const description = this.#analyzeModelDescriptionString(model.description);
             const modelDescriptionFragment = safeParseHTML(description);
-            this.#analyzeModelDescription(modelDescriptionFragment, cache);
+            this.#analyzeModelDescription(modelDescriptionFragment, cache, modelVersion);
             if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
             mountDescription('model', modelDescriptionFragment, modelDescription);
         }
@@ -4841,6 +5052,34 @@ class Controller {
         return { element, promise, reload, layout };
     }
 
+    static #buildImagesQuery(rawParams = {}) {
+        const modelVersionId = rawParams.modelVersionId || rawParams.modelversion || undefined;
+        const collectionId = rawParams.collectionId || rawParams.collection || undefined;
+        const userId = rawParams.userId || undefined;
+        const username = rawParams.username || rawParams.user || undefined;
+        const postId = rawParams.postId || rawParams.post || undefined;
+
+        const isSpecific = Boolean(modelVersionId || collectionId || userId || username || postId);
+        const forcedPeriod = (collectionId || postId) ? 'AllTime' : null;
+        const baseModels = (!EXTENSION_INSTALLED || isSpecific) ? [] : SETTINGS.baseModels_images;
+
+        return {
+            limit: CONFIG.perRequestLimits.images,
+            withMeta: true,
+            sort: SETTINGS.sort_images,
+            period: forcedPeriod || SETTINGS.period_images,
+            browsingLevel: SETTINGS.browsingLevel,
+            nsfw: SETTINGS.nsfwLevel,
+            types: isSpecific ? [] : SETTINGS.image_types,
+            baseModels,
+            modelVersionId,
+            collectionId,
+            userId,
+            username,
+            postId
+        };
+    }
+
     static #genImages(options) {
         const { modelVersionId, collectionId, postId, userId, username, opCreator = null, state: navigationState = copyThis(this.#state) } = options;
         const isSpecific = modelVersionId || collectionId || userId || username || postId;
@@ -4884,22 +5123,7 @@ class Controller {
 
         const loadItems = ({ cursor = undefined } = {}) => {
             if (cursor === undefined) {
-                const baseModels = !EXTENSION_INSTALLED || isSpecific ? [] : SETTINGS.baseModels_images;
-                query = {
-                    limit: CONFIG.perRequestLimits.images,
-                    withMeta: true,
-                    sort: SETTINGS.sort_images,
-                    period: forcedPeriod || SETTINGS.period_images,
-                    browsingLevel: SETTINGS.browsingLevel,
-                    nsfw: SETTINGS.nsfwLevel,
-                    types: isSpecific ? [] : SETTINGS.image_types,
-                    baseModels,
-                    modelVersionId,
-                    collectionId,
-                    userId,
-                    username,
-                    postId
-                };
+                query = this.#buildImagesQuery(options);
                 groupingByPost = SETTINGS.groupImagesByPost && !postId;
                 state.filter = JSON.stringify(query);
 
@@ -4921,8 +5145,8 @@ class Controller {
                 }
             } else query.cursor = cursor;
 
-
-            return this.api.fetchImages(query).then(data => {
+            const apiPromise = this.#preClickResults[JSON.stringify(query)] ?? this.api.fetchImages(query);
+            return apiPromise.then(data => {
                 cursor = data.metadata?.nextCursor ?? null;
 
                 // 1. Delete the large comfy field (I don't break it down into additional meta information in the script),
@@ -5245,7 +5469,7 @@ class Controller {
         return rules.reduce((acc, { skip, regex, replacement }) => !skip ? acc.replace(regex, replacement) : acc, description);
     }
 
-    static #analyzeModelDescription(description, cache) {
+    static #analyzeModelDescription(description, cache, modelVersion = null) {
         const cacheDescriptionImages = cache?.descriptionImages ?? new Map();
         const regexNotSpace = /\S/;
 
@@ -5658,13 +5882,23 @@ class Controller {
             }
         });
 
-        if (!SETTINGS.disablePromptFormatting) description.querySelectorAll('code.prompt').forEach(this.#analyzePromptCode);
+        if (!SETTINGS.disablePromptFormatting) {
+            const baseModel = modelVersion?.baseModel || '';
+            description.querySelectorAll('code.prompt').forEach(code => this.#analyzePromptCode(code, baseModel));
+        }
 
         description.normalize();
     }
 
-    static #analyzePromptCode(codeElement) {
+    // TODO: baseModel rules
+    static #analyzePromptCode(codeElement, baseModel = '') {
         if (!codeElement) return;
+
+        // TODO: baseModel rules (keywords / weights)
+        // Pony - score_9, score_8, etc. (also weights)
+        // Illustrious - by artistName, best quality, etc. (also weights)
+        // SD*, SDXL* - weights (tag:weight)
+        // Anima - @artist name, score_9, score_8, best quality, etc. (also weights)
 
         const fragment = new DocumentFragment();
         const keywords = new Set([ 'BREAK' ]);
@@ -6189,16 +6423,16 @@ class Controller {
         // params
         if (meta.prompt) {
             const code = insertElement('code', container, { class: 'prompt prompt-positive' }, meta.prompt);
-            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code);
+            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code, meta.baseModel || '');
         }
         if (meta.negativePrompt) {
             const code = insertElement('code', container, { class: 'prompt prompt-negative' }, meta.negativePrompt);
-            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code);
+            if (!SETTINGS.disablePromptFormatting) this.#analyzePromptCode(code, meta.baseModel || '');
         }
 
         const otherMetaContainer = insertElement('div', container, { class: 'meta-other' });
         const insertOtherMeta = (key, value) => {
-            const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? value !== undefined ? `${key}: ` : key : '');
+            const item = insertElement('code', otherMetaContainer, { class: 'meta-other-item' }, key ? value !== undefined ? `${key} ` : key : '');
             if (value === undefined) return item;
 
             insertElement('span', item, { class: 'meta-value' }, value);
