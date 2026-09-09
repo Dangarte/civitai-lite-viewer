@@ -3,17 +3,17 @@
 
 
 const CONFIG = {
-    version: 48,
-    updated: '2026-08-23T12:00:00.000Z',
-    extensionVertsion: 4,
+    version: 49,
+    updated: '2026-09-09T12:00:00.000Z',
+    extensionVertsion: 5,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
     civitai_url: 'https://civitai.red', // (green -> com, com -> red)
-    civitai_origins: [
+    civitai_origins: new Set([
         'https://civitai.com',
         'https://civitai.green',
         'https://civitai.red'
-    ],
+    ]),
     api_url: 'https://civitai.com/api/v1',
     images_url: 'https://image.civitai.com',
     api_status_url: 'https://status.civitai.com/status/public',
@@ -64,6 +64,43 @@ const CONFIG = {
         blurHashSize: 30, // minimum size of blur preview
     },
     appearance: {},
+    theme_dark: {
+        colors: {
+            bg: {
+                body: { rgb: { r: 10, g: 10, b: 10 } },
+                darker: { rgb: { r: 20, g: 20, b: 20 } },
+                dark: { rgb: { r: 30, g: 30, b: 30 } },
+                base: { rgb: { r: 40, g: 40, b: 40 } },
+                light: { rgb: { r: 50, g: 50, b: 50 } },
+                lighter: { rgb: { r: 60, g: 60, b: 60 } }
+            },
+            text: {
+                darker: { rgb: { r: 153, g: 153, b: 153 } },
+                dark: { rgb: { r: 187, g: 187, b: 187 } },
+                base: { rgb: { r: 238, g: 238, b: 238 } },
+                light: { rgb: { r: 255, g: 255, b: 255 } }
+            }
+        }
+    },
+    theme_light: {
+        colors: {
+            bg: {
+                body: { rgb: { r: 245, g: 245, b: 245 } },
+                darker: { rgb: { r: 221, g: 221, b: 221 } },
+                dark: { rgb: { r: 255, g: 255, b: 255 } },
+                base: { rgb: { r: 238, g: 238, b: 238 } },
+                light: { rgb: { r: 204, g: 204, b: 204 } },
+                lighter: { rgb: { r: 187, g: 187, b: 187 } }
+            },
+            text: {
+                darker: { rgb: { r: 114, g: 114, b: 114 } },
+                dark: { rgb: { r: 57, g: 57, b: 57 } },
+                base: { rgb: { r: 0, g: 0, b: 0 } },
+                light: { rgb: { r: 0, g: 0, b: 0 } }
+            }
+        }
+    },
+    theme: {},
     perRequestLimits: {
         models: 60,
         images: 180,
@@ -97,7 +134,7 @@ const CONFIG = {
                 // "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
             ]
         },
-        unpopularModels: [ 'SD 1.4', 'SD 1.5', 'SD 1.5 LCM', 'SD 1.5 Hyper', 'SD 2.0', 'SD 2.0 768', 'SD 2.1', 'SD 2.1 768', 'SD 2.1 Unclip', 'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Large Turbo', 'SD 3.5 Medium', 'SDXL 0.9', 'SDXL 1.0 LCM', 'SDXL Distilled', 'SDXL Hyper', 'SDXL Lightning', 'SDXL Turbo', 'Hunyuan 1', '', 'Pony V7', 'CogVideoX', 'SVD', 'SVD XT', 'AuraFlow', 'Chroma', 'Kolors', 'Lumina', 'LTXV', 'LTXV2', 'Mochi', 'ODOR', 'PixArt E', 'PixArt a', 'Playground v2', 'Wan Video', 'Stable Cascade', 'HiDream', 'HiDream-O1' ]
+        unpopularModels: [ 'SD 1.4', 'SD 1.5', 'SD 1.5 LCM', 'SD 1.5 Hyper', 'SD 2.0', 'SD 2.0 768', 'SD 2.1', 'SD 2.1 768', 'SD 2.1 Unclip', 'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Large Turbo', 'SD 3.5 Medium', 'SDXL 0.9', 'SDXL 1.0 LCM', 'SDXL Distilled', 'SDXL Hyper', 'SDXL Lightning', 'SDXL Turbo', 'Hunyuan 1', '', 'Pony V7', 'CogVideoX', 'SVD', 'SVD XT', 'AuraFlow', 'Chroma', 'Kolors', 'Lumina', 'LTXV', 'LTXV2', 'Mochi', 'ODOR', 'PixArt E', 'PixArt a', 'Playground v2', 'Wan Video', 'Stable Cascade', 'HiDream', 'HiDream-O1', 'Flux.1 D', 'Flux.1 S', 'Hunyuan Video' ]
     },
     userGroups: {
         // civ_bot = civitai bot (challanges, contest, etc.)
@@ -110,6 +147,7 @@ const CONFIG = {
 };
 
 CONFIG.appearance = CONFIG.appearance_normal;
+CONFIG.theme = CONFIG.theme_dark;
 
 const SETTINGS = {
     api_key: null,
@@ -127,10 +165,12 @@ const SETTINGS = {
     baseModels: [],
     image_types: [],
     baseModels_images: [],
-    blackListTags: [],      // Doesn't work on images (pictures don't have tags)
-    blackListUserIds: [],   //
-    blackListTagIds: [],    // With the extension from the "apiProxyExtension" folder, you can filter images by tag ID
+    blackListTags: [],
+    blackListUserIds: [],
+    blackListTagIds: [],
     hideUnpopularModels: true, // Hide unpopular models from selector list
+    hideClosedModels: true,    // Hide closed (api-only) models from selector list
+    hideEarlyAccess: false,    // Hide models in "Early Access"
     nsfw: true,
     nsfwLevel: 'Mature',
     browsingLevel: 4,
@@ -159,37 +199,6 @@ const SETTINGS = {
     assumeListSameAsImage: true,    // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
 };
 
-// Some tagIds
-// TODO: List of tags in a JSON file?
-//  304: nude
-//  2013: nudity
-//  5262: solo
-//  3852: solo focus
-//  5231: male
-//  5232: man
-//  5133: woman
-//  114923: male focus
-//  308: penis
-//  3822: yaoi
-//  5140: furry
-//  1723: fat
-//  2636: plump
-//  122803: big belly
-//  2637: huge ass
-//  5219: huge breasts
-//  5510: gigantic breasts
-//  279: futanari
-//  882: bdsm
-//  511: bondage
-//  2561: vore
-//  122803: big belly
-//  3485: femboy
-//  112481: graphic male nudity
-//  112683: graphic female nudity
-//  1788: close-up
-//  111991: sexual activity
-//  162559: ejaculating while penetrated
-
 const DEVMODE = Boolean(localStorage.getItem('civitai-lite-viewer--devmode'));
 const EXTENSION_INSTALLED = Boolean(window.proxyFetchCivAPI);
 
@@ -210,6 +219,8 @@ navigator.serviceWorker.register(`service_worker.js?v=${Number(CONFIG.version)}`
 
 class CivitaiPublicAPI {
     // https://github.com/civitai/civitai/tree/main/src/pages/api/v1
+
+    static IMAGE_CDN_ROOT = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA";
 
     constructor(baseURL = CONFIG.api_url) {
         this.baseURL = baseURL;
@@ -274,6 +285,16 @@ class CivitaiPublicAPI {
         if (status) url.searchParams.append('status', status);
 
         const data = await this.#getJSON({ url, target: 'models' });
+
+        if (data.items && Array.isArray(data.items) && data.items[0]?.tags) {
+            for (const model of data.items) {
+                const normalizedTags = CivitaiPublicAPI._normalizeTags(model.tags);
+                model.tags = normalizedTags.tags;
+                model.tagIds = normalizedTags.tagIds;
+            }
+        }
+
+
         return data;
     }
 
@@ -286,9 +307,12 @@ class CivitaiPublicAPI {
             username = '',
             userId = null,
             type = '',
+            tags = [],
+            types = [], // convert from private api
             nsfw = false,
             hidden = false,
             withMeta = false,
+            withTags = false,
             requiringMeta = false,
             sort = '',
             period = '',
@@ -305,18 +329,29 @@ class CivitaiPublicAPI {
         if (sort) url.searchParams.append('sort', sort);
         if (period) url.searchParams.append('period', period);
         if (hidden) url.searchParams.append('hidden', 'true');
-        if (type) url.searchParams.append('type', type);
+        if (type || types.length) url.searchParams.append('type', type || types[0]);
+        if (tags.length > 0 && !tags.some(t => typeof t !== 'number' || isNaN(t))) url.searchParams.append('tags', tags.join(','));
         if (nsfw) url.searchParams.append('nsfw', nsfw);
         if (withMeta) url.searchParams.append('withMeta', 'true');
+        if (withTags) url.searchParams.append('withTags', 'true');
         if (requiringMeta) url.searchParams.append('requiringMeta', 'true');
 
         const data = await this.#getJSON({ url, target: 'images' });
+
+        for (const media of data.items) {
+            const normalizedTags = CivitaiPublicAPI._normalizeTags(media.tags);
+            media.tags = normalizedTags.tags;
+            media.tagIds = normalizedTags.tagIds;
+        }
+
         return data;
     }
 
     async fetchImageMeta(id, nsfwLevel) {
         const url = new URL(`${this.baseURL}/images`);
         url.searchParams.append('limit', '1');
+        url.searchParams.append('withMeta', 'true');
+        url.searchParams.append('withTags', 'true');
 
         if (id) url.searchParams.append('imageId', id);
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
@@ -329,6 +364,11 @@ class CivitaiPublicAPI {
         const url = new URL(`${this.baseURL}/models/${id}`);
 
         const data = await this.#getJSON({ url, target: 'model info' });
+
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(data.tags);
+        data.tags = normalizedTags.tags;
+        data.tagIds = normalizedTags.tagIds;
+
         return data;
     }
 
@@ -339,24 +379,69 @@ class CivitaiPublicAPI {
         return data;
     }
 
-    // Empty functions for ts
-
     async fetchArticles(options = {}) {
-        return {
-            items: [],
-            metadata: {
-                nextCursor: null
+        const {
+            limit = 60,
+            cursor,
+            username = '',
+            nsfw = false,
+            query = '',
+            sort = '',
+            period = '',
+            tags = [],
+        } = options;
+
+        const url = new URL(`${this.baseURL}/articles`);
+        url.searchParams.append('limit', limit);
+        if (cursor) url.searchParams.append('cursor', cursor);
+
+        if (username) url.searchParams.append('username', username);
+        if (sort) url.searchParams.append('sort', sort);
+        if (period) url.searchParams.append('period', period); // server ignore this
+        if (nsfw) url.searchParams.append('nsfw', nsfw);
+        if (query) url.searchParams.append('query', query);
+        if (tags.length > 0 && !tags.some(t => typeof t !== 'number' || isNaN(t))) url.searchParams.append('tags', tags.join(','));
+
+        const data = await this.#getJSON({ url, target: 'articles' });
+
+        if (data.items && Array.isArray(data.items) && data.items[0]?.tags) {
+            for (const article of data.items) {
+                article.coverImage = CivitaiPublicAPI._prepareMedia(article.coverImage);
+                article.user = CivitaiPublicAPI._prepareUserBlock(article.user);
+                const normalizedTags = CivitaiPublicAPI._normalizeTags(article.tags);
+                article.tags = normalizedTags.tags;
+                article.tagIds = normalizedTags.tagIds;
             }
-        };
+        }
+
+        return data;
     }
 
     async fetchArticle(id) {
-        return {};
+        const url = new URL(`${this.baseURL}/articles/${id}`);
+
+        const data = await this.#getJSON({ url, target: 'article info' });
+
+        data.coverImage = CivitaiPublicAPI._prepareMedia(data.coverImage);
+        data.user = CivitaiPublicAPI._prepareUserBlock(data.user);
+        data.stats = CivitaiPublicAPI._prepareStats(data.stats);
+
+        return data;
     }
 
     async fetchCollectionInfo(id) {
-        return {};
+        const url = new URL(`${this.baseURL}/collections/${id}`);
+
+        const data = await this.#getJSON({ url, target: 'collection info' });
+
+        data.coverImage = CivitaiPublicAPI._prepareMedia(data.coverImage);
+        data.user = CivitaiPublicAPI._prepareUserBlock(data.user);
+        data.stats = CivitaiPublicAPI._prepareStats(data.stats);
+
+        return data;
     }
+
+    // Empty functions for ts
 
     async fetchPostInfo(id) {
         return {};
@@ -387,6 +472,171 @@ class CivitaiPublicAPI {
     async fetchVotableTags(id, type) {
         return [];
     }
+
+    //
+
+    static _normalizeTags(rawTags) {
+        const tagIds = [];
+        const tags = [];
+
+        if (!rawTags || !Array.isArray(rawTags) || !rawTags.length) return { tags, tagIds };
+
+        const fromObject = Boolean(rawTags[0].name !== undefined && rawTags[0].id !== undefined);
+        const fromTagIds = Boolean(!fromObject && typeof rawTags[0] === 'number');
+        if (fromObject) {
+            for (const tag of rawTags) {
+                tags.push(tag);
+                tagIds.push(tag.id);
+            }
+        } else {
+            for (const tag of rawTags) {
+                if (fromTagIds) {
+                    tagIds.push(tag);
+                    tags.push({ name: String(tag), id: tag });
+                } else {
+                    tags.push({ name: String(tag) });
+                }
+            }
+        }
+
+        return { tags, tagIds };
+    }
+
+    // "1de4c2db-54a0-4fed-994f-45604bbdf0bc" --> url
+    static _convertUrlIdToUrl({ urlId, itemId, type = 'image', width = 450 }) {
+        if (!urlId) return '';
+        if (urlId.startsWith('http')) return urlId;
+        return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}${type === 'image' ? '.jpeg' : '.mp4'}`; // .jpeg or .mp4 - otherwise cf will return "cf-cache-status DYNAMIC"
+    }
+
+    static _convertImages(items, browsingLevel) {
+        const hideMinor = browsingLevel >= 2;
+        const resultItems = [];
+
+        for (const item of items) {
+            if (hideMinor && item.minor) continue; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+            // if (item.nsfwLevel > browsingLevel) continue; // Hide all above current browsingLevel level. DISABLED: The page needs to be able to show that there is something there, even if it is filtered out
+
+            // Hide broken images
+            if (!item.width || !item.height) {
+                console.warn('The API returned a broken image, it has no dimensions...', item);
+                continue;
+            }
+
+            const civitaiResources = [];
+            if (item.hasMeta && !item.meta) {
+                if (item.modelVersionIds && Array.isArray(item.modelVersionIds)) {
+                    for (const id of item.modelVersionIds) {
+                        civitaiResources.push({ modelVersionId: id });
+                    }
+                }
+                if (item.modelVersionIdsManual && Array.isArray(item.modelVersionIdsManual)) {
+                    for (const id of item.modelVersionIdsManual) {
+                        civitaiResources.push({ modelVersionId: id });
+                    }
+                }
+                if (item.modelVersionId) civitaiResources.push({ modelVersionId: item.modelVersionId });
+            }
+
+            const normalizedTags = this._normalizeTags(item.tagIds || item.tags);
+            const newItem = {
+                id: item.id,
+                hash: item.hash,
+                meta: item.hasMeta ? item.meta || {
+                    prompt: item.hasPositivePrompt ? `[Fake prompt, the API says there should be something here, but it didn't return anything]` : null,
+                    negativePrompt: `[Fake prompt, API returned nothing]`,
+                    civitaiResources: civitaiResources,
+                } : null,
+                postId: item.postId,
+                userId: item.user?.id,
+                username: item.user?.username || '[username]',
+                tags: normalizedTags.tags,
+                tagIds: normalizedTags.tagIds,
+                url: !item.url || item.url?.startsWith('https:') ? item.url : this._convertUrlIdToUrl({ urlId: item.url, type: item.type, itemId: item.id, width: 450 }),
+                width: item.width,
+                height: item.height,
+                nsfwLevel: item.nsfwLevel,
+                browsingLevel: item.nsfwLevel,
+                type: item.type,
+                createdAt: item.createdAt,
+                publishedAt: item.publishedAt,
+                stats: item.stats ? this._prepareStats(item.stats) : {}
+            };
+
+            if (item.type === 'video') {
+                newItem.duration = item.metadata?.duration;
+                newItem.audio = item.metadata?.audio;
+            }
+
+            resultItems.push(newItem);
+        }
+
+        return resultItems;
+    }
+
+    static _prepareStats(rawStats) {
+        if (!rawStats || typeof rawStats !== 'object') return {};
+
+        const result = {};
+
+        for (const key in rawStats) {
+            const value = rawStats[key];
+            if (Number.isFinite(value)) {
+                const normalizedKey = key.endsWith('AllTime') ? key.slice(0, -7) : key;
+                result[normalizedKey] = value;
+            }
+        }
+
+        return result;
+    }
+
+    static _prepareMedia(media) {
+        if (!media || typeof media !== 'object') return null;
+
+        const normalizedTags = this._normalizeTags(media.tags);
+
+        return {
+            url: !media.url || media.url?.startsWith('https:') ? media.url : this._convertUrlIdToUrl({ urlId: media.url, type: media.type, width: 450, itemId: media.id }),
+            hash: media.hash,
+            width: media.width,
+            height: media.height,
+            nsfwLevel: media.nsfwLevel,
+            id: media.id,
+            tags: normalizedTags.tags,
+            tagIds: normalizedTags.tagIds,
+            type: media.type,
+            createdAt: media.createdAt
+        };
+    }
+
+    static _prepareUserBlock(user) {
+        if (!user || typeof user !== 'object') return {};
+
+        if (user.deletedAt) {
+            return {
+                id: user.id,
+                isModerator: user.isModerator || false,
+                deletedAt: user.deletedAt,
+                username: '[deleted]'
+            };
+        }
+
+        const hasModeratorCosmetics = user.cosmetics?.some(c => c.cosmeticId === 5);
+
+        const urlId = user.profilePicture?.url || user.image;
+
+        return {
+            id: user.id,
+            isModerator: user.isModerator || hasModeratorCosmetics || false,
+            username: user.username || '[username]',
+            image: !urlId || urlId?.startsWith('https:') ? urlId : this._convertUrlIdToUrl({ urlId: urlId, type: 'image', itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
+            imageMeta: user.profilePicture ? {
+                hash: user.profilePicture.hash ?? null,
+                width: user.profilePicture.width ?? null,
+                height: user.profilePicture.height ?? null,
+            } : null,
+        };
+    }
 }
 
 /**
@@ -396,7 +646,6 @@ class CivitaiPublicAPI {
 class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     constructor(baseURL) {
         super(baseURL);
-        this.IMAGE_CDN_ROOT = "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA";
         console.log(`[API Bridge] Uses the civitai.red original API instead of the public one`);
     }
 
@@ -531,70 +780,6 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         return revive(0);
     }
 
-    // "1de4c2db-54a0-4fed-994f-45604bbdf0bc" --> url
-    #convertUrlIdToUrl({ urlId, itemId, type = 'image', width = 450 }) {
-        if (!urlId) return '';
-        if (urlId.startsWith('http')) return urlId;
-        return `${this.IMAGE_CDN_ROOT}/${urlId}/width=${width}/${itemId}${type === 'image' ? '.jpeg' : '.mp4'}`; // .jpeg or .mp4 - otherwise cf will return "cf-cache-status DYNAMIC"
-    }
-
-    #prepareUserBlock(user) {
-        if (!user || typeof user !== 'object') return {};
-
-        if (user.deletedAt) {
-            return {
-                id: user.id,
-                isModerator: user.isModerator || false,
-                deletedAt: user.deletedAt,
-                username: '[deleted]'
-            };
-        }
-
-        const hasModeratorCosmetics = user.cosmetics?.some(c => c.cosmeticId === 5);
-
-        const urlId = user.profilePicture?.url || user.image;
-
-        return {
-            id: user.id,
-            isModerator: user.isModerator || hasModeratorCosmetics || false,
-            username: user.username || '[username]',
-            image: !urlId || urlId?.startsWith('https:') ? urlId : this.#convertUrlIdToUrl({ urlId: urlId, type: 'image', itemId: user.username ? encodeURIComponent(user.username) : user.id, width: 96 }),
-            imageMeta: user.profilePicture ? {
-                hash: user.profilePicture.hash ?? null,
-                width: user.profilePicture.width ?? null,
-                height: user.profilePicture.height ?? null,
-            } : null,
-        };
-    }
-
-    #prepareStats(rawStats) {
-        if (!rawStats || typeof rawStats !== 'object') return {};
-
-        return Object.keys(rawStats).reduce((acc, key) => {
-            const normalizedKey = key.endsWith('AllTime') ? key.substring(0, key.length - 7) : key; // 'AllTime'.length = 7
-            const value = rawStats[key];
-            if (typeof value === 'number' && !isNaN(value)) acc[normalizedKey] = value;
-            return acc;
-        }, {});
-    }
-
-    #prepareMedia(media) {
-        if (!media || typeof media !== 'object') return null;
-
-        return {
-            url: !media.url || media.url?.startsWith('https:') ? media.url : this.#convertUrlIdToUrl({ urlId: media.url, type: media.type, width: 450, itemId: media.id }),
-            hash: media.hash,
-            width: media.width,
-            height: media.height,
-            nsfwLevel: media.nsfwLevel,
-            id: media.id,
-            tags: [],
-            tagIds: media.tags,
-            type: media.type,
-            createdAt: media.createdAt
-        };
-    }
-
     #MARK_RULES = {
         bold: t => `<strong>${t}</strong>`,
         italic: t => `<em>${t}</em>`,
@@ -638,9 +823,33 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         video: ctx => `<video controls src="${escapeHtml(ctx.node.attrs?.src || '')}" style="max-width: 100%;"></video>`,
         media: ctx => {
             const { type, url: urlId, filename } = ctx.node.attrs || {};
-            const url = this.#convertUrlIdToUrl({ urlId, itemId: encodeURIComponent(filename || ''), width: 525 });
+            const url = CivitaiPublicAPI._convertUrlIdToUrl({ urlId, itemId: encodeURIComponent(filename || ''), width: 525 });
             if (type === 'video') return `<video controls src="${escapeHtml(url)}" style="max-width: 100%;"></video>`;
             return `<img src="${escapeHtml(url)}" alt="${escapeHtml(filename || '')}" style="max-width: 100%;" />`; // if (type === 'image')
+        },
+        timestamp: ctx => {
+            const { value: timestampS, style } = ctx.node.attrs || {};
+            const timestampMs = Number(timestampS) * 1000;
+            const date = new Date(timestampMs);
+            const isoString = isNaN(date.getTime()) ? 'Ivalid Date' : date.toISOString();
+
+            if (style === 'R') {
+                return `<relative-time datetime="${isoString}"></relative-time>`;
+            }
+
+            const formatOptions = {
+                t: { hour: '2-digit', minute: '2-digit' },
+                T: { hour: '2-digit', minute: '2-digit', second: '2-digit' },
+                d: { day: '2-digit', month: '2-digit', year: 'numeric' },
+                D: { day: 'numeric', month: 'long', year: 'numeric' },
+                f: { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' },
+                F: { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+            };
+
+            const options = formatOptions[style] || formatOptions.f;
+            const formattedText = new Intl.DateTimeFormat('default', options).format(date);
+
+            return `<time datetime="${isoString}">${formattedText}</time>`;
         }
     };
     #convertContentToHtml(node) {
@@ -665,56 +874,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         const renderer = this.#BLOCK_RULES[node.type];
         if (renderer) return renderer({ children: childrenHtml, node });
 
-        console.warn('Unknown node type:', node.type);
+        console.warn('Unknown node type:', node.type, node);
         return childrenHtml;
-    }
-
-    #convertImages(items, browsingLevel) {
-        return items.map(item => {
-            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
-            if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
-
-            // Hide broken images
-            if (!item.width || !item.height) {
-                console.warn('The API returned a broken image, it has no dimensions...', item);
-                return null;
-            }
-
-            const newItem = {
-                id: item.id,
-                hash: item.hash,
-                meta: item.hasMeta ? item.meta || {
-                    prompt: item.hasPositivePrompt ? `[Fake prompt, the API says there should be something here, but it didn't return anything]` : null,
-                    negativePrompt: `[Fake prompt, API returned nothing]`,
-                    civitaiResources: [
-                        ...(item.modelVersionIds || []),
-                        ...(item.modelVersionIdsManual || []),
-                        item.modelVersionId || null
-                    ].filter(Boolean).map(id => ({ modelVersionId: id })),
-                } : null,
-                postId: item.postId,
-                userId: item.user?.id,
-                username: item.user?.username || '[username]',
-                tags: [],
-                tagIds: item.tagIds || item.tags || [],
-                url: !item.url || item.url?.startsWith('https:') ? item.url : this.#convertUrlIdToUrl({ urlId: item.url, type: item.type, itemId: item.id, width: 450 }),
-                width: item.width,
-                height: item.height,
-                nsfwLevel: item.nsfwLevel,
-                browsingLevel: item.nsfwLevel,
-                type: item.type,
-                createdAt: item.createdAt,
-                publishedAt: item.publishedAt,
-                stats: item.stats ? this.#prepareStats(item.stats) : {}
-            };
-
-            if (item.type === 'video') {
-                newItem.duration = item.metadata?.duration;
-                newItem.audio = item.metadata?.audio;
-            }
-
-            return newItem;
-        }).filter(Boolean);
     }
 
     #convertFiles(files, type) {
@@ -790,7 +951,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
         const data = await this.#getJSON({ route: 'image.getInfinite', params: { input }, target: 'images' });
 
         return {
-            items: this.#convertImages(data.items, browsingLevel),
+            items: CivitaiPublicAPI._convertImages(data.items, browsingLevel),
             metadata: {
                 nextCursor: data.nextCursor === -1 ? null : data.nextCursor
             }
@@ -833,20 +994,22 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
             if (item.nsfwLevel > browsingLevel) return null; // Hide all above current browsingLevel level
 
+            const normalizedTags = CivitaiPublicAPI._normalizeTags(item.tags);
+
             return {
                 id: item.id,
                 title: item.title,
                 category: item.tags?.find(t => t.isCategory)?.name || 'misc',
                 availability: item.availability,
                 userId: item.user?.id,
-                coverImage: this.#prepareMedia(item.coverImage),
-                user: this.#prepareUserBlock(item.user),
-                tags: item.tags?.map(t => t.name) ?? [],
-                tagIds: item.tags?.map(t => t.id) ?? [],
+                coverImage: CivitaiPublicAPI._prepareMedia(item.coverImage),
+                user: CivitaiPublicAPI._prepareUserBlock(item.user),
+                tags: normalizedTags.tags,
+                tagIds: normalizedTags.tagIds,
                 nsfwLevel: item.nsfwLevel,
                 updatedAt: item.updatedAt,
                 publishedAt: item.publishedAt,
-                stats: this.#prepareStats(item.stats)
+                stats: CivitaiPublicAPI._prepareStats(item.stats)
             };
         }).filter(Boolean);
 
@@ -868,11 +1031,13 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
         const article = await this.#getJSON({ route: 'article.getById', params: { input }, target: `article (id: ${id})` });
 
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(article.tags);
+
         return {
             id: article.id,
             availability: article.availability,
             title: article.title,
-            user: this.#prepareUserBlock(article.user),
+            user: CivitaiPublicAPI._prepareUserBlock(article.user),
             content: article.contentJson ? this.#convertContentToHtml(article.contentJson) : article.content,
             category: article.tags?.find(t => t.isCategory)?.name || 'misc',
             attachments: this.#convertFiles(article.attachments, 'attachments'),
@@ -880,14 +1045,14 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             publishedAt: article.publishedAt,
             updatedAt: article.updatedAt,
             nsfwLevel: article.nsfwLevel,
-            tags: article.tags?.map(t => t.name) ?? [],
-            tagIds: article.tags?.map(t => t.id) ?? [],
-            coverImage: this.#prepareMedia(article.coverImage),
-            stats: this.#prepareStats(article.stats)
+            tags: normalizedTags.tags,
+            tagIds: normalizedTags.tagIds,
+            coverImage: CivitaiPublicAPI._prepareMedia(article.coverImage),
+            stats: CivitaiPublicAPI._prepareStats(article.stats)
         };
     }
 
-    // This is necessary because the public API does not include tags, and here you also need to sort the models (at least by cover images)
+    // This is necessary because the public API does not include paid models, need at least know about them
     async fetchModels(options) {
         const {
             limit = 20, // 0 ... 100
@@ -935,48 +1100,81 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             combineWithPublicData ? super.fetchModels(publicOptions) : Promise.resolve({})
         ]);
 
-        const items = data.items.map(item => {
-            if (browsingLevel >= 2 && item.minor) return null; // 2 = Soft. Hide all minors if browsingLevel is Soft+
-            if (Math.round(item.nsfwLevel/2) > browsingLevel) return null; // Hide all above current browsingLevel level // kinda strange lvls in models (60? what?)
+        const dataPublicModelsById = new Map();
+        if (dataPublic.items && Array.isArray(dataPublic.items)) {
+            for (const model of dataPublic.items) {
+                dataPublicModelsById.set(model.id, model);
+            }
+        }
+
+        const items = [];
+        const hideMinor = browsingLevel >= 2; // 2 = Soft. Hide all minors if browsingLevel is Soft+
+        const maxNsfwLevel = browsingLevel * 2; // Hide all above current browsingLevel level // kinda strange lvls in models (60? what?)
+
+        for (const item of data.items) {
+            if (hideMinor && item.minor) continue;
+            // if (item.nsfwLevel > maxNsfwLevel) continue; // DISABLED: Too useless - this value means nothing on the model itself
 
             const isUpdate = (Date.parse(item.lastVersionAt) - Date.parse(item.publishedAt)) > 60000;
 
             const version = item.version;
-            const publicVersion = combineWithPublicData ? dataPublic?.items?.find(model => model.id === item.id)?.modelVersions?.find(v => v.id === version.id) : null;
+            const publicModel = combineWithPublicData ? dataPublicModelsById.get(item.id) : null;
+            const modelVersions = publicModel?.modelVersions && Array.isArray(publicModel.modelVersions) ? publicModel.modelVersions : [];
 
-            return {
+            if (modelVersions.length) {
+                // Set some fields from the private API, such as images with tags
+                for (const modelVersion of modelVersions) {
+                    if (modelVersion.id === version.id) {
+                        modelVersion.images = CivitaiPublicAPI._convertImages(item.images, browsingLevel);
+                        modelVersion.availability = version.availability;
+                        modelVersion.earlyAccessDeadline = item.earlyAccessDeadline;
+                        modelVersion.hasActivePaidAccess = item.hasActivePaidAccess;
+                        break;
+                    }
+                }
+            } else {
+                modelVersions.push({
+                    id: version.id,
+                    name: version.name,
+                    images: CivitaiPublicAPI._convertImages(item.images, browsingLevel),
+                    availability: version.availability,
+                    earlyAccessDeadline: item.earlyAccessDeadline,
+                    hasActivePaidAccess: item.hasActivePaidAccess,
+                    baseModel: version.baseModel,
+                    createdAt: version.createdAt,
+                    publishedAt: version.publishedAt,
+                    nsfwLevel: version.nsfwLevel,
+                    trainedWords: version.trainedWords || [],
+                    stats: null
+                });
+
+                if (isUpdate) {
+                    modelVersions.push({
+                        publishedAt: item.publishedAt,
+                        name: `[Fake name, the API says there should be something here, but it didn't return anything]`,
+                        isPlaceholderModel: true
+                    });
+                }
+            }
+
+            const normalizedTags = CivitaiPublicAPI._normalizeTags(item.tags);
+
+            items.push({
                 id: item.id,
                 name: item.name,
                 type: item.type,
                 nsfwLevel: item.nsfwLevel,
                 availability: item.availability,
                 baseModels: item.baseModels && Array.isArray(item.baseModels) ? item.baseModels : [],
-                creator: this.#prepareUserBlock(item.user),
-                description: '',
-                modelVersions: [
-                    {
-                        id: version.id,
-                        name: version.name,
-                        images: this.#convertImages(item.images, browsingLevel),
-                        availability: version.availability,
-                        earlyAccessDeadline: item.earlyAccessDeadline,
-                        baseModel: version.baseModel,
-                        createdAt: version.createdAt,
-                        publishedAt: version.publishedAt,
-                        nsfwLevel: version.nsfwLevel,
-                        trainedWords: version.trainedWords || [],
-                        stats: publicVersion?.stats ? this.#prepareStats(publicVersion.stats) : null
-                    },
-                    isUpdate ? {
-                        publishedAt: item.publishedAt,
-                        name: `[Fake name, the API says there should be something here, but it didn't return anything]`
-                    } : null
-                ].filter(Boolean),
+                creator: CivitaiPublicAPI._prepareUserBlock(item.user),
+                description: publicModel?.description || '',
+                modelVersions: modelVersions,
                 userId: item.user?.id,
-                tagIds: item.tags ?? [],
-                stats: this.#prepareStats(item.rank)
-            };
-        }).filter(Boolean);
+                tags: normalizedTags.tags,
+                tagIds: normalizedTags.tagIds,
+                stats: CivitaiPublicAPI._prepareStats(item.rank)
+            });
+        }
 
         return {
             items,
@@ -988,22 +1186,6 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
     // No images, required second request from page
     async fetchModelInfo(id) {
-        // Public API (if empty then proxy fetch)
-        const resultOriginal = await super.fetchModelInfo(id);
-        if (resultOriginal.modelVersions?.length) {
-            // Fix download urls (switch to red)
-            const comUrl = 'https://civitai.com/';
-            const redUrl = 'https://civitai.red/';
-            resultOriginal.modelVersions.forEach(v => v.files?.forEach(f => f.downloadUrl = f.downloadUrl?.replace(comUrl, redUrl)));
-
-            // Fix creator id
-            if (resultOriginal.creator && !resultOriginal.creator?.id && resultOriginal.userId) resultOriginal.creator.id = resultOriginal.userId;
-
-            return resultOriginal;
-        }
-
-        console.log('[API Bridge] Public API returned empty list, retry with bridge.');
-
         const input = {
             json: {
                 // authed: true,
@@ -1011,7 +1193,34 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             }
         };
 
-        const model = await this.#getJSON({ route: 'model.getById', params: { input }, target: `model (id: ${id})` });
+        // use Public API for load images
+        const [ data, dataPublic ] = await Promise.all([
+            this.#getJSON({ route: 'model.getById', params: { input }, target: `model (id: ${id})` }),
+            super.fetchModelInfo(id)
+        ]);
+
+        const dataPublicModelVersionsById = new Map();
+        if (dataPublic && dataPublic.modelVersions && Array.isArray(dataPublic.modelVersions)) {
+            // Fix download urls (switch to red)
+            const comUrl = 'https://civitai.com/';
+            const redUrl = 'https://civitai.red/';
+            for (const version of dataPublic.modelVersions) {
+                if (version.files && Array.isArray(version.files)) {
+                    for (const file of version.files) {
+                        file.downloadUrl = file.downloadUrl?.replace(comUrl, redUrl);
+                    }
+                }
+
+                dataPublicModelVersionsById.set(version.id, version);
+            }
+    
+            // Fix creator id
+            if (dataPublic.creator && !dataPublic.creator?.id && dataPublic.userId) dataPublic.creator.id = dataPublic.userId;
+        }
+
+        const model = data;
+
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(model.tags);
 
         return {
             id: model.id,
@@ -1020,34 +1229,38 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             earlyAccessDeadline: model.earlyAccessDeadline,
             hasSuggestedResources: model.hasSuggestedResources,
             name: model.name,
-            creator: this.#prepareUserBlock(model.user),
+            creator: CivitaiPublicAPI._prepareUserBlock(model.user),
             description: model.description,
             publishedAt: model.publishedAt,
             updatedAt: model.updatedAt,
             nsfwLevel: model.nsfwLevel,
             modelVersions: model.modelVersions.map(version => {
+                const publicVersion = dataPublicModelVersionsById.get(version.id);
+
+                const images = Array.isArray(version.images) ? version.images : Array.isArray(publicVersion.images) ? publicVersion.images : null;
 
                 return {
                     id: version.id,
                     modelId: version.modelId,
                     name: version.name,
                     files: this.#convertFiles(version.files, 'models'),
-                    images: Array.isArray(version.images) ? this.#convertImages(version.images, 32) : null, // No images in response...
+                    images: images ? CivitaiPublicAPI._convertImages(images, 32) : null,
                     description: version.description,
                     availability: version.earlyAccessConfig ? 'EarlyAccess' : version.availability,
                     earlyAccessConfig: version.earlyAccessConfig,
                     earlyAccessDeadline: version.earlyAccessDeadline,
+                    paidAccess: version.paidAccess,
                     baseModel: version.baseModel,
                     createdAt: version.createdAt,
                     publishedAt: version.publishedAt,
                     nsfwLevel: version.nsfwLevel,
                     trainedWords: version.trainedWords || [],
-                    stats: this.#prepareStats(version.rank)
+                    stats: CivitaiPublicAPI._prepareStats(version.rank)
                 };
             }),
-            tags: model.tagsOnModels?.map(t => t.name ?? t.tag?.name) ?? [],
-            tagIds: model.tagsOnModels?.map(t => t.id ?? t.tag?.id) ?? [],
-            stats: this.#prepareStats(model.rank)
+            tags: normalizedTags.tags,
+            tagIds: normalizedTags.tagIds,
+            stats: CivitaiPublicAPI._prepareStats(model.rank)
         };
     }
 
@@ -1066,13 +1279,13 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             id: collection.id,
             availability: collection.availability,
             name: collection.name,
-            user: this.#prepareUserBlock(collection.user),
+            user: CivitaiPublicAPI._prepareUserBlock(collection.user),
             description: collection.description,
             mode: collection.mode,
             type: collection.type,
             metadata: { ...collection.metadata },
             nsfwLevel: collection.nsfwLevel,
-            image: this.#prepareMedia(collection.image),
+            image: CivitaiPublicAPI._prepareMedia(collection.image),
         };
     }
 
@@ -1086,18 +1299,20 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
         const post = await this.#getJSON({ route: 'post.get', params: { input }, target: `post (id: ${id})` });
 
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(post.tags);
+
         return {
             id: post.id,
             availability: post.availability,
             title: post.title,
-            user: this.#prepareUserBlock(post.user),
+            user: CivitaiPublicAPI._prepareUserBlock(post.user),
             description: post.detail,
             category: post.tags?.find(t => t.isCategory)?.name || 'misc',
             publishedAt: post.publishedAt,
             nsfwLevel: post.nsfwLevel,
             collectionId: post.collectionId,
-            tags: post.tags?.map(t => t.name) ?? [],
-            tagIds: post.tags?.map(t => t.id) ?? [],
+            tags: normalizedTags.tags,
+            tagIds: normalizedTags.tagIds,
         };
     }
 
@@ -1121,10 +1336,12 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             })
         ]);
 
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(image.tags);
+
         const resultImage = {
             id: image.id,
             postId: image.postId,
-            url: !image.url || image.url?.startsWith('https:') ? image.url : this.#convertUrlIdToUrl({ urlId: image.url, type: image.type, itemId: image.id, width: 450 }),
+            url: !image.url || image.url?.startsWith('https:') ? image.url : CivitaiPublicAPI._convertUrlIdToUrl({ urlId: image.url, type: image.type, itemId: image.id, width: 450 }),
             nsfwLevel: image.nsfwLevel,
             width: image.width,
             height: image.height,
@@ -1132,11 +1349,11 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             type: image.type,
             createdAt: image.createdAt,
             username: image.user?.username,
-            user: this.#prepareUserBlock(image.user),
-            stats: this.#prepareStats(image.stats),
+            user: CivitaiPublicAPI._prepareUserBlock(image.user),
+            stats: CivitaiPublicAPI._prepareStats(image.stats),
             meta: generation?.meta || image.meta || null,
-            tags: image.tags?.map(t => (typeof t === 'object' ? t.name : t)) ?? [],
-            tagIds: image.tags?.map(t => t.id).filter(Boolean) ?? [],
+            tags: normalizedTags.tags,
+            tagIds: normalizedTags.tagIds,
             resources: image.resources ?? []
         };
 
@@ -1174,7 +1391,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                     username: r.user?.username ?? undefined
                 };
             }) || [],
-            user: this.#prepareUserBlock(comment.user),
+            user: CivitaiPublicAPI._prepareUserBlock(comment.user),
         };
 
         if (comment._count) result.commentsCount = comment._count.comments || 0;
@@ -1282,7 +1499,6 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     }
 }
 
-// TODO: Prerender pages when pointerdown, and show on click
 class Controller {
     static api = EXTENSION_INSTALLED ? new CivitaiExtensionProxyAPI(CONFIG.api_url) : new CivitaiPublicAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
@@ -1387,6 +1603,7 @@ class Controller {
             'Krea 2',
             'MageFlow',
             'MiniMax H3',
+            'MiniMax Music 3',
 
             // API-only models
             'Wan Video 2.5 I2V',
@@ -1406,6 +1623,7 @@ class Controller {
             'Imagen4',
             'MAI',
             'Reve',
+            'Muse Image',
 
             'Other'
         ],
@@ -1466,6 +1684,7 @@ class Controller {
             'ZImageTurbo': 'ZIT',
             'ZImageBase': 'ZI',
             'MiniMax H3': 'H3',
+            'MiniMax Music 3': 'H3 Music',
         },
         // TODO: add tag 'edit'
         tags: {
@@ -1561,6 +1780,8 @@ class Controller {
             'Reve': ['image', 'closed', 'reve-ai', 'censored', 'multilingual'], // multilingual?
             'MageFlow': ['image', 'weights', 'microsoft', 'censored', 'multilingual'],
             'MiniMax H3': ['video', 'weights', 'minimax', 'uncensored', 'multilingual'], // multilingual?
+            'MiniMax Music 3': ['audio', 'weights', 'minimax', 'censored', 'multilingual'], // multilingual?
+            'Muse Image': ['image', 'closed', 'meta', 'censored', 'multilingual'], // multilingual?
             'Other': ['misc']
         }
     };
@@ -1692,10 +1913,6 @@ class Controller {
                 });
             },
             prepare: ({ pageId, params }) => {
-                if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
-                    return { key: null, promise: null };
-                }
-
                 if (params.article) {
                     if (this.#cache.articles?.has(`${params.article}`)) return { key: null, promise: null };
                     return {
@@ -1805,14 +2022,14 @@ class Controller {
             parse: ({ url, params }) => {
                 params.articleId = url.pathname.match(this.#regex.urlArticles)?.[1] ?? null;
             },
-            toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.articleId ? `#articles?article=${params.articleId}` : null
+            toLocal: ({ url, params }) => params.articleId ? `#articles?article=${params.articleId}` : null
         },
         { // collections
             match: ({ url, params }) => url.pathname.startsWith('/collections/'),
             parse: ({ url, params }) => {
                 params.collectionId = url.pathname.match(this.#regex.urlCollections)?.[1] ?? null;
             },
-            toLocal: ({ url, params }) => EXTENSION_INSTALLED && params.collectionId ? `#images?collection=${params.collectionId}` : null
+            toLocal: ({ url, params }) => params.collectionId ? `#images?collection=${params.collectionId}` : null
         }
     ];
 
@@ -2091,7 +2308,7 @@ class Controller {
             const qUrl = toURL(q);
             if (qUrl) {
                 try {
-                    if (!CONFIG.civitai_origins.includes(qUrl.origin)) throw Error('Unknown origin');
+                    if (!CONFIG.civitai_origins.has(qUrl.origin)) throw Error('Unknown origin');
 
                     const { localUrl: redirectUrl, params } = this.parseCivUrl(qUrl);
 
@@ -2123,7 +2340,7 @@ class Controller {
                         if (!params.postId) throw new Error('There is no post id in the link');
                         const title = window.languagePack?.text?.post ?? 'Post';
                         results.push({ image: CONFIG.logo, href: redirectUrl, title, typeBadge: title });
-                    } else if (EXTENSION_INSTALLED && qUrl.pathname.startsWith('/articles/')) {
+                    } else if (qUrl.pathname.startsWith('/articles/')) {
                         if (!params.articleId) throw new Error('There is no article id in the link');
                         promise = this.api.fetchArticle(params.articleId).then(article => {
                             const typeBadge = window.languagePack?.text?.article ?? 'Article';
@@ -2184,7 +2401,7 @@ class Controller {
 
             // try search via query (if normal length)
             if (q.length > 1 && (q.length < 64 || q.indexOf(':') !== -1)) {
-                // TODO
+                // TODO: search
                 if (!promises.length && !results.length) results.push({ icon: 'wrench', title: searchLang.wipPlaceholder ?? '[WIP] In development, so far only link conversion and hash search' })
             }
 
@@ -2250,68 +2467,65 @@ class Controller {
         };
 
         // Blacklist tagIds and presets (only if extension installed)
-        if (EXTENSION_INSTALLED) {
-            try {
-                const container = createElement('div', { class: 'config-container' });
-                const hideByTagsToggles = insertElement('div', container, { class: 'config-boolean-list' });
+        try {
+            const container = createElement('div', { class: 'config-container' });
+            const hideByTagsToggles = insertElement('div', container, { class: 'config-boolean-list' });
 
-                CONFIG.filters.tagBlacklistPresetKeys.forEach(key => {
-                    const { element } = this.#genBoolean({
-                        onchange: ({ newValue }) => {
-                            SETTINGS[key] = newValue;
-                            savePageSettings();
-                        },
-                        value: SETTINGS[key],
-                        label: tempHome[key] ?? key
-                    });
-                    hideByTagsToggles.appendChild(element);
-                });
-
-                const descriptionContainer = insertElement('div', container, { class: 'config-description' });
-                insertElement('p', descriptionContainer, undefined, tempHome.imagesFilter ?? 'Images filter');
-                settingsContainer.appendChild(container);
-            } catch (_) {
-                console.error(_);
-                insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
-            }
-
-            // Hide untagded images
-            addSetting({
-                description: tempHome.hideWithoutTagIdsDescription ?? 'Hide untagded images from the infinite feed (tags are probably present, but the server returned an image without tags)',
-                toggleElement: this.#genBoolean({
+            CONFIG.filters.tagBlacklistPresetKeys.forEach(key => {
+                const { element } = this.#genBoolean({
                     onchange: ({ newValue }) => {
-                        SETTINGS.hideWithoutTagIds = newValue;
+                        SETTINGS[key] = newValue;
                         savePageSettings();
                     },
-                    value: SETTINGS.hideWithoutTagIds,
-                    label: tempHome.hideWithoutTagIds ?? 'Hide without tags'
-                }).element,
+                    value: SETTINGS[key],
+                    label: tempHome[key] ?? key
+                });
+                hideByTagsToggles.appendChild(element);
             });
 
-            // Blacklist tagIds
-            if (DEVMODE) {
-                addSetting({
-                    description: tempHome.blackListTagIdsDescription ?? 'List of tagIds to hide (separated by commas)',
-                    blockquote: tempHome.blackListTagIdsNote ?? 'A list of numeric tag IDs, used to hide images with these tags (only works if the extension (located in the "apiProxyExtension" folder in the project repository) is installed to use the original API, since the public API does not return any tags)',
-                    toggleElement: this.#genStringInput({
-                        onchange: ({ newValue }) => {
-                            SETTINGS.blackListTagIds = newValue.split(',').map(tag => tag.trim()).filter(tag => tag) ?? [];
-                            savePageSettings();
-                        },
-                        value: SETTINGS.blackListTagIds.join(', '),
-                        placeholder: tempHome.tagIdsSeparatedByCommas ?? 'Tag IDs separated by commas'
-                    }).element
-                });
-            }
+            const descriptionContainer = insertElement('div', container, { class: 'config-description' });
+            insertElement('p', descriptionContainer, undefined, tempHome.imagesFilter ?? 'Images filter');
+            settingsContainer.appendChild(container);
+        } catch (_) {
+            console.error(_);
+            insertElement('p', settingsContainer, { class: 'error-text' }, `Error: ${_?.message ?? _}`);
+        }
+
+        // Hide untagded images
+        addSetting({
+            description: tempHome.hideWithoutTagIdsDescription ?? 'Hide untagded images from the infinite feed (tags are probably present, but the server returned an image without tags)',
+            toggleElement: this.#genBoolean({
+                onchange: ({ newValue }) => {
+                    SETTINGS.hideWithoutTagIds = newValue;
+                    savePageSettings();
+                },
+                value: SETTINGS.hideWithoutTagIds,
+                label: tempHome.hideWithoutTagIds ?? 'Hide without tags'
+            }).element,
+        });
+
+        // Blacklist tagIds
+        if (DEVMODE) {
+            addSetting({
+                description: tempHome.blackListTagIdsDescription ?? 'List of tagIds to hide (separated by commas)',
+                blockquote: tempHome.blackListTagIdsNote ?? 'A list of numeric tag IDs, used to hide images with these tags',
+                toggleElement: this.#genStringInput({
+                    onchange: ({ newValue }) => {
+                        SETTINGS.blackListTagIds = newValue.split(',').map(tag => tag.trim()).filter(Boolean) ?? [];
+                        savePageSettings();
+                    },
+                    value: SETTINGS.blackListTagIds.join(', '),
+                    placeholder: tempHome.tagIdsSeparatedByCommas ?? 'Tag IDs separated by commas'
+                }).element
+            });
         }
 
         // Blacklist tags
         addSetting({
             description: tempHome.blackListTagsDescription ?? 'List of tags to hide (separated by commas)',
-            blockquote: tempHome.blackListTagsNote ?? 'This works only on the model list, since the image API does not return a list of tags.',
             toggleElement: this.#genStringInput({
                 onchange: ({ newValue }) => {
-                    SETTINGS.blackListTags = newValue.split(',').map(tag => tag.trim()).filter(tag => tag) ?? [];
+                    SETTINGS.blackListTags = newValue.split(',').map(tag => tag.trim()).filter(Boolean) ?? [];
                     savePageSettings();
                 },
                 value: SETTINGS.blackListTags.join(', '),
@@ -2329,6 +2543,19 @@ class Controller {
                 },
                 value: SETTINGS.hideUnpopularModels,
                 label: tempHome.hideUnpopularModels ?? 'Hide unpopular models'
+            }).element,
+        });
+
+        // Closed models
+        addSetting({
+            description: tempHome.closedModelsDescription ?? 'Hide closed (api-only) models from the list',
+            toggleElement: this.#genBoolean({
+                onchange: ({ newValue }) => {
+                    SETTINGS.hideClosedModels = newValue;
+                    savePageSettings();
+                },
+                value: SETTINGS.hideClosedModels,
+                label: tempHome.hideClosedModels ?? 'Hide closed models'
             }).element,
         });
 
@@ -2459,17 +2686,6 @@ class Controller {
     }
 
     static gotoArticles(options = {}) {
-        if (!EXTENSION_INSTALLED || !this.api.fetchArticles) {
-            const appContent = createElement('div', { class: 'app-content' });
-            const p = insertElement('p', appContent, { class: 'error-text' });
-            p.appendChild(getIcon('cross'));
-            insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
-            return {
-                element: appContent,
-                title: window.languagePack?.text?.articles ?? 'Articles'
-            };
-        }
-
         const { tag, username, collectionId } = options;
         const forcedPeriod = collectionId ? 'AllTime' : null;
         const fragment = new DocumentFragment();
@@ -2621,24 +2837,10 @@ class Controller {
     }
 
     static gotoArticle(articleId) {
-        if (!EXTENSION_INSTALLED || !this.api.fetchArticle) {
-            const appContent = createElement('div', { class: 'app-content' });
-            const p = insertElement('p', appContent, { class: 'error-text' });
-            p.appendChild(getIcon('cross'));
-            insertElement('span', p, undefined, window.languagePack?.temp?.articles ?? 'CivitAI public API does not provide a list of articles 😢');
-            return {
-                element: appContent,
-                title: window.languagePack?.text?.articles ?? 'Articles'
-            };
-        }
-
         const pageNavigation = this.#pageNavigation;
         const navigationState = copyThis(this.#state);
         const cache = this.#cache.history.get(navigationState.id) ?? {};
         if (!cache.descriptionImages) cache.descriptionImages = new Map();
-
-        // to select the background color when correcting colors
-        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
 
         const insertArticle = article => {
             const fragment = new DocumentFragment();
@@ -2664,8 +2866,8 @@ class Controller {
                 modelTagsWrap.textContent = '';
                 let categoryLink;
                 tags.forEach((tag, i) => {
-                    const a = insertElement('a', modelTagsWrap, { href: `#articles?tag=${encodeURIComponent(article.tagIds[i])}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag)
-                    if (tag === article.category) categoryLink = a;
+                    const a = insertElement('a', modelTagsWrap, { href: `#articles?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id) ? 'badge error-text' : 'badge') }, tag.name)
+                    if (tag.name === article.category) categoryLink = a;
                 });
                 if (!categoryLink) categoryLink = createElement('div', { class: 'badge' }, article.category);
                 categoryLink.classList.add('model-category');
@@ -2690,14 +2892,34 @@ class Controller {
             };
             if (this.#state.article_tags || article.tags.join('').length <= 80) updateTags(article.tags);
             else {
-                updateTags(article.tags.reduce((acc, tag) => (acc.join('').length + tag.length <= 80 ? [...acc, tag] : acc), []));
-                const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
-                showMore.appendChild(getIcon('arrow_down'));
-                insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${article.tags.length - 12}`);
-                showMore.addEventListener('click', () => {
-                    this.#state.article_tags = true;
-                    updateTags(article.tags);
-                }, { once: true });
+                let currentLength = 0;
+                const visibleTags = [];
+                for (let i = 0; i < article.tags.length; i++) {
+                    const tag = article.tags[i];
+                    if (currentLength + tag.name.length > 80) break;
+                    visibleTags.push(tag);
+                    currentLength += tag.name.length;
+                }
+
+                if (
+                    visibleTags.length + 1 < article.tags.length
+                    && !visibleTags.some(tag => tag.name === article.category)
+                ) {
+                    const categoryTag = article.tags.find(tag => tag.name === article.category);
+                    if (categoryTag) visibleTags.push(categoryTag);
+                }
+
+                updateTags(visibleTags);
+
+                if (article.tags.length > visibleTags.length) {
+                    const showMore = insertElement('button', modelTagsWrap, { class: 'badge show-more' });
+                    showMore.appendChild(getIcon('arrow_down'));
+                    insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${article.tags.length - visibleTags.length}`);
+                    showMore.addEventListener('click', () => {
+                        this.setState({ article_tags: true });
+                        updateTags(article.tags);
+                    }, { once: true });
+                }
             }
 
             // Download buttons
@@ -2727,7 +2949,13 @@ class Controller {
             const description = this.#analyzeModelDescriptionString(article.content);
             const modelDescriptionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelDescriptionFragment, cache);
-            if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+            if(SETTINGS.colorCorrection) {
+                const options = {
+                    color: CONFIG.theme.colors.text.base.rgb,
+                    backgroundColor: CONFIG.theme.colors.bg.body.rgb
+                };
+                this.#analyzeTextColors(modelDescriptionFragment, options);
+            }
             page.appendChild(content);
 
             // Adding virtual scrolling if there are many elements (For example an article with id = 3733)
@@ -2862,9 +3090,6 @@ class Controller {
             const cache = this.#cache.history.get(navigationState.id) ?? {};
             if (!cache.descriptionImages) cache.descriptionImages = new Map();
 
-            // to select the background color when correcting colors
-            const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
             const fragment = new DocumentFragment();
             const appContent = insertElement('div', fragment, { class: 'app-content app-content-small collection-page' });
             const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
@@ -2885,7 +3110,13 @@ class Controller {
                 const description = this.#analyzeModelDescriptionString(collection.description);
                 const modelDescriptionFragment = safeParseHTML(description);
                 this.#analyzeModelDescription(modelDescriptionFragment, cache);
-                if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+                if(SETTINGS.colorCorrection) {
+                    const options = {
+                        color: CONFIG.theme.colors.text.base.rgb,
+                        backgroundColor: CONFIG.theme.colors.bg.body.rgb
+                    };
+                    this.#analyzeTextColors(modelDescriptionFragment, options);
+                }
                 modelDescription.appendChild(modelDescriptionFragment);
                 if (modelDescription.childNodes.length) appContent.appendChild(modelDescription);
             }
@@ -2903,7 +3134,7 @@ class Controller {
 
             if (promise instanceof Promise) {
                 promise = promise.then(result => {
-                    if (result.element) appContentWide.appendChild(result.element);
+                    if (result?.element) appContentWide.appendChild(result.element);
                     return { element: fragment, title };
                 });
                 return { promise };
@@ -2943,9 +3174,6 @@ class Controller {
             const cache = this.#cache.history.get(navigationState.id) ?? {};
             if (!cache.descriptionImages) cache.descriptionImages = new Map();
 
-            // to select the background color when correcting colors
-            const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
             const fragment = new DocumentFragment();
             const appContent = insertElement('div', fragment, { class: 'app-content app-content-small post-page' });
             const appContentWide = insertElement('div', fragment, { class: 'app-content app-content-wide cards-list-container' });
@@ -2966,7 +3194,13 @@ class Controller {
                 const description = this.#analyzeModelDescriptionString(post.description);
                 const modelDescriptionFragment = safeParseHTML(description);
                 this.#analyzeModelDescription(modelDescriptionFragment, cache);
-                if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+                if(SETTINGS.colorCorrection) {
+                    const options = {
+                        color: CONFIG.theme.colors.text.base.rgb,
+                        backgroundColor: CONFIG.theme.colors.bg.body.rgb
+                    };
+                    this.#analyzeTextColors(modelDescriptionFragment, options);
+                }
                 modelDescription.appendChild(modelDescriptionFragment);
                 if (modelDescription.childNodes.length) appContent.appendChild(modelDescription);
             }
@@ -2979,7 +3213,7 @@ class Controller {
 
             if (promise instanceof Promise) {
                 promise = promise.then(result => {
-                    if (result.element) appContentWide.appendChild(result.element);
+                    if (result?.element) appContentWide.appendChild(result.element);
                     return { element: fragment, title };
                 });
                 return { promise };
@@ -3065,7 +3299,7 @@ class Controller {
             const imagesTitle_link = insertElement('a', imagesTitle, { href: `#images?model=${model.id}&modelversion=${modelVersion.id}` }, window.languagePack?.text?.images ?? 'Images');
             imagesTitle_link.prepend(getIcon('image'));
             let promise = null;
-            if (this.#state.imagesLoaded) {
+            if (this.#state.images_loaded) {
                 const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId: model.id, opCreator: model.creator?.username, modelVersionId: modelVersion.id, state: navigationState });
                 if (imagesListPromise) {
                     let timerWon = false;
@@ -3083,7 +3317,7 @@ class Controller {
                 const imagesListTrigger = insertElement('div', appContentWide, undefined, '...');
                 onTargetInViewport(imagesListTrigger, () => {
                     imagesListTrigger.remove();
-                    this.#state.imagesLoaded = true;
+                    this.setState({ images_loaded: true });
                     const { element: imagesList, promise: imagesListPromise } = this.#genImages({ modelId: model.id, opCreator: model.creator?.username, modelVersionId: modelVersion.id, state: navigationState });
                     imagesListPromise?.then(() => {
                         if (pageNavigation !== this.#pageNavigation) return;
@@ -3284,7 +3518,6 @@ class Controller {
             const countAll = models.length;
 
             const userBlacklist = new Set(SETTINGS.blackListUserIds);
-            const tagBlacklist = new Set(SETTINGS.blackListTags);
 
             const imageModels = new Set();
             if (SETTINGS.hideVideosOnImageModels) {
@@ -3297,10 +3530,10 @@ class Controller {
                 }
             }
 
-            const imageFilters = EXTENSION_INSTALLED ? this.#getActiveFilters('images') : [];
+            const imageFilters = this.#getActiveFilters('images');
             const compiledImageFilters = imageFilters.length ? compileFilterItemsRules(imageFilters) : null;
-            const modelFilters = EXTENSION_INSTALLED ? this.#getActiveFilters('models') : [];
-            const hasTagFilters = EXTENSION_INSTALLED && (imageFilters.length || modelFilters.length);
+            const modelFilters = this.#getActiveFilters('models');
+            const hasTagFilters = imageFilters.length || modelFilters.length;
 
             const resultModels = [];
 
@@ -3313,9 +3546,8 @@ class Controller {
                 // Blacklist checks
                 if (userBlacklist.has(originalModel?.creator?.id)) continue;
 
-                if (!EXTENSION_INSTALLED && originalModel.tags?.some(tag => tagBlacklist.has(tag))) {
-                    continue;
-                }
+                // Early Access check
+                if (SETTINGS.hideEarlyAccess && originalModel.modelVersions.some(version => version.earlyAccessDeadline)) continue;
 
                 // Shallow clone
                 const model = {
@@ -3436,7 +3668,7 @@ class Controller {
 
         try {
             url = (url instanceof URL) ? url : new URL(url);
-            if (!CONFIG.civitai_origins.includes(url.origin)) throw new Error(`Unknown url origin, must be one of ${CONFIG.civitai_origins.map(u => `"${u}"`).join(', ')}`);
+            if (!CONFIG.civitai_origins.has(url.origin)) throw new Error(`Unknown url origin, must be one of ${Array.from(CONFIG.civitai_origins).map(u => `"${u}"`).join(', ')}`);
 
             const params = Object.fromEntries(url.searchParams);
             for (const rule of this.#civUrlRules) {
@@ -3455,12 +3687,13 @@ class Controller {
     }
 
     static createLinkPreview(url) {
+        if (!url) return;
         if (!(url instanceof URL)) url = toURL(url, location.origin);
         if (!url) return;
 
         let imageId = null, postId = null, modelId = null, articleId = null, collectionId = null, modelVersionId = null;
 
-        if (CONFIG.civitai_origins.includes(url.origin)) {
+        if (CONFIG.civitai_origins.has(url.origin)) {
             const { params } = this.parseCivUrl(url);
             imageId = params.imageId;
             modelId = params.modelId;
@@ -3481,7 +3714,7 @@ class Controller {
             modelVersionId = params.version;
         }
 
-        if (collectionId && EXTENSION_INSTALLED) {
+        if (collectionId) {
             const showCollection = collection => {
                 const card = this.#genCollectionCard(collection, { itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true, version: modelVersionId });
                 return card;
@@ -3493,9 +3726,9 @@ class Controller {
                 else return this.#genErrorPage(`No collection with id ${collectionId}`);
             }
 
-            return this.api.fetchCollectionInfo(collectionId).then(model => {
-                if (model) this.#cache.collections.set(collectionId, model);
-                return showCollection(model);
+            return this.api.fetchCollectionInfo(collectionId).then(collection => {
+                if (collection) this.#cache.collections.set(collectionId, collection);
+                return showCollection(collection);
             }).catch(error => {
                 if (error?.message.startsWith('No collection with id')) {
                     this.#cache.collections.set(collectionId, null); // Do not try to download again if there is no collection with this ID
@@ -3522,7 +3755,7 @@ class Controller {
                     const newData = new Set([maxImg, ...arr.filter(img => img !== maxImg)]);
                     media = newData;
                 }
-                if (!media) return this.#genErrorPage('No Meta');
+                if (!media || !maxImg) return this.#genErrorPage('No Meta');
                 const baseWidth = CONFIG.appearance.imageCard.width;
                 const aspectRatio = Math.min(maxImg.width / maxImg.height, 2);
                 const itemWidth = aspectRatio > 1.38 ? Math.round(baseWidth * aspectRatio) : baseWidth;
@@ -3571,7 +3804,7 @@ class Controller {
             });
         }
 
-        if (articleId && EXTENSION_INSTALLED) {
+        if (articleId) {
             const showArticle = article => {
                 const card = this.#genArticleCard(article, { itemWidth: CONFIG.appearance.modelCard.width, itemHeight: CONFIG.appearance.modelCard.height, forceAutoplay: true });
                 return card;
@@ -3615,12 +3848,20 @@ class Controller {
             // { icon: 'bookmark', value: model.stats.favoriteCount, unit: 'bookmark' }, // Always empty (API does not give a value, it is always 0)
             { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
         ];
-        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
+
+        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : modelVersion.paidAccess?.endsAt && modelVersion.paidAccess.endsAt > new Date().toISOString() ? 'EarlyAccess' : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
         const statsFragment = this.#genStats(statsList);
         if (availabilityBadge) {
             const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
-            const badge = createElement('div', { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+            const badge = createElement('div', { class: `badge model-availability badge-with-value badge-value-${availabilityBadge}` }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
             badge.prepend(getIcon(iconId || 'information'));
+            if (availabilityBadge === 'EarlyAccess') {
+                const earlyAccessDeadline = modelVersion.earlyAccessDeadline || modelVersion.paidAccess.endsAt;
+                const endsAt = earlyAccessDeadline instanceof Date ? earlyAccessDeadline : new Date(earlyAccessDeadline);
+                if (!isNaN(endsAt.getTime())) {
+                    badge.setAttribute('lilpipe-text', `${endsAt.toLocaleDateString()} <span class="dark-text">${endsAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> <br><relative-time datetime="${endsAt.toISOString()}"></relative-time>`);
+                }
+            }
             statsFragment.appendChild(badge);
         }
         modelNameH1.appendChild(statsFragment);
@@ -3661,8 +3902,8 @@ class Controller {
             modelTagsWrap.textContent = '';
             let categoryLink;
             tags.forEach(tag => {
-                const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag)}`, class: (SETTINGS.blackListTags.includes(tag) ? 'badge error-text' : 'badge') }, tag);
-                if (tag === modelVersion.baseModel) categoryLink = a;
+                const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id)? 'badge error-text' : 'badge') }, tag.name);
+                if (tag.name === modelVersion.baseModel) categoryLink = a;
             });
 
             if (modelVersion.baseModel) {
@@ -3684,19 +3925,21 @@ class Controller {
             const visibleTags = [];
             for (let i = 0; i < model.tags.length; i++) {
                 const tag = model.tags[i];
-                if (currentLength + tag.length > 80) break;
+                if (currentLength + tag.name.length > 80) break;
                 visibleTags.push(tag);
-                currentLength += tag.length;
+                currentLength += tag.name.length;
             }
             updateTags(visibleTags);
 
-            const showMore = insertElement('button', modelTagsWrap, { class: 'show-more' });
-            showMore.appendChild(getIcon('arrow_down'));
-            insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - visibleTags.length}`);
-            showMore.addEventListener('click', () => {
-                this.#state.model_tags = true;
-                updateTags(model.tags);
-            }, { once: true });
+            if (model.tags.length > visibleTags.length) {
+                const showMore = insertElement('button', modelTagsWrap, { class: 'badge show-more' });
+                showMore.appendChild(getIcon('arrow_down'));
+                insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${model.tags.length - visibleTags.length}`);
+                showMore.addEventListener('click', () => {
+                    this.setState({ model_tags: true });
+                    updateTags(model.tags);
+                }, { once: true });
+            }
         }
 
         const modelVersionSelector = insertElement('div', page, { class: 'model-versions' });
@@ -3868,7 +4111,7 @@ class Controller {
                 const target = e.target.closest('.base-model[data-base-model]:not(.active)');
                 const baseModel = target.getAttribute('data-base-model');
                 genBaseModelVersionsList(modelVersionSelectorList, baseModel);
-                this.#state.selectedBaseModel = baseModel;
+                this.setState({ selectedBaseModel: baseModel });
             });
             applyFakeFocusSelector(modelVersionSelectorMenu, '.base-model');
             genBaseModelVersionsList(modelVersionSelectorList, navigationState.selectedBaseModel || modelVersion.baseModel);
@@ -3889,11 +4132,14 @@ class Controller {
         // Model preview
         if (modelVersion.images?.length) {
             const modelPreviewWrap = insertElement('div', page, { class: 'model-preview' });
-            const previewImages = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+            const previewImagesSorted = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
+            const previewImages = previewImagesSorted.length ? previewImagesSorted : modelVersion.images;
+
             const generateMediaPreview = item => {
                 const media = item.data;
                 const element = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
-                const mediaElement = this.#genMediaElement({ media, width: item.width, height: item.height, loading: undefined, target: 'model-preview', allowAnimated: true });
+                const mediaOptions = { media, width: item.width, height: item.height, loading: undefined, decoding: 'async', target: 'model-preview', allowAnimated: true };
+                const mediaElement = media.nsfwLevel <= SETTINGS.browsingLevel ? this.#genMediaElement(mediaOptions) : this.#genMediaNSFWBlur(mediaOptions);
                 element.appendChild(mediaElement);
                 return element;
             };
@@ -3902,6 +4148,7 @@ class Controller {
                 // so you need to store the link...
                 const item = currentId !== undefined ? previewList.find(i => i.id === currentId) : null;
                 this.#state.carouselCurrentUrl = item?.data?.url;
+                this.setState({ carouselCurrentUrl: item?.data?.url });
             };
             const previewList = previewImages.map((media, index) => {
                 const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
@@ -3909,7 +4156,7 @@ class Controller {
                 return { id: media.id, data: media, aspectRatio: this.#round(media.width/media.height) };
             });
 
-            const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i.data?.url === this.#state.carouselCurrentUrl) : -1;
+            const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i?.data?.url === this.#state.carouselCurrentUrl) : -1;
             const carousel = new InfiniteCarousel(previewList, {
                 gap: CONFIG.appearance.modelPage.carouselGap,
                 viewportWidth: (CONFIG.appearance.modelPage.carouselItemWidth + CONFIG.appearance.modelPage.carouselGap) * CONFIG.appearance.modelPage.carouselItemsCount - CONFIG.appearance.modelPage.carouselGap,
@@ -4065,16 +4312,19 @@ class Controller {
             });
         }
 
-        // to select the background color when correcting colors
-        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
         // Version description
         if (modelVersion.description) {
             const modelVersionWrap = insertElement('div', modelVersionDescription, { class: 'model-description model-version-description-wrap' });
             const description = this.#analyzeModelDescriptionString(modelVersion.description);
             const modelVersionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelVersionFragment, cache, modelVersion);
-            if (SETTINGS.colorCorrection) this.#analyzeTextColors(modelVersionFragment, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 }); // TODO: real bg
+            if (SETTINGS.colorCorrection) {
+                const options = {
+                    color: CONFIG.theme.colors.text.base.rgb,
+                    backgroundColor: CONFIG.theme.colors.bg.base.rgb
+                };
+                this.#analyzeTextColors(modelVersionFragment, options);
+            }
             mountDescription('modelVersion', modelVersionFragment, modelVersionWrap);
         }
 
@@ -4084,7 +4334,13 @@ class Controller {
             const description = this.#analyzeModelDescriptionString(model.description);
             const modelDescriptionFragment = safeParseHTML(description);
             this.#analyzeModelDescription(modelDescriptionFragment, cache, modelVersion);
-            if(SETTINGS.colorCorrection) this.#analyzeTextColors(modelDescriptionFragment, isDarkMode ? { r: 10, g: 10, b: 10 } : { r: 255, g: 255, b: 255 }); // TODO: real bg
+            if(SETTINGS.colorCorrection) {
+                const options = {
+                    color: CONFIG.theme.colors.text.base.rgb,
+                    backgroundColor: CONFIG.theme.colors.bg.body.rgb
+                };
+                this.#analyzeTextColors(modelDescriptionFragment, options);
+            }
             mountDescription('model', modelDescriptionFragment, modelDescription);
         }
 
@@ -4156,7 +4412,7 @@ class Controller {
             // NSFW LEvel
             const nsfwLevel = typeof media.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(media.nsfwLevel) : media.nsfwLevel;
             if (nsfwLevel !== 'None') {
-                const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge separated-right', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
+                const nsfwBadge = createElement('div', { class: `image-nsfw-level nsfw-level-${nsfwLevel} badge separated-right` }, nsfwLevel);
                 statsFragment.prepend(nsfwBadge);
             }
 
@@ -4183,8 +4439,38 @@ class Controller {
                 }
             }
 
-            if (DEVMODE && EXTENSION_INSTALLED) {
-                const tagsBlock = insertElement('div', container, { class: 'badges image-tags' });
+            const tagsBlock = insertElement('div', container, { class: 'badges image-tags' });
+            const updateTags = tags => {
+                tagsBlock.textContent = '';
+                tags.forEach(tag => {
+                    insertElement('div', tagsBlock, { class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id)? 'badge error-text' : 'badge'), 'data-id': tag.id }, tag.name);
+                });
+            };
+
+            if (media.tags && Array.isArray(media.tags) && media.tags.length) {
+                if (this.#state.media_tags || media.tags.join('').length <= 80) updateTags(media.tags);
+                else {
+                    let currentLength = 0;
+                    const visibleTags = [];
+                    for (let i = 0; i < media.tags.length; i++) {
+                        const tag = media.tags[i];
+                        if (currentLength + tag.name.length > 80) break;
+                        visibleTags.push(tag);
+                        currentLength += tag.name.length;
+                    }
+                    updateTags(visibleTags);
+
+                    if (media.tags.length > visibleTags.length) {
+                        const showMore = insertElement('button', tagsBlock, { class: 'badge show-more' });
+                        showMore.appendChild(getIcon('arrow_down'));
+                        insertElement('span', showMore, { class: 'darker-text', style: 'font-size: .75em;' }, ` +${media.tags.length - visibleTags.length}`);
+                        showMore.addEventListener('click', () => {
+                            this.setState({ media_tags: true });
+                            updateTags(media.tags);
+                        }, { once: true });
+                    }
+                }
+            } else if (EXTENSION_INSTALLED) {
                 const loadTags = async (button = null) => {
                     let indicator;
                     const promise = this.api.fetchVotableTags(media.id, 'image');
@@ -4201,11 +4487,7 @@ class Controller {
                         }
                         return r;
                     })
-                    .then(tags => {
-                        tags.forEach(tag => {
-                            insertElement('div', tagsBlock, { class: 'badge', 'data-id': tag.id }, tag.name);
-                        });
-                    })
+                    .then(updateTags)
                     .catch(error => insertElement('span', tagsBlock, { class: 'error-text' }, error?.message || 'Unknown error'))
                     .finally(() => indicator?.remove());
                 };
@@ -4218,6 +4500,8 @@ class Controller {
                         loadTags(button);
                     });
                 }
+            } else {
+                tagsBlock.remove();
             }
 
             // Generation info
@@ -4565,7 +4849,13 @@ class Controller {
                 spamDetect(content);
                 this.#analyzeModelDescription(content, cache);
 
-                if (SETTINGS.colorCorrection) this.#analyzeTextColors(content, isDarkMode ? { r: 40, g: 40, b: 40 } : { r: 238, g: 238, b: 238 });
+                if (SETTINGS.colorCorrection) {
+                    const options = {
+                        color: CONFIG.theme.colors.text.base.rgb,
+                        backgroundColor: CONFIG.theme.colors.bg.base.rgb
+                    };
+                    this.#analyzeTextColors(content, options);
+                }
                 contentBlock.appendChild(content);
 
                 // Footer: Reactions + Reply Button
@@ -5066,6 +5356,7 @@ class Controller {
         return {
             limit: CONFIG.perRequestLimits.images,
             withMeta: true,
+            withTags: true,
             sort: SETTINGS.sort_images,
             period: forcedPeriod || SETTINGS.period_images,
             browsingLevel: SETTINGS.browsingLevel,
@@ -5216,7 +5507,7 @@ class Controller {
                 });
             }
 
-            if (EXTENSION_INSTALLED && SETTINGS.hideWithoutTagIds) {
+            if (SETTINGS.hideWithoutTagIds) {
                 const countBefore = images.length;
                 images = images.filter(image => image.tagIds?.length);
                 if (images.length !== countBefore) countHidden.noTagIds = countBefore - images.length;
@@ -5398,7 +5689,7 @@ class Controller {
         const onScroll = e => e;
         const readResize = (e = {}) => {
             e.items = Array.from(container.children).map(element => ({ element, bounds: element.getBoundingClientRect() }));
-            // e.items = VirtualList.getItems(container).map(element => ({ element, bounds: element.getBoundingClientRect() }));
+            // e.items = VirtualList.getItems(container).map(element => ({ element, bounds: element.getBoundingClientRect() })); // Laggy on large articles (huge hit-test)
             return e;
         };
         const onResize = (e = {}) => {
@@ -5440,13 +5731,11 @@ class Controller {
     }
 
     static #analyzeModelDescriptionString(description) {
-        // There should be rules here to improve formatting...
-        // But... all creators have their own description format, and they don't really fit together,
-        // I can't write for everyone, maybe I'll run the first hundred creators (their description format) through llm later
         const rules = [
-            //
-            { regex: '<br /></p>', replacement: '</p>'  },
-            { regex: /<(?:p|code)>(@\w+{[\s\S]*?})<\/(?:p|code)>/gim, replacement: (_, block) => {
+            { 
+                skip: !description.includes('<p>@') && !description.includes('<code>@'),
+                regex: /<(?:p|code)>(@\w+{[\s\S]*?})<\/(?:p|code)>/gim,
+                replacement: (_, block) => {
                 const flat = block
                     .replace(/\s*\n\s*/g, ' ') // Remove \n
                     .trim();
@@ -5457,13 +5746,7 @@ class Controller {
                     console.warn('BibTeX parsing error:', e);
                     return block; // Return original, if error
                 }
-            }},
-            // Handle potential prompt blocks with poorly formatted text
-            { regex: /<p>\s*(positive\s+)?prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, __, promptText) => `<p>Positive Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
-            { regex: /<p>\s*negative\s+prompts?:\s*([^<]+)<\/p>/gi, replacement: (_, promptText) => `<p>Negative Prompt</p><pre><code>${promptText.trim()}</code></pre>` },
-            // Sometimes descriptions contain homemade separators... along with the usual <hr>...
-            { regex: /<p>\s*([\-=_*+])\1{2,}\s*<\/p>/gi, replacement: '<hr>' },
-            { regex: /(?:^|\n)\s*([\-=_*+])\1{4,}\s*(?=\n|$)/g, replacement: '\n<hr>\n' },
+            }}
         ];
 
         return rules.reduce((acc, { skip, regex, replacement }) => !skip ? acc.replace(regex, replacement) : acc, description);
@@ -5476,6 +5759,49 @@ class Controller {
         // Remove garbage (empty elements, duplicates and all unnecessary things)
         description.querySelectorAll('p, h3, hr + hr').forEach(el => {
             if (!el.firstElementChild && (!el.firstChild || !regexNotSpace.test(el.textContent))) el.remove();
+        });
+
+        // Handle homemade separators and unformatted inline prompt text inside paragraph elements
+        const HR_RE = /^[\-=_*+]{3,}$/;
+        const POS_PROMPT_RE = /^(?:positive\s+)?prompts?:\s*(.+)$/i;
+        const NEG_PROMPT_RE = /^negative\s+prompts?:\s*(.+)$/i;
+        description.querySelectorAll('p').forEach(p => {
+            const text = p.textContent.trim();
+            if (text.length < 3) return;
+
+            const char0 = text[0];
+
+            // custom hr separators
+            if (char0 === '-' || char0 === '=' || char0 === '_' || char0 === '*' || char0 === '+') {
+                if (HR_RE.test(text)) {
+                    p.replaceWith(createElement('hr'));
+                }
+                return;
+            }
+
+            // inline prompts (positive)
+            if (char0 === 'p' || char0 === 'P') {
+                const posMatch = text.match(POS_PROMPT_RE);
+                if (posMatch) {
+                    const titleP = createElement('p', undefined, 'Positive Prompt');
+                    const pre = createElement('pre');
+                    insertElement('code', pre, undefined, posMatch[1].trim());
+                    p.replaceWith(titleP, pre);
+                }
+                return;
+            }
+
+            // inline prompts (negative)
+            if (char0 === 'n' || char0 === 'N') {
+                const negMatch = text.match(NEG_PROMPT_RE);
+                if (negMatch) {
+                    const titleP = createElement('p', undefined, 'Negative Prompt');
+                    const pre = createElement('pre');
+                    insertElement('code', pre, undefined, negMatch[1].trim());
+                    p.replaceWith(titleP, pre);
+                }
+                return;
+            }
         });
 
         if (!description.firstElementChild) {
@@ -5494,7 +5820,11 @@ class Controller {
 
         // The entire header wrapped in <strong/u/em/b/i> makes no sense
         headers.forEach(header => {
+            if (!header.firstElementChild) return;
+
             const hText = header.textContent.trim();
+            if (!hText) return;
+
             header.querySelectorAll('strong, u, em, b, i').forEach(el => {
                 if (el.textContent.trim() === hText) unwrapElement(el);
             });
@@ -5518,9 +5848,7 @@ class Controller {
             });
         } else {
             headers.forEach(header => {
-                const hasBr = header.querySelector('br');
-                const isTooLong = header.textContent.length > 60;
-                if (hasBr && isTooLong) {
+                if (header.textContent.length > 60 && header.querySelector('br')) {
                     const p = document.createElement('p');
                     p.append(...header.childNodes);
                     header.replaceWith(p);
@@ -5684,85 +6012,53 @@ class Controller {
             }
             return null;
         };
-        const linkPreviewOriginal = getIcon('civitai');
-        linkPreviewOriginal.classList.add('link-preview-position');
         const setLinkPreview = a => {
-            a.classList.add('link-hover-preview', 'link-with-favicon');
+            a.classList.add('link-hover-preview', 'link-with-favicon', 'favicon-civitai');
             a.setAttribute('data-link-preview', '');
-
-            const icon = linkPreviewOriginal.cloneNode(true);
-
-            // If possible, insert the icon and the first word into a container so that the icon is never separated from the first word
-            const firstTextNode = findFirstNonEmptyTextNode(a);
-            if (!firstTextNode) {
-                a.prepend(icon);
-                return;
-            }
-
-            const text = firstTextNode.textContent;
-            const firstCharIndex = text.search(regexNotSpace);
-
-            if (firstCharIndex === -1) {
-                a.prepend(icon);
-                return;
-            }
-
-            const firstChar = text[firstCharIndex];
-            const wrapper = createElement('span', { class: 'icon-text-wrapper' }, firstChar);
-            wrapper.prepend(icon);
-
-            const parent = firstTextNode.parentNode;
-            if (firstCharIndex === 0) {
-                firstTextNode.textContent = text.slice(1);
-                parent.insertBefore(wrapper, firstTextNode);
-            } else {
-                const remainingTextNode = firstTextNode.splitText(firstCharIndex);
-                remainingTextNode.textContent = remainingTextNode.textContent.slice(1);
-                parent.insertBefore(wrapper, remainingTextNode);
-            }
-        };
-        const moveNodeOutside = (a, node, isStart) => {
-            if (isStart) a.parentNode.insertBefore(node, a);
-            else a.parentNode.insertBefore(node, a.nextSibling);
         };
         const cleanLinkEdge = (a, isStart) => {
             while (true) {
                 let target = isStart ? a.firstChild : a.lastChild;
                 if (!target) break;
 
-                // <br>>
+                // <br>
                 if (target.nodeName === 'BR') {
-                    moveNodeOutside(a, target, isStart);
+                    isStart ? a.before(target) : a.after(target);
                     continue;
                 }
 
                 // text
                 if (target.nodeType === 3) { // Node.TEXT_NODE
-                    const text = target.textContent;
-                    const trimmed = isStart ? text.trimStart() : text.trimEnd();
+                    const text = target.nodeValue;
+                    const match = isStart 
+                        ? text.match(/^(\s+)([\s\S]*)$/) 
+                        : text.match(/^([\s\S]*?)(\s+)$/);
 
-                    if (trimmed.length === 0) {
-                        moveNodeOutside(a, target, isStart);
-                        continue;
-                    } else if (trimmed.length !== text.length) {
-                        const spaceLen = text.length - trimmed.length;
-                        const spaceContent = isStart ? text.slice(0, spaceLen) : text.slice(-spaceLen);
+                    if (!match) break;
 
-                        target.textContent = trimmed;
-                        moveNodeOutside(a, document.createTextNode(spaceContent), isStart);
-                        continue;
+                    const spaceContent = isStart ? match[1] : match[2];
+                    const remainContent = isStart ? match[2] : match[1];
+
+                    if (!remainContent) {
+                        isStart ? a.before(target) : a.after(target);
+                    } else {
+                        target.nodeValue = remainContent;
+                        const spaceNode = document.createTextNode(spaceContent);
+                        isStart ? a.before(spaceNode) : a.after(spaceNode);
                     }
+                    continue;
                 }
 
                 // deep check
                 if (target.nodeType === 1) { // Node.ELEMENT_NODE
-                    const subTarget = isStart ? target.firstChild : target.lastChild;
-                    if (subTarget) {
-                        if (subTarget.nodeName === 'BR' || (subTarget.nodeType === 3 && !subTarget.textContent?.trim())) { // Node.TEXT_NODE
-                            a.insertBefore(subTarget, isStart ? target : target.nextSibling);
-                            continue;
-                        }
+                    if (!target.hasChildNodes()) {
+                        target.remove();
+                        continue;
                     }
+
+                    const subTarget = isStart ? target.firstChild : target.lastChild;
+                    a.insertBefore(subTarget, isStart ? target : target.nextSibling);
+                    continue;
                 }
 
                 break;
@@ -5791,14 +6087,10 @@ class Controller {
                 return;
             }
 
-            if (CONFIG.civitai_origins.includes(url.origin)) {
+            if (CONFIG.civitai_origins.has(url.origin)) {
                 if (href.startsWith('/')) a.setAttribute('href', url.toString());
                 const { params } = this.parseCivUrl(url);
-                if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) setLinkPreview(a);
-                else {
-                    // a.prepend(getIcon('civitai'));
-                    // a.classList.add('link-with-favicon');
-                }
+                if (params.imageId || params.postId || params.modelId || params.articleId || params.collectionId) setLinkPreview(a);
             } else if (url.protocol !== 'https:') {
                 a.classList.add('link-warning');
                 if (a.textContent) a.textContent = a.textContent; // Remove formatting inside (there may be span with text color)
@@ -6016,10 +6308,10 @@ class Controller {
             } else if (type === 'link') {
                 const url = toURL(value);
                 if (url) {
-                    if (CONFIG.civitai_origins.includes(url.origin)) {
+                    if (CONFIG.civitai_origins.has(url.origin)) {
                         const a = insertElement('a', weightContainer, { class: 'link', href: url.toString(), target: '_blank', rel: 'noopener' }, value);
                         const { params } = this.parseCivUrl(url.toString());
-                        if (params.imageId || params.postId || params.modelId || (EXTENSION_INSTALLED && (params.articleId || params.collectionId))) a.setAttribute('data-link-preview', '');
+                        if (params.imageId || params.postId || params.modelId || params.articleId || params.collectionId) a.setAttribute('data-link-preview', '');
                     } else {
                         insertElement('span', weightContainer, { class: 'link link-not-civitai' }, value);
                     }
@@ -6060,242 +6352,101 @@ class Controller {
         codeElement.appendChild(fragment);
     }
 
-    static #analyzeTextColors(element, bgRGB) {
-        // APCA correction part generated by ChatGPT-5.2
+    static #analyzeTextColors(element, options) {
+        const cache = new Map();
+
+        // Target APCA contrast thresholds & modifiers
         const TARGET_LC = 75;
         const TARGET_LC_MIN = 50;
-        const TARGET_LC_Headers = {
-            H1: 60,
-            H2: 65,
-            H3: 70
-        };
-        const TARGET_LC_Modificators = [
-            {
-                selector: 'strong, b',
-                tagNames: [ 'STRONG', 'B' ],
-                modificator: -5
-            },
-            {
-                selector: 'em, i',
-                tagNames: [ 'EM', 'I' ],
-                modificator: +10
-            }
-        ];
-        const COLOR_LC_PENALTY = 12;
-        const MIN_CHROMA_RATIO = 0.65;
-        const MAX_ITER = 14;
+        const TARGET_LC_HEADERS = { H1: 60, H2: 65, H3: 70 };
+        const TAG_MODIFIERS = { STRONG: -5, B: -5, EM: 10, I: 10 };
 
-        /* ---------- APCA ---------- */
+        const { color, backgroundColor } = options;
 
-        function lin(c) {
-            c /= 255;
-            return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-        }
+        // Ensure background & fallback text colors are converted to RGBA
+        const rootBgRGB = Color.convert(backgroundColor, 'rgba', true);
+        const rootFgRGB = color ? Color.convert(color, 'rgba', true) : null;
 
-        function getY(rgb) {
-            return (lin(rgb.r) * 0.2126729 + lin(rgb.g) * 0.7151522 + lin(rgb.b) * 0.0721750);
-        }
+        if (!rootBgRGB) return;
 
-        function apca(text, bg) {
-            const Ytxt = getY(text);
-            const Ybg  = getY(bg);
-
-            if (Math.abs(Ytxt - Ybg) < 0.005) return 0;
-
-            let Lc;
-            if (Ybg > Ytxt) {
-                Lc = (Math.pow(Ybg, 0.56) - Math.pow(Ytxt, 0.57)) * 1.14 - 0.027;
-            } else {
-                Lc = (Math.pow(Ybg, 0.65) - Math.pow(Ytxt, 0.62)) * 1.14 + 0.027;
-            }
-
-            return Lc * 100;
-        }
-
-        /* ---------- Utilities ---------- */
-
-        function clamp01(v) {
-            return Math.min(1, Math.max(0, v));
-        }
-
-        function rgbValid(rgb) {
-            return (rgb.r >= 0 && rgb.r <= 255 && rgb.g >= 0 && rgb.g <= 255 && rgb.b >= 0 && rgb.b <= 255);
-        }
-
-        /* ---------- High-quality correction ---------- */
-
-        function correctColor(textRGB, bgRGB, targetLC = TARGET_LC) {
-            const startLc = apca(textRGB, bgRGB);
-            if (Math.abs(startLc) >= targetLC) return null;
-
-            const baseLch = Color.convert(textRGB, 'oklch');
-            const isColorText = baseLch.c > 0.08;
-
-            const targetLc = (startLc <= 0 ? -1 : 1) *
-                (isColorText ? targetLC - COLOR_LC_PENALTY : targetLC);
-
-            const polarity = Math.sign(targetLc);
-            const bgY = getY(bgRGB);
-
-            let lowY, highY;
-            if (polarity > 0) {
-                lowY = 0;
-                highY = bgY - 0.0005;
-            } else {
-                lowY = bgY + 0.0005;
-                highY = 1;
-            }
-
-            let best = null;
-            let bestError = Infinity;
-
-            const minChroma = baseLch.c * MIN_CHROMA_RATIO;
-
-            for (let i = 0; i < MAX_ITER; i++) {
-                const midY = (lowY + highY) / 2;
-
-                let l = clamp01(midY ** (1 / 2.2));
-                let lch = { ...baseLch, l };
-                let rgb = Color.convert(lch, 'rgba');
-
-                if (!rgbValid(rgb)) {
-                    let cLow = minChroma;
-                    let cHigh = lch.c;
-
-                    for (let j = 0; j < 6; j++) {
-                        const cMid = (cLow + cHigh) / 2;
-                        lch.c = cMid;
-                        rgb = Color.convert(lch, 'rgba');
-
-                        if (rgbValid(rgb)) cLow = cMid;
-                        else cHigh = cMid;
-                    }
-
-                    lch.c = cLow;
-                    rgb = Color.convert(lch, 'rgba');
-                }
-
-                const lc = apca(rgb, bgRGB);
-                const error = Math.abs(lc - targetLc);
-
-                if (error < bestError) {
-                    bestError = error;
-                    best = rgb;
-                }
-
-                if (lc * polarity > targetLc * polarity) {
-                    highY = midY;
-                } else {
-                    lowY = midY;
-                }
-            }
-
-            return best;
-        }
-
-        function correctBackground(bgRGB, textRGB, targetLC, steps = 3) {
-            const baseLch = Color.convert(bgRGB, 'oklch');
-            const polarity = Math.sign(apca(textRGB, bgRGB));
-            if (!polarity) return null;
-
-            let best = bgRGB;
-            let bestLc = Math.abs(apca(textRGB, bgRGB));
-
-            let low = 0, high = 1;
-
-            for (let i = 0; i < steps; i++) {
-                const mid = (low + high) / 2;
-
-                const l = clamp01(
-                    polarity > 0
-                        ? baseLch.l + mid * (1 - baseLch.l)
-                        : baseLch.l - mid * baseLch.l
-                );
-
-                const lch = { ...baseLch, l, c: baseLch.c * 0.9 };
-
-                const rgb = Color.convert(lch, 'rgba');
-                if (!rgbValid(rgb)) {
-                    high = mid;
-                    continue;
-                }
-
-                const lc = Math.abs(apca(textRGB, rgb));
-
-                if (lc > bestLc) {
-                    bestLc = lc;
-                    best = rgb;
-                }
-
-                if (lc >= targetLC) return rgb;
-
-                low = mid;
-            }
-
-            return bestLc > Math.abs(apca(textRGB, bgRGB)) ? best : null;
-        }
-
-
-        /* ---------- DOM ---------- */
-
-        const cache = new Map();
+        // Helper for blending semi-transparent colors
         const blend = (fg, bg, alpha) => {
-            return {
-                r: Math.round(fg.r * alpha + bg.r * (1 - alpha)),
-                g: Math.round(fg.g * alpha + bg.g * (1 - alpha)),
-                b: Math.round(fg.b * alpha + bg.b * (1 - alpha))
+            const fgLab = Color.rgbToOklab(fg);
+            const bgLab = Color.rgbToOklab(bg);
+
+            const blendedLab = {
+                l: fgLab.l * alpha + bgLab.l * (1 - alpha),
+                a: fgLab.a * alpha + bgLab.a * (1 - alpha),
+                b: fgLab.b * alpha + bgLab.b * (1 - alpha)
             };
+
+            return Color.oklabToRgb(blendedLab);
         };
 
-        element.querySelectorAll('span[style*="color:"]').forEach(span => {
-            const color = span.style.color;
-            const bgColor = span.style.backgroundColor || '';
-            const header = span.closest('h1, h2, h3');
-            let targetLС = header ? TARGET_LC_Headers[header.tagName] : TARGET_LC;
-            TARGET_LC_Modificators.forEach(m => {
-                const tagName = span.children[0]?.tagName;
-                if (!span.closest(m.selector) && !m.tagNames.includes(tagName)) return;
-                if (m.modificator < 0 && header) targetLС += Math.floor(m.modificator / 2);
-                else targetLС += m.modificator;
-            });
-            targetLС = Math.max(targetLС, TARGET_LC_MIN);
-            const colorKey = `fg${color}-bg${bgColor}-lc${targetLС}`;
+        // Resolve background color taking nested parent backgrounds into account
+        const getInheritedBg = (el) => {
+            let current = el;
+            let currentBg = rootBgRGB;
+            const bgStack = [];
+            while (current && current !== element) {
+                const bg = current.style?.backgroundColor;
+                if (bg) {
+                    const parsed = Color.convert(bg, 'rgba', true);
+                    if (parsed && parsed.a !== 0) bgStack.unshift(parsed);
+                }
+                current = current.parentElement;
+            }
+            for (const bg of bgStack) {
+                currentBg = bg.a < 1 ? blend(bg, currentBg, bg.a) : bg;
+            }
+            return currentBg;
+        };
 
+        const spans = element.querySelectorAll('span[style*="color"], span[style*="background"]');
+        spans.forEach(span => {
+            const colorAttr = span.style.color;
+            const bgColorAttr = span.style.backgroundColor || '';
+
+            if (!colorAttr && !bgColorAttr) return;
+
+            let fgRgb = colorAttr ? Color.convert(colorAttr, 'rgba', true) : rootFgRGB;
+            if (!fgRgb) return;
+
+            const headerEl = span.closest('h1, h2, h3');
+            let targetLC = headerEl ? (TARGET_LC_HEADERS[headerEl.tagName] || TARGET_LC) : TARGET_LC;
+
+            const modEl = span.closest('strong, b, em, i') || span.querySelector('strong, b, em, i');
+            if (modEl && TAG_MODIFIERS[modEl.tagName] !== undefined) {
+                const modifier = TAG_MODIFIERS[modEl.tagName];
+                targetLC += (modifier < 0 && headerEl) ? Math.floor(modifier * 0.5) : modifier;
+            }
+
+            targetLC = Math.max(targetLC, TARGET_LC_MIN);
+
+            const effectiveBg = getInheritedBg(span);
+            const colorKey = `fg:${colorAttr || 'default'}|bg:${effectiveBg.r},${effectiveBg.g},${effectiveBg.b}|lc:${targetLC}`;
             if (cache.has(colorKey)) {
                 const cached = cache.get(colorKey);
-                if (cached?.fg) span.style.color = cached.fg;
-                if (cached?.bg) span.style.backgroundColor = cached.bg;
+                if (cached) {
+                    if (cached.fg) span.style.color = cached.fg;
+                    if (cached.bg) span.style.backgroundColor = cached.bg;
+                }
                 return;
             }
 
-            const rgb = Color.convert(color, 'rgba', true);
-            if (!rgb) return;
+            const result = Color.adjustContrast(fgRgb, effectiveBg, targetLC);
 
-            let finalBg = bgRGB;
-            if (bgColor) {
-                finalBg = Color.convert(bgColor, 'rgba', true);
-                if (finalBg && finalBg.a !== 0) {
-                    if (finalBg.a < 1) {
-                        finalBg = blend(finalBg, bgRGB, finalBg.a);
-                    }
-                } else finalBg = bgRGB;
-            }
-
-            const corrected = correctColor(rgb, finalBg, targetLС);
-            if (!corrected) {
+            if (!result || !result.changed) {
                 cache.set(colorKey, null);
                 return;
             }
 
-            let correctedBg = null;
-            if (bgColor && Math.abs(apca(corrected, finalBg)) < TARGET_LC_MIN) {
-                correctedBg = correctBackground(finalBg, corrected, targetLС);
-            }
+            const fgCss = `rgb(${result.fg.r}, ${result.fg.g}, ${result.fg.b})`;
+            const bgCss = result.bg ? `rgb(${result.bg.r}, ${result.bg.g}, ${result.bg.b})` : null;
 
-            const css = `rgb(${corrected.r}, ${corrected.g}, ${corrected.b})`;
-            const bgCss = correctedBg ? `rgb(${correctedBg.r}, ${correctedBg.g}, ${correctedBg.b})` : null;
-            cache.set(colorKey, { fg: css, bg: bgCss });
-            span.style.color = css;
+            cache.set(colorKey, { fg: fgCss, bg: bgCss });
+
+            span.style.color = fgCss;
             if (bgCss) span.style.backgroundColor = bgCss;
         });
     }
@@ -6344,7 +6495,7 @@ class Controller {
 
                 // NSFW LEvel
                 if (media.nsfwLevel !== 'None') {
-                    const nsfwBadge = createElement('div', { class: 'image-nsfw-level badge separated-right', 'data-nsfw-level': media.nsfwLevel }, media.nsfwLevel);
+                    const nsfwBadge = createElement('div', { class: `image-nsfw-level nsfw-level-${media.nsfwLevel || 'None'} badge separated-right` }, media.nsfwLevel);
                     statsFragment.prepend(nsfwBadge);
                 }
 
@@ -6545,7 +6696,7 @@ class Controller {
         if (meta.comfy) {
             const item = insertOtherMeta('ComfyUI');
             item.classList.add('badge');
-            item.setAttribute('data-badge', 'ComfyUI');
+            item.classList.add('badge', 'badge-with-value', 'badge-value-ComfyUI');
             const icon = getIcon('roadmap');
             item.prepend(icon);
         }
@@ -6570,13 +6721,13 @@ class Controller {
                 showMore.addEventListener('click', () => {
                     resourcesContainer.classList.remove('hide-long-description');
                     showMore.remove();
-                    this.#state.long_description_resources_img = true;
+                    this.setState({ long_description_resources_img: true });
                 }, { once: true });
             }
 
             const resourcePromises = [];
             const createResourceRowContent = info => {
-                const { title, version, href, weight = 1, type, baseModel, air } = info;
+                const { title, version, href, weight = 1, type, baseModel, air, updatedAt = null, earlyAccessDeadline = null } = info;
 
                 const el = createElement(href ? 'a' : 'div', { class: 'meta-resource' });
                 if (href) el.href = href;
@@ -6592,6 +6743,16 @@ class Controller {
                 }
                 const resourceType = insertElement('span', el, { class: 'meta-resource-type' }, type);
                 if (baseModel && metaBaseModel && type.toLowerCase() !== 'upscaler' && baseModel.toLowerCase() !== metaBaseModel) resourceType.setAttribute('lilpipe-text', escapeHtml(baseModel));
+
+                if (earlyAccessDeadline) {
+                    const badge = insertElement('div', titleElement, { class: 'model-availability badge badge-with-value badge-value-EarlyAccess' }, window.languagePack?.text?.EarlyAccess ?? 'EarlyAccess');
+                    const date = earlyAccessDeadline instanceof Date ? earlyAccessDeadline : new Date(earlyAccessDeadline);
+                    if (!isNaN(date.getTime())) {
+                        const lilpipeText = `<relative-time class="dark-text" datetime="${date.toISOString()}"></relative-time> <br>${date.toLocaleDateString()} <span class="dark-text">${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
+                        badge.setAttribute('lilpipe-text', lilpipeText);
+                    }
+                }
+
                 return el;
             };
             const replaceResourceRow = (info, item, el) => {
@@ -6619,7 +6780,9 @@ class Controller {
                     baseModel: info.baseModel,
                     type: info.model?.type,
                     weight: item.weight,
-                    href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined
+                    href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined,
+                    earlyAccessDeadline: info.earlyAccessDeadline || info.paidAccess?.endsAt || null,
+                    updatedAt: info.updatedAt || null,
                 });
                 newEl.setAttribute('data-link-preview', '');
                 el.replaceWith(newEl);
@@ -6740,7 +6903,9 @@ class Controller {
                     weight: item.weight !== undefined ? Number(item.weight) : undefined,
                     type: modelInfo?.model?.type ?? item.type ?? 'Unknown',
                     baseModel: modelInfo?.baseModel ?? 'Unknown base model',
-                    href: modelInfo?.modelId && modelInfo?.name ? `#models?model=${modelInfo.modelId}&version=${modelInfo.name}` : undefined
+                    href: modelInfo?.modelId && modelInfo?.name ? `#models?model=${modelInfo.modelId}&version=${modelInfo.name}` : undefined,
+                    earlyAccessDeadline: modelInfo?.earlyAccessDeadline || modelInfo?.paidAccess?.endsAt || null,
+                    updatedAt: modelInfo?.updatedAt || null,
                 });
                 resourcesContainer.appendChild(el);
 
@@ -6908,13 +7073,14 @@ class Controller {
         const previewMedia = collection.image;
         if (previewMedia) {
             const mediaElement = this.#genMediaElement({ media: previewMedia, className: 'card-background', width: itemWidth, height: itemHeight, allowResize: true, target: 'model-card', decoding: 'async', autoplay: forceAutoplay || SETTINGS.autoplay, passiveHoverPlay: true });
+            mediaElement.setAttribute('inert', '');
             if (!SETTINGS.autoplay) {
                 if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
                 cardClassName += ' image-hover-play';
             }
             card.appendChild(mediaElement);
         } else {
-            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+            const cardBackgroundWrap = insertElement('div', card, { class: 'card-background', inert: '' });
             const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
             noMedia.appendChild(getIcon('image'));
             insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
@@ -6936,11 +7102,13 @@ class Controller {
         // Creator
         if (collection.user) cardContentBottom.appendChild(this.#genUserBlock(collection.user));
 
-        // challengeDate
+        // challengeDate (is this still exist?)
         if (collection.metadata && collection.metadata.challengeDate && collection.metadata.endsAt) {
             const challengeDate = new Date(collection.metadata.challengeDate);
             const endsAt = new Date(collection.metadata.endsAt);
-            insertElement('relative-time', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': `${challengeDate.toLocaleString()} — ${endsAt.toLocaleString()}`, datetime: challengeDate.toISOString() });
+            if (!isNaN(challengeDate.getTime()) && !isNaN(endsAt.getTime())) {
+                insertElement('relative-time', cardContentBottom, { class: 'model-published-time', 'lilpipe-text': `${challengeDate.toLocaleString()} — ${endsAt.toLocaleString()}`, datetime: challengeDate.toISOString() });
+            }
         }
 
         // Collection Name
@@ -6960,10 +7128,12 @@ class Controller {
                 let cardClassName = 'card model-card';
                 const card = createElement('a', { 'data-id': article.id, href: `#articles?article=${article.id}`, style: ctx.cardSizeStyle, 'data-draggable-title': article.title });
 
-                if (article.coverImage) {
-                    const previewMedia = article.coverImage;
+                ctx.previewMedia = article.coverImage && article.coverImage.nsfwLevel <= SETTINGS.browsingLevel ? article.coverImage : null;
+
+                if (ctx.previewMedia) {
+                    const previewMedia = ctx.previewMedia;
                     if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);
-                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}`, inert: '' });
 
                     if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
                         if (previewMedia?.type === 'video') cardClassName += ' video-hover-play';
@@ -6980,19 +7150,24 @@ class Controller {
         { // blurhash
             weight: 5,
             generator: (ctx) => {
-                const { data: article, mediaContainer, card, forceAutoplay } = ctx;
+                const { data: article, mediaContainer, previewMedia, card, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 if (article.coverImage) {
-                    const previewMedia = article.coverImage;
-                    if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
-
-                    // play button
-                    if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
-                        const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
-                        videoPlayButton.appendChild(getIcon('play'));
+                    if (previewMedia) {
+                        if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
+    
+                        // play button
+                        if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
+                            const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
+                            videoPlayButton.appendChild(getIcon('play'));
+                        }
+                    } else {
+                        ctx.mediaContainer = this.#genMediaNSFWBlur({ media: article.coverImage, width: itemWidth, height: itemHeight, className: 'card-background' });
+                        ctx.mediaContainer.setAttribute('inert', '');
+                        card.appendChild(ctx.mediaContainer);
                     }
                 } else {
-                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background', inert: '' });
                     const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
                     noMedia.appendChild(getIcon('image'));
                     insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
@@ -7002,7 +7177,7 @@ class Controller {
         { // full
             weight: 10,
             generator: (ctx) => {
-                const { mediaContainer, card, data: article, itemWidth, itemHeight, forceAutoplay } = ctx;
+                const { mediaContainer, previewMedia, card, data: article, itemWidth, itemHeight, forceAutoplay } = ctx;
 
                 // card content
                 const cardContentWrap = insertElement('div', card, { class: 'card-content' });
@@ -7062,9 +7237,9 @@ class Controller {
                 ], statsRight);
 
                 // actual image
-                if (article.coverImage) {
+                if (previewMedia) {
                     mediaContainer.setAttribute('data-id', article.coverImage.id);
-                    this.#insertMediaElement(mediaContainer, { media: article.coverImage, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
+                    this.#insertMediaElement(mediaContainer, { media: previewMedia, width: itemWidth, height: itemHeight, allowResize: true, decoding: 'async', target: 'model-card', autoplay: forceAutoplay ?? SETTINGS.autoplay });
                 }
             }
         }
@@ -7094,20 +7269,17 @@ class Controller {
                 if (previewMedia) {
                     ctx.previewMedia = previewMedia;
                     if (!previewMedia.hashColor && previewMedia.hash) previewMedia.hashColor = Blurhash.toHex(previewMedia.hash);;
-                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
+                    ctx.mediaContainer = insertElement('div', card, { class: `card-background media-container media-${previewMedia.type} loading`, style: `background-color: ${previewMedia.hashColor || 'transparent'}; ${ctx.cardSizeStyle}`, inert: '' });
                     if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
                         if (previewMedia.type === 'video') cardClassName += ' video-hover-play';
                         cardClassName += ' image-hover-play';
                     }
                 } else if (modelVersion.images?.length) {
-                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background nsfw-blur-hash' });
                     const closestNSFWLevel = Math.min(...modelVersion.images.map(m => m.nsfwLevel));
-                    const closestMedia = modelVersion.images.find(m => m.nsfwLevel === closestNSFWLevel);
-                    if (closestMedia?.hash) {
-                        ctx.closestMedia = closestMedia;
-                        cardBackgroundWrap.style.backgroundColor = Blurhash.toHex(closestMedia.hash);
-                        ctx.mediaContainer = cardBackgroundWrap;
-                    }
+                    ctx.closestMedia = modelVersion.images.find(m => m.nsfwLevel === closestNSFWLevel);
+                    ctx.mediaContainer = this.#genMediaNSFWBlur({ media: ctx.closestMedia, className: 'card-background', width: itemWidth, height: itemHeight });
+                    ctx.mediaContainer.setAttribute('inert', '');
+                    card.appendChild(ctx.mediaContainer);
                 }
 
                 card.className = cardClassName;
@@ -7134,10 +7306,10 @@ class Controller {
                 } else if (closestMedia) {
                     const noMedia = insertElement('div', mediaContainer, { class: 'media-element nsfw-filter' });
                     const nsfwLabel = this.#convertNSFWLevelToString(closestMedia.nsfwLevel);
-                    insertElement('div', noMedia, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLabel }, nsfwLabel);
+                    insertElement('div', noMedia, { class: `image-nsfw-level nsfw-level-${nsfwLabel || 'None'} badge` }, nsfwLabel);
                     if (closestMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: closestMedia });
                 } else {
-                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background' });
+                    const cardBackgroundWrap = insertElement('div', card, { class: 'card-background', inert: '' });
                     const noMedia = insertElement('div', cardBackgroundWrap, { class: 'media-element no-media' });
                     noMedia.appendChild(getIcon('image'));
                     insertElement('span', noMedia, undefined, window.languagePack?.errors?.no_media ?? 'No Media');
@@ -7155,38 +7327,43 @@ class Controller {
                 const cardContentBottom = insertElement('div', cardContentWrap, { class: 'card-content-bottom' });
 
                 // Model Type
-                const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type' }, `${this.#types.labels[model.type] || model.type} · `);
+                const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-type': 'model-type' }, `${this.#types.labels[model.type] || model.type} · `);
                 const getBaseModelLabel = baseModel => this.#models.labels[baseModel] ?? baseModel ?? '?';
                 const getBaseModelLabelShort = baseModel => this.#models.labels_short[baseModel] ?? baseModel ?? '?';
                 if (model.baseModels?.length && model.baseModels.length > 1) {
-                    const labels = model.baseModels.map(b => `<li${b === modelVersion.baseModel ? ' style="color:var(--c-main-text)"' : ''}>${escapeHtml(getBaseModelLabel(b))}</li>`).join('');
-                    modelTypeWrap.setAttribute('lilpipe-text', `<h4 style="margin:0;">${escapeHtml(model.type)}</h4><ul style="margin:0;">${labels}</ul>`);
+                    const modelsCount = {};
+                    const isRealModels = !model.modelVersions.some(version => version.isPlaceholderModel);
+                    if (isRealModels) model.modelVersions.forEach(version => modelsCount[version.baseModel] ? modelsCount[version.baseModel]++ : (modelsCount[version.baseModel] = 1));
+                    const labels = model.baseModels.map(b => `<li${b === modelVersion.baseModel ? ' class="active"' : ''}>${escapeHtml(getBaseModelLabel(b))}${modelsCount[b] > 1 ? ` <span class="version-count">${modelsCount[b]}</span>` : ''}</li>`).join('');
+                    modelTypeWrap.setAttribute('lilpipe-text', `<h4>${escapeHtml(model.type)}</h4><ul>${labels}</ul>`);
                     insertElement('span', modelTypeWrap, { class: 'has-variants' }, getBaseModelLabelShort(modelVersion.baseModel));
                 } else {
-                    modelTypeWrap.setAttribute('lilpipe-text', `<h4 style="margin:0;">${escapeHtml(model.type)}</h4><ul style="margin:0;"><li>${escapeHtml(getBaseModelLabel(modelVersion.baseModel))}</li></ul>`);
+                    const count = !model.modelVersions.some(version => version.isPlaceholderModel) ? model.modelVersions.length : -1;
+                    modelTypeWrap.setAttribute('lilpipe-text', `<h4>${escapeHtml(model.type)}</h4><ul><li class="active">${escapeHtml(getBaseModelLabel(modelVersion.baseModel))}${count > 1 ? ` <span class="version-count">${count}</span>` : ''}</li></ul>`);
                     insertElement('span', modelTypeWrap, undefined, getBaseModelLabelShort(modelVersion.baseModel));
                 }
 
                 // Availability
                 let availabilityBadge = null;
                 if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
+                else if (modelVersion.earlyAccessDeadline) availabilityBadge = 'EarlyAccess';
                 else {
                     if (model._modelUpdatedRecently === undefined) model._modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
                     if (model._modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
                 }
                 if (availabilityBadge) {
-                    const badge = insertElement('div', cardContentTop, { class: 'badge model-availability', 'data-badge': availabilityBadge }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
+                    const badge = insertElement('div', cardContentTop, { class: `badge model-availability badge-with-value badge-value-${availabilityBadge}` }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
                     let date = null, modelName = null;
-                    if (modelVersion.availability === 'EarlyAccess' && modelVersion.earlyAccessDeadline) {
+                    if (availabilityBadge === 'EarlyAccess' && modelVersion.earlyAccessDeadline) {
                         date = new Date(modelVersion.earlyAccessDeadline);
                         modelName = modelVersion.name;
                     } else if (modelVersion.availability === 'Public' && model._modelUpdatedRecently) {
                         date = new Date(model._modelUpdatedRecently.publishedAt ?? model._modelUpdatedRecently.createdAt);
                         modelName = model._modelUpdatedRecently.name;
                     }
-                    if (date) {
+                    if (date && !isNaN(date.getTime())) {
                         const updatedAtISO = date.toISOString();
-                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div><relative-time class="dark-text" datetime="${updatedAtISO}"></relative-time>`;
+                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div> <relative-time class="dark-text" datetime="${updatedAtISO}"></relative-time> <br>${date.toLocaleDateString()} <span class="dark-text">${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
                         badge.setAttribute('lilpipe-text', lilpipeText);
                         if (forceAutoplay) insertElement('relative-time', cardContentTop, { class: 'dark-text', datetime: updatedAtISO });
                     }
@@ -7263,7 +7440,7 @@ class Controller {
                     // The site doesn't provide blurhash for videos, it's always black
                     if (image.hashColor === '#000000' && image.type === 'video') image.hashColor = 'transparent';
                 }
-                const mediaContainer = insertElement('div', card, { class: `card-background media-container media-${image.type} loading`, style: `background-color: ${image.hashColor || 'transparent'}; ${ctx.cardSizeStyle}` });
+                const mediaContainer = insertElement('div', card, { class: `card-background media-container media-${image.type} loading`, style: `background-color: ${image.hashColor || 'transparent'}; ${ctx.cardSizeStyle}`, inert: '' });
 
                 if (!(forceAutoplay ?? SETTINGS.autoplay) && image.type === 'video') {
                     if (image?.type === 'video') cardClassName += ' video-hover-play';
@@ -7314,12 +7491,14 @@ class Controller {
                 cardContentTop.appendChild(creator);
 
                 // badges
-                const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
                 const nsfwLevel = typeof image.nsfwLevel === 'number' ? this.#convertNSFWLevelToString(image.nsfwLevel) : image.nsfwLevel;
-                if (nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: 'image-nsfw-level badge', 'data-nsfw-level': nsfwLevel }, nsfwLevel);
-                if (ctx.postSize > 1) {
-                    const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, ctx.postSize > 99 ? '99+' : ctx.postSize);
-                    metaIconContainer.appendChild(getIcon('image'));
+                if (nsfwLevel !== 'None' || ctx.postSize > 1) {
+                    const badgesContainer = insertElement('div', cardContentTop, { class: 'badges other-badges' });
+                    if (nsfwLevel !== 'None') insertElement('div', badgesContainer, { class: `image-nsfw-level nsfw-level-${nsfwLevel || 'None'} badge` }, nsfwLevel);
+                    if (ctx.postSize > 1) {
+                        const metaIconContainer = insertElement('div', badgesContainer, { class: 'badge' }, ctx.postSize > 99 ? '99+' : ctx.postSize);
+                        metaIconContainer.appendChild(getIcon('image'));
+                    }
                 }
 
                 // A note that the image is cropped
@@ -7453,7 +7632,7 @@ class Controller {
                 itemDiv.append(topDiv, bottomDiv);
                 fragment.appendChild(itemDiv);
             }
-            
+
             return fragment;
         };
 
@@ -7482,6 +7661,28 @@ class Controller {
         wrapper.append(firstEl, secondWrap);
 
         return wrapper;
+    }
+
+    static #genMediaNSFWBlur(options) {
+        // Note: Adds a "hashColor" field to the media object
+        const { media, className: baseClassName = null, width, height = undefined } = options;
+        const ratio = media.width / media.height;
+        const styleString = width && height ? `width: ${width}px; height: ${height}px;` : `aspect-ratio: ${this.#round(ratio)};`;
+        const mediaContainer = createElement('div', { 'data-id': media.id ?? -1, 'data-nsfw-level': media.nsfwLevel, style: styleString });
+        const noMedia = insertElement('div', mediaContainer, { class: 'media-element nsfw-filter' });
+        const nsfwLabel = this.#convertNSFWLevelToString(media.nsfwLevel);
+        insertElement('div', noMedia, { class: `image-nsfw-level nsfw-level-${nsfwLabel || 'None'} badge` }, nsfwLabel);
+
+        mediaContainer.className = baseClassName ? `${baseClassName} media-container media-hidden` : 'media-container media-hidden';
+
+        if (media.hash) {
+            if (!media.hashColor) media.hashColor = Blurhash.toHex(media.hash);
+            mediaContainer.style.backgroundColor = media.hashColor;
+
+            this.#insertMediaBlurhash(mediaContainer, { media });
+        }
+
+        return mediaContainer;
     }
 
     static #genMediaElement(options) {
@@ -7541,7 +7742,7 @@ class Controller {
         const realWidth = this.#getNearestServerSize(targetWidth);
         const size = `width=${realWidth},`; // You can't specify "not a jackal image trying to upscale"... if you just don't specify the size, it might return normally, the original resolution, or it might return a jackal 4096px
         // const size = realWidth < media.width || media.type === 'video' ? `width=${realWidth},` : '';
-        const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.3;
+        const resized = allowResize && width && height && Math.min(realWidth, media.width) > (width * this.#devicePixelRatio) * 1.72;
         let paramString = target ? (`?target=${target}`) : '';
         // Crop image if result is 30% wider than required
         if (resized) paramString = `${paramString}${paramString ? '&' : '?'}width=${this.#round(width * this.#devicePixelRatio)}&height=${this.#round(height * this.#devicePixelRatio)}&quality=.84&fit=crop${allowAnimated ? '' : '&format=webp'}`;
@@ -7829,10 +8030,37 @@ class Controller {
     static #genImagesListFilters(onAnyChange, options = {}) {
         const { baseModels_images = true, image_types = true, groupImagesByPost = true, period_images = true } = options;
         const modelBadges = { image: 'image', video: 'movie', audio: 'music', edit: 'edit', closed: 'lock' };
-        const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
-        const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
+        const modelBadgesOrder = [ 'closed', 'edit', 'image', 'video', 'audio' ];
+
+        const hideUnpopular = SETTINGS.hideUnpopularModels;
+        const hideClosed = SETTINGS.hideClosedModels;
+        const hideSet = hideUnpopular ? new Set(CONFIG.filters.unpopularModels) : null;
         const modelsTags = this.#models.tags;
-        const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));
+        const modelsOptions = [
+            'All',
+            ...this.#models.options.filter(m => {
+                if (hideSet?.has(m)) return false;
+                if (hideClosed && modelsTags[m]?.includes('closed')) return false;
+                return true;
+            })
+        ];
+
+        const modelsBadges = {};
+        for (const model of modelsOptions) {
+            const tags = modelsTags[model];
+            const badges = [];
+
+            if (tags) {
+                for (const tag of modelBadgesOrder) {
+                    if (tags.includes(tag)) {
+                        badges.push({ type: 'icon', icon: modelBadges[tag], value: tag });
+                    }
+                }
+            }
+
+            modelsBadges[model] = badges;
+        }
+
         const imagesTypeOptions = [ "All", "image", "video" ];
         const sortOptions = [ "Most Reactions", "Most Comments", "Most Collected", "Newest", "Oldest" ]; // "Random": Random sort requires a collectionId
 
@@ -7863,6 +8091,7 @@ class Controller {
             },
             EXTENSION_INSTALLED && baseModels_images ? { type: 'list',
                 key: 'baseModels_images',
+                id: 'baseModels',
                 label: window.languagePack?.text?.model ?? 'Model',
                 options: modelsOptions,
                 labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
@@ -7871,7 +8100,7 @@ class Controller {
                 setValue: newValue => SETTINGS.baseModels_images = newValue === 'All' ? [] : [ newValue ],
                 getValue: () => SETTINGS.baseModels_images.length ? (SETTINGS.baseModels_images.length > 1 ? SETTINGS.baseModels_images : SETTINGS.baseModels_images[0]) : 'All'
             } : null,
-            EXTENSION_INSTALLED && image_types ? { type: 'list',
+            image_types ? { type: 'list',
                 key: 'image_types',
                 label: window.languagePack?.text?.imageType ?? 'Type',
                 options: imagesTypeOptions,
@@ -7910,10 +8139,37 @@ class Controller {
     static #genModelsListFilters(onAnyChange, options = {}) {
         const { period = true, types = true, checkpointType = true, baseModels = true } = options;
         const modelBadges = { image: 'image', video: 'movie', audio: 'music', edit: 'edit', closed: 'lock' };
-        const modelsToHide = SETTINGS.hideUnpopularModels ? CONFIG.filters.unpopularModels : [];
-        const modelsOptions = [ 'All', ...this.#models.options.filter(m => !modelsToHide.includes(m)) ];
+        const modelBadgesOrder = [ 'closed', 'edit', 'image', 'video', 'audio' ];
+
+        const hideUnpopular = SETTINGS.hideUnpopularModels;
+        const hideClosed = SETTINGS.hideClosedModels;
+        const hideSet = hideUnpopular ? new Set(CONFIG.filters.unpopularModels) : null;
         const modelsTags = this.#models.tags;
-        const modelsBadges = Object.fromEntries(modelsOptions.map(m => ([ m, modelsTags[m]?.filter(t => modelBadges[t]).map(t => modelBadges[t]) || [] ])));
+        const modelsOptions = [
+            'All',
+            ...this.#models.options.filter(m => {
+                if (hideSet?.has(m)) return false;
+                if (hideClosed && modelsTags[m]?.includes('closed')) return false;
+                return true;
+            })
+        ];
+
+        const modelsBadges = {};
+        for (const model of modelsOptions) {
+            const tags = modelsTags[model];
+            const badges = [];
+
+            if (tags) {
+                for (const tag of modelBadgesOrder) {
+                    if (tags.includes(tag)) {
+                        badges.push({ type: 'icon', icon: modelBadges[tag], value: tag });
+                    }
+                }
+            }
+
+            modelsBadges[model] = badges;
+        }
+
         const typeOptions = [ 'All', ...this.#types.options];
         const trainedOrMergedOptions = [ 'All', 'Trained', 'Merge' ];
         const sortOptions = [ "Highest Rated", "Most Downloaded", "Most Liked", "Most Discussed", "Most Collected", "Most Images", "Newest", "Oldest" ];
@@ -7924,11 +8180,16 @@ class Controller {
                     { type: 'boolean',
                         key: 'showCurrentModelVersionStats',
                         label: window.languagePack?.text?.stats_from_version ?? 'Statistics for this version'
+                    },
+                    { type: 'boolean',
+                        key: 'hideEarlyAccess',
+                        label: window.languagePack?.text?.hideEarlyAccess ?? 'Hide Early Access'
                     }
                 ]
             },
             baseModels ? { type: 'list',
                 key: 'baseModels',
+                id: 'baseModels',
                 label: window.languagePack?.text?.model ?? 'Model',
                 options: modelsOptions,
                 labels: this.#listFilters.genLabels(modelsOptions, 'modelLabels', this.#models.labels),
@@ -8011,6 +8272,7 @@ class Controller {
                 const value = rule.getValue ? rule.getValue() : SETTINGS[rule.key];
 
                 const listEl = this.#genList({
+                    id: rule.id || '',
                     label: rule.label,
                     options: rule.options,
                     labels: rule.labels,
@@ -8098,7 +8360,7 @@ class Controller {
 
             const offsetRight = button.offsetParent.offsetWidth - (button.offsetLeft + button.offsetWidth);
             const width = container.offsetWidth;
-            const targetOffsetRight = offsetRight + button.offsetWidth / 2 - width / 2;
+            const targetOffsetRight = offsetRight + button.offsetWidth * .5 - width * .5;
             const windowWidth = window.innerWidth;
             const aviableOffsetRight = targetOffsetRight < 0 ? 16 : targetOffsetRight + width >= windowWidth ? windowWidth - width - 16 : targetOffsetRight;
             const offsetX = aviableOffsetRight - targetOffsetRight;
@@ -8157,7 +8419,7 @@ class Controller {
         let currentValue = value;
 
         if (label) insertElement('label', element, { class: 'switch-label' }, label);
-        const switchButton = insertElement('div', element, { class: 'switch', 'data-value': currentValue });
+        const switchButton = insertElement('div', element, { class: `switch switch-value-${currentValue ? 'true' : 'false'}` });
         insertElement('div', switchButton, { class: 'switch-background' });
         insertElement('div', switchButton, { class: 'switch-button' });
 
@@ -8165,7 +8427,8 @@ class Controller {
             if (currentValue === newValue) return;
             onchange({ oldValue: currentValue, newValue });
             currentValue = newValue;
-            switchButton.setAttribute('data-value', newValue);
+            switchButton.classList.toggle('switch-value-true', currentValue);
+            switchButton.classList.toggle('switch-value-false', !currentValue);
         };
         const toggleValue = () => setValue(!currentValue);
 
@@ -8174,16 +8437,17 @@ class Controller {
         return { element, setValue };
     }
 
-    static #genList({ onchange, value, options, labels = {}, tags = {}, badges = {}, label = '' }) {
+    static #genList({ onchange, value, options, labels = {}, tags = {}, badges = {}, label = '', id = '' }) {
         const element = createElement('div', { class: 'config config-list' });
+        if (id) element.setAttribute('data-id', id);
         let currentValue = value;
         const list = {};
         const listElements = {};
         options.forEach(key => list[key] = labels[key] ?? key);
         let listVisible = false, focusIndex = 0, displayedList = [], isClicking = false;
 
-        const selectedOptionElement = insertElement('div', element, { class: 'list-selected' }, label ? `${label}: ` : '');
-        const searchInput = insertElement('input', element, { type: 'text', class: 'list-search hidden', hidden: '' });
+        const selectedOptionElement = insertElement('div', element, { class: 'list-selected' }, label ? `${label} ` : '');
+        const searchInput = insertElement('input', element, { type: 'text', class: 'list-search hidden' });
         const selectedOptionTitle = insertElement('span', selectedOptionElement, undefined, list[currentValue] ?? currentValue);
         selectedOptionElement.appendChild(getIcon('arrow_down'));
         const optionsListElement = insertElement('div', element, { class: 'list-options', tabindex: -1 });
@@ -8201,9 +8465,18 @@ class Controller {
             const optionBadges = badges[key];
             if (optionBadges && optionBadges.length > 0) {
                 const wrap = insertElement('div', element, { class: 'badges' });
-                optionBadges.forEach(iconId => {
-                    const badge = insertElement('div', wrap, { class: 'badge' });
-                    badge.appendChild(getIcon(iconId));
+                optionBadges.forEach(badge => {
+                    const el = createElement('div', { class: 'badge' });
+                    if (badge.type === 'icon' && badge.icon) el.appendChild(getIcon(badge.icon));
+                    else if (badge.type === 'element' && badge.element instanceof HTMLElement) el.appendChild(badge.element);
+                    else if (badge.type === 'text' && typeof badge.text === 'string') el.textContent = text;
+                    else return;
+                    if (badge.value) {
+                        const vRaw = String(badge.value);
+                        const v = vRaw.includes(' ') ? vRaw.replaceAll(' ', '_') : vRaw;
+                        el.classList.add('badge-with-value', `badge-value-${v}`);
+                    }
+                    wrap.appendChild(el);
                 });
             }
             const text = list[key] || '';
@@ -8230,7 +8503,7 @@ class Controller {
                     const item = listElements[key];
                     const index = item.searchText.indexOf(q);
                     if (index === -1) {
-                        item.element.setAttribute('hidden', '');
+                        item.element.classList.add('option-hidden');
                         return false;
                     }
 
@@ -8242,30 +8515,32 @@ class Controller {
                         const postText = text.substring(index + q.length);
                         insertElement('mark', item.span, undefined, text.substring(index, index + q.length));
                         if (postText) item.span.appendChild(document.createTextNode(postText));
-                        item.element.removeAttribute('hidden');
+                        item.element.classList.remove('option-hidden');
                         return true;
                     }
 
                     const matchedTag = item.searchTags.find(t => t.startsWith(q));
                     if (!matchedTag) {
-                        item.element.setAttribute('hidden', '');
+                        item.element.classList.add('option-hidden');
                         return false;
                     }
 
                     item.span.textContent = item.text;
                     insertElement('div', item.span, { class: 'list-tag' }, item.tagLabels[matchedTag]);
 
-                    item.element.removeAttribute('hidden');
+                    item.element.classList.remove('option-hidden');
                     return true;
                 });
             }
             else {
                 displayedList = Object.keys(listElements);
-                optionsListElement.querySelectorAll('.list-option[hidden]').forEach(el => el.removeAttribute('hidden'));
+                optionsListElement.querySelectorAll('.list-option.option-hidden').forEach(el => el.classList.remove('option-hidden'));
                 displayedList.forEach(key => {
                     listElements[key].span.textContent = list[key];
                 });
             }
+
+            searchInput.classList.toggle('error-text', displayedList.length === 0);
 
             focusIndex = displayedList.indexOf(currentValue);
             if (focusIndex < 0) focusIndex = 0;
@@ -8283,7 +8558,7 @@ class Controller {
                 pendingSearchText = '';
             });
         };
-        const scrollToOption = option => optionsListElement.scrollTo({ top: option.offsetTop - optionsListElement.offsetHeight/2 + option.offsetHeight/2 });
+        const scrollToOption = option => optionsListElement.scrollTo({ top: option.offsetTop - optionsListElement.offsetHeight * .5 + option.offsetHeight * .5 });
         const setFakeFocus = () => {
             const key = displayedList[focusIndex];
             if (listElements[key]) scrollToOption(listElements[key].element);
@@ -8296,7 +8571,6 @@ class Controller {
             selectedOptionElement.classList.add('list-visible');
             if (!isClicking) selectedOptionElement.classList.add('keyboard-focus');
             searchInput.value = '';
-            searchInput.removeAttribute('hidden');
             optionsListElement.querySelector('.option-focus')?.classList.remove('option-focus');
             searchForText();
             if (listElements[currentValue]) scrollToOption(listElements[currentValue].element);
@@ -8308,7 +8582,6 @@ class Controller {
             optionsListElement.classList.remove('list-visible');
             selectedOptionElement.classList.remove('list-visible');
             selectedOptionElement.classList.remove('keyboard-focus');
-            searchInput.setAttribute('hidden', '');
             searchInput.classList.add('hidden');
             listVisible = false;
             isClicking = false;
@@ -8427,13 +8700,13 @@ class Controller {
                 return [
                     { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
                     SETTINGS.hideGay ? { key: 'tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.nsfwLevel >= 2 } : null,
-                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                    SETTINGS.blackListTags.length ? { key: 'tags', innerKey: 'name', conditions: SETTINGS.blackListTags.map(tag => normalizeTagId(tag)) } : null,
                 ];
 
             case 'models':
                 return [
                     { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
-                    SETTINGS.blackListTags.length ? { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) } : null,
+                    SETTINGS.blackListTags.length ? { key: 'tags', innerKey: 'name', conditions: SETTINGS.blackListTags.map(tag => normalizeTagId(tag)) } : null,
                     // { key: 'modelVersions.0.images.0.tagIds', conditions: blackListTagIds, type: 'number' } // filtered in separated pass for images
                 ]
 
@@ -8442,7 +8715,7 @@ class Controller {
                     { key: 'tagIds', conditions: blackListTagIds, type: 'number' },
                     { key: 'coverImage.tagIds', conditions: blackListTagIds, type: 'number' },
                     SETTINGS.hideGay ? { key: 'coverImage.tagIds', conditions: CONFIG.filters.tagBlacklistPresets.hideGay_nsfw, type: 'number', shouldApply: item => item.coverImage?.nsfwLevel >= 2 } : null,
-                    // { key: 'tags', conditions: SETTINGS.blackListTags.map(tag => tag.match(/[\+\-\|\&\?]/) ? tag : `+${tag}`) },
+                    SETTINGS.blackListTags ? { key: 'tags', innerKey: 'name', conditions: SETTINGS.blackListTags.map(tag => normalizeTagId(tag)) } : null,
                 ];
 
             default: return [];
@@ -8511,8 +8784,6 @@ class Controller {
         this.#cache.badPosters.add(url);
     }
 
-    // TODO: Implementing this correctly, updating the history every half a second is not correct, but simply waiting for the scroll to complete is also wrong.
-    // (navigating through the history or clicking on links directly during or immediately after scrolling)
     static #saveStateTimer = null;
     static #saveStateRequestTime = null;
     static #saveStateRequestId = null;
@@ -8537,6 +8808,24 @@ class Controller {
         };
 
         this.#saveStateTimer = setTimeout(check, DELAY);
+    }
+
+    static #isSavePending = false;
+    static #scheduleSaveState() {
+        if (this.#isSavePending) return;
+        this.#isSavePending = true;
+
+        queueMicrotask(() => {
+            this.saveState();
+            this.#isSavePending = false;
+        });
+    }
+
+    static setState(updater) {
+        if (typeof updater === 'function') updater(this.#state);
+        else Object.assign(this.#state, updater);
+
+        this.#scheduleSaveState();
     }
 
     static saveState() {
@@ -8650,36 +8939,6 @@ class Controller {
         }
 
         return stateCopy;
-    }
-
-    // TODO: The server stopped sending the zod error... need to find another way to get the list.
-    static async dev_checkNewModels() {
-        try {
-            console.log('[DEV] Loading list of available models');
-            const response = await fetch('https://civitai.com/api/v1/models?limit=1&baseModels=New').then(response => response.text())
-            const json = JSON.parse(response);
-            if (!json.error) {
-                console.log('[DEV] Problem loading model list, server response:', json);
-                if (json.items) {
-                    const count = Array.isArray(json.items) ? json.items.length : NaN;
-                    throw new Error(`For some reason the server returned a list of ${count} models...`);
-                }
-            }
-            const zodErrorString = json.error.message;
-            const zodError = JSON.parse(zodErrorString);
-            const values = zodError[0].errors[0][0].values;
-            const selectorList = this.#models.options;
-
-            const missingInSelector = values.filter(v => !selectorList.includes(v));
-            const extraInSelector = selectorList.filter(v => !values.includes(v));
-
-            if (missingInSelector.length) console.warn('[DEV] The selector is missing models:', missingInSelector);
-            if (extraInSelector.length) console.warn('[DEV] There are extra models in the selector:', extraInSelector);
-            if (!missingInSelector.length && !extraInSelector.length) console.log('[DEV] All models are in the selector');
-        } catch (error) {
-            console.error('[DEV] Unable to check the list of available models');
-            console.error(error);
-        }
     }
 }
 
@@ -8885,29 +9144,21 @@ function compileFilterItemsRules(rules) {
     if (!Array.isArray(rules) || rules.length === 0) return [];
 
     const blocksRegex = /[+\-][^+\-]+/g;
+    const parsePath = pathInput => {
+        if (!pathInput) return [];
+        if (Array.isArray(pathInput)) return pathInput;
+        if (typeof pathInput === 'string') return pathInput.includes('.') ? pathInput.split('.') : [pathInput];
+        return [pathInput];
+    };
 
     return rules.map((rule, ruleIndex) => {
-        if (!rule || !Array.isArray(rule.conditions)) return null;
+        if (!rule || !Array.isArray(rule.conditions) || !rule.conditions.length) return null;
 
-        const parseTag = rule.type === 'number' ? v => Number(v) : v => String(v);
+        const mainKey = parsePath(rule.key);
+        if (mainKey.length === 0) return null;
 
-        // Pre-compile property accessor
-        let getValue;
-        const path = rule.path || (rule.key.includes('.') ? rule.key.split('.') : null);
-        
-        if (path) {
-            if (path.length === 1) getValue = item => item?.[path[0]];
-            else if (path.length === 2) getValue = item => item?.[path[0]]?.[path[1]];
-            else if (path.length === 3) getValue = item => item?.[path[0]]?.[path[1]]?.[path[2]];
-            else getValue = item => {
-                let cur = item;
-                for (let i = 0; i < path.length && cur != null; i++) cur = cur[path[i]];
-                return cur;
-            };
-        } else {
-            const key = rule.key;
-            getValue = item => item?.[key];
-        }
+        const innerKey = parsePath(rule.innerKey);
+        const isNumber = rule.type === 'number';
 
         const conditionMatchers = rule.conditions.map(conditionStr => {
             const blocks = conditionStr.match(blocksRegex);
@@ -8915,10 +9166,10 @@ function compileFilterItemsRules(rules) {
 
             const parsedBlocks = blocks.map(block => {
                 const prefix = block[0];
-                const content = block.slice(1).toLowerCase();
+                const content = block.slice(1);
                 if (!content) return null;
 
-                const tags = content.split('|').filter(Boolean).map(parseTag);
+                const tags = content.split('|').filter(Boolean).map(val => isNumber ? Number(val) : String(val));
                 if (tags.length === 0) return null;
 
                 const tagSet = new Set(tags);
@@ -8926,52 +9177,74 @@ function compileFilterItemsRules(rules) {
                 const singleTag = tags[0];
                 const isSingle = tags.length === 1;
 
-                // Allocation-free block matcher
-                return (rawTags) => {
-                    if (rawTags == null) return !isPlus;
-
-                    // Handle array of tags on the item
-                    if (Array.isArray(rawTags)) {
-                        const len = rawTags.length;
-                        if (len === 0) return !isPlus;
-
-                        if (isPlus) {
-                            if (isSingle) return rawTags.includes(singleTag);
-                            for (let i = 0; i < len; i++) {
-                                if (tagSet.has(rawTags[i])) return true;
-                            }
-                            return false;
-                        } else {
-                            if (isSingle) return !rawTags.includes(singleTag);
-                            for (let i = 0; i < len; i++) {
-                                if (tagSet.has(rawTags[i])) return false;
-                            }
-                            return true;
-                        }
+                return {
+                    isPlus,
+                    matchVal(val) {
+                        if (val == null) return !isPlus;
+                        const target = isNumber ? Number(val) : String(val);
+                        const has = isSingle ? target === singleTag : tagSet.has(target);
+                        return isPlus ? has : !has;
                     }
-
-                    // Handle primitive value (string/number)
-                    return isPlus ? tagSet.has(rawTags) : !tagSet.has(rawTags);
                 };
             }).filter(Boolean);
 
-            if (parsedBlocks.length === 0) return null;
-
-            const numBlocks = parsedBlocks.length;
-
-            // AND evaluation between blocks inside one condition
-            return function checkCondition(rawTags) {
-                for (let i = 0; i < numBlocks; i++) {
-                    if (!parsedBlocks[i](rawTags)) return false;
-                }
-                return true;
-            };
+            return parsedBlocks;
         }).filter(Boolean);
 
         if (conditionMatchers.length === 0) return null;
 
-        const numMatchers = conditionMatchers.length;
         const shouldApply = typeof rule.shouldApply === 'function' ? rule.shouldApply : null;
+
+        function checkValueAgainstBlocks(val, conditionBlocks) {
+            for (let i = 0; i < conditionBlocks.length; i++) {
+                if (!conditionBlocks[i].matchVal(val)) return false;
+            }
+            return true;
+        }
+
+        function matchesAnyInNode(node, mainIdx, innerIdx, conditionBlocks) {
+            if (node == null) {
+                return checkValueAgainstBlocks(null, conditionBlocks);
+            }
+
+            //  Walk mainKey
+            if (mainIdx < mainKey.length) {
+                const key = mainKey[mainIdx];
+                const nextVal = node[key];
+
+                if (Array.isArray(nextVal)) {
+                    for (let i = 0; i < nextVal.length; i++) {
+                        if (matchesAnyInNode(nextVal[i], mainIdx + 1, innerIdx, conditionBlocks)) return true;
+                    }
+                    return false;
+                }
+                return matchesAnyInNode(nextVal, mainIdx + 1, innerIdx, conditionBlocks);
+            }
+
+            // Walk innerKey
+            if (innerIdx < innerKey.length) {
+                const key = innerKey[innerIdx];
+                const nextVal = node[key];
+
+                if (Array.isArray(nextVal)) {
+                    for (let i = 0; i < nextVal.length; i++) {
+                        if (matchesAnyInNode(nextVal[i], mainIdx, innerIdx + 1, conditionBlocks)) return true;
+                    }
+                    return false;
+                }
+                return matchesAnyInNode(nextVal, mainIdx, innerIdx + 1, conditionBlocks);
+            }
+
+            // Reached leaf value or leaf array
+            if (Array.isArray(node)) {
+                for (let i = 0; i < node.length; i++) {
+                    if (checkValueAgainstBlocks(node[i], conditionBlocks)) return true;
+                }
+                return false;
+            }
+
+            return checkValueAgainstBlocks(node, conditionBlocks);
+        }
 
         return {
             index: ruleIndex,
@@ -8979,11 +9252,11 @@ function compileFilterItemsRules(rules) {
             isMatch(item) {
                 if (shouldApply && !shouldApply(item)) return false;
 
-                const rawTags = getValue(item);
-
                 // OR evaluation between condition strings
-                for (let i = 0; i < numMatchers; i++) {
-                    if (conditionMatchers[i](rawTags)) return true;
+                for (let c = 0; c < conditionMatchers.length; c++) {
+                    if (matchesAnyInNode(item, 0, 0, conditionMatchers[c])) {
+                        return true;
+                    }
                 }
                 return false;
             }
@@ -9377,11 +9650,13 @@ function onDragstart_setDragCanvas(e, original) {
 
     document.body.appendChild(ghost);
 
-    e.dataTransfer.setDragImage(ghost, Math.round(scaledWidth / 2), Math.round(scaledHeight / 2));
+    e.dataTransfer.setDragImage(ghost, Math.round(scaledWidth * .5), Math.round(scaledHeight * .5));
     setTimeout(() => ghost.remove(), 0);
 }
 
 function onDragstart(e) {
+    if (!(e.target instanceof HTMLElement)) return;
+
     const link = e.target?.closest('a');
     if (link) {
         const title = link.getAttribute('data-draggable-title') || link.textContent.trim();
@@ -9452,7 +9727,7 @@ function onDragstart(e) {
 
         document.body.appendChild(ghost);
 
-        e.dataTransfer.setDragImage(ghost, Math.round(ghost.offsetWidth / 2), Math.round(ghost.offsetHeight / 2));
+        e.dataTransfer.setDragImage(ghost, Math.round(ghost.offsetWidth * .5), Math.round(ghost.offsetHeight * .5));
         setTimeout(() => ghost.remove(), 0);
         return;
     }
@@ -9620,8 +9895,8 @@ function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
         const newRatio = targetWidth / targetHeight;
         cropWidth = Math.min(width, Math.round(height * newRatio));
         cropHeight = Math.min(height, Math.round(width / newRatio));
-        offsetX = Math.round((width - cropWidth) / 2);
-        offsetY = Math.round((height - cropHeight) / 2);
+        offsetX = Math.round((width - cropWidth) * .5);
+        offsetY = Math.round((height - cropHeight) * .5);
     }
 
     const canvas = createElement('canvas', { class: 'media-element', width: targetWidth, height: targetHeight });
@@ -9741,10 +10016,13 @@ function stopVideoPlayEvent(e) {
 
 function startLinkPreviewEvent(e, options) {
     if (!options) options = { fromFocus: false, target: null };
-    const target = e.target || e.target.closest('a[href]');
+    const target = options.target || e.target.closest('a[href]');
     if (!target) return;
 
-    const result = Controller.createLinkPreview(target.getAttribute('href'));
+    const href = target.getAttribute('href');
+    if (!href) return;
+
+    const result = Controller.createLinkPreview(href);
 
     if (!result) {
         target.removeAttribute('data-link-preview');
@@ -9753,7 +10031,12 @@ function startLinkPreviewEvent(e, options) {
 
     const previewElement = createElement('div', { class: 'link-preview loading', inert: '' });
     previewElement.appendChild(Controller.genLoadingIndicator());
-    let positionTarget = target.querySelector('.link-preview-position');
+    let positionTarget = target.querySelector('.link-preview-position'), tempTarget = false;
+
+    if (!positionTarget && target.classList.contains('link-with-favicon')) {
+        positionTarget = createElement('span', { class: 'link-with-favicon-temp-target' }, 'W'); // W ~ 1.2em
+        tempTarget = true;
+    }
 
     const showPreview = element => {
         previewElement.classList.remove('loading');
@@ -9765,13 +10048,18 @@ function startLinkPreviewEvent(e, options) {
         result.then(element => {
             if (!document.body.contains(previewElement) || !target.hasAttribute('lilpipe-showed')) return;
             showPreview(element);
-            startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget }); // update position
+
+            if (tempTarget) target.prepend(positionTarget);
+            startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget, target }); // update position
+            if (tempTarget) positionTarget.remove();
         });
     } else {
         showPreview(result);
     }
 
-    startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget });
+    if (tempTarget) target.prepend(positionTarget);
+    startLilpipeEvent(e, { fromFocus: options.fromFocus, type: 'link-preview', element: previewElement, delay: 0, positionTarget, target });
+    if (tempTarget) positionTarget.remove();
 }
 
 const lilpipeGenerators = new WeakMap();
@@ -9809,7 +10097,7 @@ function startLilpipeEvent(e, options) {
         }
     }
 
-    const positionTarget = options.positionTarget && target.contains(options.positionTarget) ? options.positionTarget : target;
+    const positionTarget = options.positionTarget && options.positionTarget instanceof HTMLElement && target.contains(options.positionTarget) ? options.positionTarget : target;
     const render = () => {
         const animationDuration = document.getElementById('tooltip') ? 100 : 150;
         // Remove old tooltip
@@ -9839,8 +10127,8 @@ function startLilpipeEvent(e, options) {
                 let closestRect = rects[0];
 
                 for (const r of rects) {
-                    const centerX = r.left + r.width / 2;
-                    const centerY = r.top + r.height / 2;
+                    const centerX = r.left + r.width * .5;
+                    const centerY = r.top + r.height * .5;
                     const distance = Math.pow(cX - centerX, 2) + Math.pow(cY - centerY, 2);
 
                     if (distance < minDistance) {
@@ -9852,7 +10140,7 @@ function startLilpipeEvent(e, options) {
             }
         }
 
-        const targetX = rect.left + rect.width/2 - tW/2;
+        const targetX = rect.left + rect.width * .5 - tW * .5;
         const targetY = rect.top - tH - 8;
         const isBelow = targetY < 0 && rect.top < wH - rect.bottom;
         const newX = targetX < 0 ? 0 : targetX + tW > wW ? wW - tW - 8 : targetX;
@@ -9939,6 +10227,12 @@ function init() {
         }
     }
 
+    // Theme config control
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const onThemeChange = matches => CONFIG.theme = matches ? CONFIG.theme_dark : CONFIG.theme_light;
+    mediaQuery.addEventListener('change', e => onThemeChange(e.matches));
+    onThemeChange(mediaQuery.matches);
+
     Controller.appElement = document.getElementById('app');
     loadLanguagePack(SETTINGS.language);
 
@@ -10004,7 +10298,7 @@ function init() {
             new Promise(resolve => {
                 navigator.serviceWorker.addEventListener('controllerchange', () => resolve(true), { once: true });
             }),
-            new Promise(resolve => setTimeout(() => resolve(false), 250))
+            new Promise(resolve => setTimeout(() => resolve(false), 400))
         ]).then(init);
     };
     if (document.body && document.getElementById('svg-symbols')) return bodyIsReady();

@@ -236,11 +236,11 @@ async function cacheFetch(request, cacheControl = { public: true }) {
 
         if (blob.type.startsWith('image/')) {
             const { blob: resizedBlob, isAnimated } = await processImageBlob(blob, request, params);
-            blob = resizedBlob;
             if (isAnimated) {
                 await cacheAnimatedOriginal(request, blob, cacheControl, cacheName, params);
                 customHeaders.push({ k: 'X-Animated', v: 'true' });
             }
+            blob = resizedBlob;
         }
 
         if (!cacheControl.noCache) cacheControl.immutable = SW_CONFIG.immutableCaches.includes(cacheName);
@@ -249,7 +249,7 @@ async function cacheFetch(request, cacheControl = { public: true }) {
 
         if (customHeaders.length) customHeaders.forEach(({ k, v }) => finalResponse.headers.set(k, v));
 
-        if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(request, finalResponse.clone(), cacheName);
+        if (params.cache !== 'no-cache' && !cacheControl.noCache) await CacheManager.put(request, finalResponse.clone(), cacheName);
 
         return finalResponse;
     }
@@ -261,159 +261,9 @@ async function cacheFetch(request, cacheControl = { public: true }) {
 
         if (request.url.includes('transcode=true') && request.url.includes('.jpeg')) {
             console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
-            const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
-            const response = await cacheFetch(newREquest, cacheControl);
-            CacheManager.put(request, response.clone(), cacheName);
-            return response;
-        }
-        return originalResponse || new Response('', { status: 500, statusText: 'Network Error' });
-    }
-}
-
-// TODO: remove
-async function cacheFetch_original(request, cacheControl = { public: true }) {
-    if (request.url.startsWith(SW_CONFIG.local_urls.base)) return localFetch(request);
-
-    let cacheName = SW_CONFIG.cache.media;
-    const url = new URL(request.url);
-    const sParams = url.searchParams;
-    const params = Object.fromEntries(url.searchParams.entries());
-    if (params.target && !SW_CONFIG.validTargets.has(params.target)) delete params.target;
-    let specialFetch = fetch;
-
-    if (request.url.startsWith(SW_CONFIG.base_url)) {
-        cacheName = SW_CONFIG.cache.static;
-        if (!cacheControl.maxAge) {
-            const isCore = url.pathname === '/civitai-lite-viewer/' || url.pathname === '/civitai-lite-viewer/index.html';
-            cacheControl.maxAge = isCore ? SW_CONFIG.ttl['lite-viewer-core'] : SW_CONFIG.ttl['lite-viewer'];
-        }
-    } else if (request.url.startsWith(SW_CONFIG.api_url)) {
-        cacheName = SW_CONFIG.cache.api;
-        if (!cacheControl.maxAge) {
-            if (url.pathname.includes('/model-versions/')) cacheControl.maxAge = SW_CONFIG.ttl['model-version'];
-            else if (url.pathname.endsWith('/images') && params.imageId) {
-                cacheControl.maxAge = SW_CONFIG.ttl['image-meta'];
-                if (!params.nsfw) specialFetch = fetchImageWithUnknownNSFW;
-            }
-        }
-    } else if (request.url.startsWith(SW_CONFIG.images_url)) {
-        cacheName = SW_CONFIG.cache[SW_CONFIG.cacheByTarget[params.target] ?? 'media'];
-    }
-
-    // if (params.original) {
-    //     console.error('This should not be called! (cacheFetch: params.original)');
-    //     const u = new URL(url, self.location.origin);
-    //     u.searchParams.delete('original');
-    //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
-    //     return CacheManager.get(editedRequest);
-    // }
-
-    let originalResponse;
-    try {
-        const before = sParams.size;
-        for (const key of SW_CONFIG.local_params) sParams.delete(key); // Removing unnecessary parameters
-        const after = sParams.size;
-        const modified = before !== after;
-        const requestWithoutLocalParams = modified ? cloneRequestWithModifiedUrl(request, url.toString()) : null;
-
-        const fetchResponse = await specialFetch(modified ? requestWithoutLocalParams : request);
-        originalResponse = fetchResponse;
-
-        // Don't try to cache the response with an error
-        if (!fetchResponse.ok) return fetchResponse;
-
-        let blob;
-
-        // Stop downloading if the server decides to return the video to the image
-        if (request.destination === 'image' && fetchResponse.headers?.get('content-type')?.startsWith('video/')) {
-            fetchResponse.body?.cancel();
-            const url = (modified ? requestWithoutLocalParams : request).url;
-            console.warn('A video response was received in the image element, download canceled. Attempting to download a poster via a video element.', url);
-
-            blob = await requestPoster(url).catch(error => {
-                console.error(error);
-                return null;
-            });
-
-            if (!blob) {
-                console.warn('Failed to load poster via video element.', url);
-                return new Response(null, { status: 415, statusText: 'Unsupported Media Type' });
-            }
-        } else {
-            blob = await fetchResponse.blob();
-        }
-
-        const customHeaders = [];
-
-        if (!cacheControl.maxAge) {
-            if (blob.type === 'application/json') {
-                if (request.method === 'GET') cacheControl.maxAge = 'max-age=60'; // Agressive caching for 1 minute (only GET requests)
-                else cacheControl.noCache = true;
-            }
-            else if (blob.size < 15000000) {
-                const maxAge = SW_CONFIG.ttl[params.target] ?? SW_CONFIG.ttl.unknown;
-                cacheControl.maxAge = maxAge;
-            } else cacheControl.maxAge = SW_CONFIG.ttl['large-file'];
-        }
-
-        if (blob.type.startsWith('image/')) {
-            const fileLimits = params.target?.endsWith('-card') ? SW_CONFIG.fileLimits.card.image : null;
-            const disableAnimation = (/[,/]anim=false[,/]/).test(request.url);
-            const requestedWidth = Number(request.url.match(/[,/]width=(\d+)[,/]/)?.[1]) || null;
-
-            let effectiveMaxFileSize = null;
-            if (fileLimits) {
-                if (requestedWidth && fileLimits.maxFileSizes?.length) {
-                    const match = fileLimits.maxFileSizes.sort((a, b) => a.width - b.width).find(item => requestedWidth <= item.width);
-                    effectiveMaxFileSize = match?.maxFileSize ?? fileLimits.maxFileSize;
-                } else {
-                    effectiveMaxFileSize = fileLimits.maxFileSize;
-                }
-            }
-
-            const isHuge = effectiveMaxFileSize && blob.size > effectiveMaxFileSize;
-            const isWrongFormat = fileLimits && !fileLimits.mimeTypes.includes(blob.type);
-            const isAnimated = (disableAnimation || params.format) && (await isImageAnimated(blob));
-
-            if (isHuge && requestedWidth && !params.width && !params.height) params.width = String(requestedWidth);
-
-            if (!params.format && (
-                isWrongFormat
-                || isHuge
-                || disableAnimation && isAnimated
-            )) params.format = 'webp';
-
-            if (params.width || params.height || params.format) {
-                const { width, height , format, quality, fit, position, smoothing } = params;
-                const options = { width, height, quality, format, fit, position, smoothing };
-
-                // Store original
-                // if (isAnimated) {
-                //     const originalResponse = responseFromBlob(blob, cacheControl);
-                //     const u = new URL(request.url, self.location.origin);
-                //     u.searchParams.append('original', 'true');
-                //     const editedRequest = cloneRequestWithModifiedUrl(request, u.toString());
-                //     if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(editedRequest, originalResponse, cacheName);
-                //     customHeaders.push([ 'X-Animated', true ]);
-                // }
-
-                blob = (await ImageResizeQueue.run(blob, options)) || blob;
-            }
-        }
-
-
-        if (!cacheControl.noCache) cacheControl.immutable = SW_CONFIG.immutableCaches.includes(cacheName);
-        const response = responseFromBlob(blob, cacheControl);
-        if (customHeaders.length) customHeaders.forEach(([k, v]) => response.headers.set(k, v));
-        if (params.cache !== 'no-cache' && !cacheControl.noCache) CacheManager.put(request, response.clone(), cacheName);
-        return response;
-    } catch (_) {
-        console.error(_);
-        if (request.url.includes('transcode=true') && request.url.includes('.jpeg')) {
-            console.log('Trying to download an image without the transcode=true attribute (Probably a GIF)');
-            const newREquest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/transcode=true,?/, '')}&cache=no-cache`);
-            const response = await cacheFetch(newREquest, cacheControl);
-            CacheManager.put(request, response.clone(), cacheName);
+            const newRequest = cloneRequestWithModifiedUrl(request, `${request.url.replace(/,transcode=true|transcode=true,?/, '')}&cache=no-cache`);
+            const response = await cacheFetch(newRequest, cacheControl);
+            if (response.ok) await CacheManager.put(request, response.clone(), cacheName);
             return response;
         }
         return originalResponse || new Response('', { status: 500, statusText: 'Network Error' });
@@ -421,7 +271,7 @@ async function cacheFetch_original(request, cacheControl = { public: true }) {
 }
 
 async function processImageBlob(blob, request, params) {
-    if (!blob.type.startsWith('image/')) return blob;
+    if (!blob.type.startsWith('image/')) return { blob, isAnimated: false };
 
     const fileLimits = params.target?.endsWith('-card') ? SW_CONFIG.fileLimits.card.image : null;
     const disableAnimation = (/[,/]anim=false[,/]/).test(request.url);
@@ -718,7 +568,7 @@ async function resizeBlobImage(blob, options) {
                     if (v.endsWith('%')) return Math.round((full - crop) * (parseFloat(v)/100));
                     if (v.endsWith('px')) return Math.round(parseFloat(v));
                     const n = parseFloat(v);
-                    return isNaN(n) ? Math.round((full - crop) / 2) : Math.round(n);
+                    return isNaN(n) ? Math.round((full - crop) * .5) : Math.round(n);
                 };
 
                 offsetX = calc(xVal, width,  cropW);

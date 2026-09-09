@@ -1,15 +1,18 @@
 {
     "manifest_version": 3,
     "name": "CivitAI API Bridge Extension",
-    "version": "1.1",
+    "description": "Enables the use of the direct Civitai API, instead of the public one, on the website \"dangarte.github.io/civitai-lite-viewer.\" It also marks images from civitai.com with a CORS header for requests from the website.",
+    "version": "1.2",
     "permissions": [
         "declarativeNetRequest",
+        "declarativeNetRequestWithHostAccess",
         "cookies",
         "storage"
     ],
     "host_permissions": [
-        "https://civitai.red/*",
-        "https://*.civitai.red/*"
+        "https://*.civitai.red/*",
+        "https://*.civitai.com/*",
+        "https://dangarte.github.io/civitai-lite-viewer/*"
     ],
     "background": {
         "service_worker": "service_worker.js",

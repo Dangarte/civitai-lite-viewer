@@ -1,7 +1,7 @@
 /// <reference path="./../src/js/_docs.d.ts" />
 "use strict";
 
-window.extension_civitaiExtensionProxyAPI_vertsion = 4;
+window.extension_civitaiExtensionProxyAPI_vertsion = 5;
 
 window.proxyFetchCivAPI = async function (route, params = {}) {
     return new Promise((resolve) => {

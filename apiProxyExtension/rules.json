@@ -21,5 +21,29 @@
                 "sub_frame"
             ]
         }
+    },
+    {
+        "id": 2,
+        "priority": 1,
+        "action": {
+            "type": "modifyHeaders",
+            "responseHeaders": [
+                {
+                    "header": "Access-Control-Allow-Origin",
+                    "operation": "set",
+                    "value": "*"
+                }
+            ]
+        },
+        "condition": {
+            "urlFilter": "||civitai.com/file/",
+            "resourceTypes": [
+                "xmlhttprequest",
+                "media"
+            ],
+            "initiatorDomains": [
+                "dangarte.github.io"
+            ]
+        }
     }
 ]

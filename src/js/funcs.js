@@ -23,10 +23,6 @@ function insertElement(type, parent, attributes, text) {
     return element;
 }
 
-function insertAfter(element, target) {
-    target.parentNode.insertBefore(element, target.nextSibling);
-}
-
 function unwrapElement(element) {
     const parent = element.parentNode;
     while (element.firstChild) parent.insertBefore(element.firstChild, element);
@@ -531,9 +527,11 @@ class Color {
     };
 
     static #REGEX = {
-        rgbaMatch: /rgba?\(\s*(\d+)\s*,?\s*(\d+)\s*,?\s*(\d+)\s*(?:\/\s*(\d*\.?\d+))?\s*\)/,
-        hslaMatch: /hsla?\(\s*(\d+)(?:deg)?\s*,?\s*([\d.]+)%\s*,?\s*([\d.]+)%\s*(?:\/\s*(\d*\.?\d+))?\s*\)/,
-        hexTest: /^[0-9a-fA-F]{3,4}$|^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/,
+        rgbaMatch: /rgba?\(\s*(\d+)\s*,?\s*(\d+)\s*,?\s*(\d+)\s*(?:[\/,]\s*(\d*\.?\d+))?\s*\)/,
+        hslaMatch: /hsla?\(\s*(\d+)(?:deg)?\s*,?\s*([\d.]+)%\s*,?\s*([\d.]+)%\s*(?:[\/,]\s*(\d*\.?\d+))?\s*\)/,
+        oklabMatch: /oklab\(\s*(-?[\d.]+)\s*,?\s*(-?[\d.]+)\s*,?\s*(-?[\d.]+)\s*(?:[\/,]\s*(\d*\.?\d+))?\s*\)/,
+        oklchMatch: /oklch\(\s*(-?[\d.]+)\s*,?\s*(-?[\d.]+)\s*,?\s*(-?[\d.]+)(?:deg)?\s*(?:[\/,]\s*(\d*\.?\d+))?\s*\)/,
+        hexTest: /^[0-9a-fA-F]{3,4}$|^[0-9a-fA-F]{6}$|^[0-9a-fA-F]{8}$/
     };
 
     static convert(color, toFormat, silent = false) {
@@ -574,6 +572,42 @@ class Color {
                 if (toFormat === 'hsla') return hsla;
 
                 rgba = this.hslToRgba(hsla);
+            } else if (color.startsWith('oklab')) {
+                // Support "oklab(0.5 0.1 -0.1)" and "oklab(0.5 0.1 -0.1 / 0.8)"
+                const match = color.match(this.#REGEX.oklabMatch);
+                if (!match) {
+                    if (silent) return null;
+                    else throw new Error("Incorrect OKLAB format");
+                }
+
+                const oklab = {
+                    l: parseFloat(match[1]),
+                    a: parseFloat(match[2]),
+                    b: parseFloat(match[3]),
+                    alpha: match[4] !== undefined ? parseFloat(match[4]) : 1
+                };
+
+                if (toFormat === 'oklab') return oklab;
+
+                rgba = this.oklabToRgb(oklab);
+            } else if (color.startsWith('oklch')) {
+                // Support "oklch(0.5 0.2 180)" and "oklch(0.5 0.2 180 / 0.8)"
+                const match = color.match(this.#REGEX.oklchMatch);
+                if (!match) {
+                    if (silent) return null;
+                    else throw new Error("Incorrect OKLCH format");
+                }
+
+                const oklch = {
+                    l: parseFloat(match[1]),
+                    c: parseFloat(match[2]),
+                    h: parseFloat(match[3]),
+                    a: match[4] !== undefined ? parseFloat(match[4]) : 1
+                };
+
+                if (toFormat === 'oklch') return oklch;
+
+                rgba = this.oklchToRgb(oklch);
             } else {
                 if (this.#COLORS_STRING[color]) color = this.#COLORS_STRING[color];
                 color = color[0] === '#' ? color.substring(1) : color;
@@ -617,8 +651,7 @@ class Color {
             case 'oklab':
                 return this.rgbToOklab(rgba);
             case 'oklch':
-                const lab = this.rgbToOklab(rgba);
-                return this.oklabToOklch(lab);
+                return this.rgbToOklch(rgba);
             default:
                 if (silent) return null;
                 else throw new Error("Unsupported target color format");
@@ -638,7 +671,7 @@ class Color {
         const max = Math.max(r, g, b), min = Math.min(r, g, b);
         let h, s, l = (max + min) / 2;
 
-        if(max === min){
+        if (max === min) {
             h = s = 0; // colorless
         } else {
             const d = max - min;
@@ -686,7 +719,7 @@ class Color {
         const c = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
         let h = Math.atan2(lab.b, lab.a) * 180 / Math.PI;
         if (h < 0) h += 360;
-        return { l: lab.l, c, h };
+        return { l: lab.l, c, h, alpha: lab.alpha ?? 1 };
     }
 
     static oklchToOklab(lch) {
@@ -694,7 +727,8 @@ class Color {
         return {
             l: lch.l,
             a: Math.cos(hr) * lch.c,
-            b: Math.sin(hr) * lch.c
+            b: Math.sin(hr) * lch.c,
+            alpha: lch.alpha ?? 1
         };
     }
 
@@ -710,7 +744,8 @@ class Color {
         return {
             l: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
             a: 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-            b: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+            b: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+            alpha: rgb.a ?? 1
         };
     }
 
@@ -727,11 +762,26 @@ class Color {
         const lg = -1.2684380046 * L + 2.6097574011 * m - 0.3413193965 * s;
         const lb = -0.0041960863 * L - 0.7034186147 * m + 1.7076147010 * s;
 
+        // return {
+        //     r: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lr) * 255))),
+        //     g: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lg) * 255))),
+        //     b: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lb) * 255)))
+        // };
+
         return {
-            r: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lr) * 255))),
-            g: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lg) * 255))),
-            b: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lb) * 255)))
+            r: Math.round(this.#linearToSrgb(lr) * 255),
+            g: Math.round(this.#linearToSrgb(lg) * 255),
+            b: Math.round(this.#linearToSrgb(lb) * 255),
+            a: lab.alpha ?? 1
         };
+    }
+
+    static rgbToOklch(rgb) {
+        return this.oklabToOklch(this.rgbToOklab(rgb));
+    }
+
+    static oklchToRgb(lch) {
+        return this.oklabToRgb(this.oklchToOklab(lch));
     }
 
     static #srgbToLinear(c) {
@@ -741,6 +791,246 @@ class Color {
 
     static #linearToSrgb(c) {
         return c <= 0.0031308 ? 12.92 * c : 1.055 * (c ** (1 / 2.4)) - 0.055;
+    }
+
+    static TARGET_LC_DEFAULT = 75;
+    static COLOR_LC_PENALTY = 12;
+    static MIN_CHROMA_RATIO = 0.65;
+    static MAX_ITER = 14;
+
+    static lin(c) {
+        c /= 255;
+        return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    static getY(rgb) {
+        return (this.lin(rgb.r) * 0.2126729 + this.lin(rgb.g) * 0.7151522 + this.lin(rgb.b) * 0.0721750);
+    }
+
+    static apcaFast(Ytxt, Ybg) {
+        const diff = Math.abs(Ytxt - Ybg);
+        if (diff < 0.005) return 0;
+
+        let Lc;
+        if (Ybg > Ytxt) {
+            Lc = (Math.pow(Ybg, 0.56) - Math.pow(Ytxt, 0.57)) * 1.14 - 0.027;
+        } else {
+            Lc = (Math.pow(Ybg, 0.65) - Math.pow(Ytxt, 0.62)) * 1.14 + 0.027;
+        }
+
+        return Lc * 100;
+    }
+
+    static apca(textRGB, bgRGB) {
+        return this.apcaFast(this.getY(textRGB), this.getY(bgRGB));
+    }
+
+    static clamp01(v) {
+        return v > 1 ? 1 : v < 0 ? 0 : v;
+    }
+
+    static #rgbValid(rgb) {
+        return (rgb.r >= 0 && rgb.r <= 255 && rgb.g >= 0 && rgb.g <= 255 && rgb.b >= 0 && rgb.b <= 255);
+    }
+
+    static #clampRgb(rgb) {
+        if (!rgb) return null;
+        return {
+            r: Math.max(0, Math.min(255, rgb.r)),
+            g: Math.max(0, Math.min(255, rgb.g)),
+            b: Math.max(0, Math.min(255, rgb.b)),
+            a: rgb.a ?? 1
+        };
+    }
+
+    static #findMaxChroma(L, h, maxAllowedC = 0.4) {
+        // by Gemini 3.6 Flash
+        if (L <= 0 || L >= 1) return 0;
+
+        const cosH = Math.cos(h);
+        const sinH = Math.sin(h);
+
+        // Directional vectors in LMS space
+        const kL =  0.3963377774 * cosH + 0.2158037573 * sinH;
+        const kM = -0.1055613458 * cosH - 0.0638541728 * sinH;
+        const kS = -0.0894841775 * cosH - 1.2914855480 * sinH;
+
+        let cMax = Math.min(maxAllowedC, 0.4);
+
+        for (let i = 0; i < 3; i++) {
+            const l = L + cMax * kL;
+            const m = L + cMax * kM;
+            const s = L + cMax * kS;
+
+            const l3 = l * l * l;
+            const m3 = m * m * m;
+            const s3 = s * s * s;
+
+            // Linear RGB channel values
+            const r =  4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+            const g = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+            const b = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+
+            // Derivatives wrt Chroma
+            const dl = 3 * l * l * kL;
+            const dm = 3 * m * m * kM;
+            const ds = 3 * s * s * kS;
+
+            const dr =  4.0767416621 * dl - 3.3077115913 * dm + 0.2309699292 * ds;
+            const dg = -1.2684380046 * dl + 2.6097574011 * dm - 0.3413193965 * ds;
+            const db = -0.0041960863 * dl - 0.7034186147 * dm + 1.7076147010 * ds;
+
+            let step = 0;
+            if (r > 1 && dr > 0) step = Math.max(step, (r - 1) / dr);
+            if (r < 0 && dr < 0) step = Math.max(step, r / dr);
+            if (g > 1 && dg > 0) step = Math.max(step, (g - 1) / dg);
+            if (g < 0 && dg < 0) step = Math.max(step, g / dg);
+            if (b > 1 && db > 0) step = Math.max(step, (b - 1) / db);
+            if (b < 0 && db < 0) step = Math.max(step, b / db);
+
+            if (step === 0) break;
+            cMax -= step;
+        }
+
+        return Math.max(0, cMax);
+    }
+
+    static correctColor(textRGB, bgRGB, targetLC = this.TARGET_LC_DEFAULT) {
+        const bgY = this.getY(bgRGB);
+        const textY = this.getY(textRGB);
+        const startLc = this.apcaFast(textY, bgY);
+
+        if (Math.abs(startLc) >= targetLC) return null;
+
+        const baseLch = this.rgbToOklch(textRGB);
+        const isColorText = baseLch.c > 0.08;
+        const requiredLc = isColorText ? targetLC - this.COLOR_LC_PENALTY : targetLC;
+
+        // Determine target lightness movement direction
+        const makeDarker = bgY > textY;
+
+        // Binary search directly on OKLab Lightness (L)
+        let lowL = makeDarker ? 0 : baseLch.l;
+        let highL = makeDarker ? baseLch.l : 1;
+
+        let bestRgb = null;
+        let bestError = Infinity;
+
+        const lch = { l: baseLch.l, c: baseLch.c, h: baseLch.h };
+
+        for (let i = 0; i < this.MAX_ITER; i++) {
+            const midL = (lowL + highL) * 0.5;
+            lch.l = midL;
+            lch.c = baseLch.c;
+
+            let rgb = this.oklchToRgb(lch);
+
+            // Map gamut by reducing chroma if color is out of RGB bounds
+            if (!this.#rgbValid(rgb)) {
+                const maxC = this.#findMaxChroma(lch.l, baseLch.h, baseLch.c);
+                lch.c = Math.max(0, maxC);
+                rgb = this.oklchToRgb(lch);
+            }
+
+            const clampedRgb = this.#clampRgb(rgb);
+            const currentY = this.getY(clampedRgb);
+            const currentLc = Math.abs(this.apcaFast(currentY, bgY));
+            const error = Math.abs(currentLc - requiredLc);
+
+            if (error < bestError) {
+                bestError = error;
+                bestRgb = clampedRgb;
+            }
+
+            if (error < 0.5) break;
+
+            if (currentLc < requiredLc) {
+                // Need more contrast -> move L further away from background
+                if (makeDarker) highL = midL;
+                else lowL = midL;
+            } else {
+                // Overshot target contrast -> pull L closer to background
+                if (makeDarker) lowL = midL;
+                else highL = midL;
+            }
+        }
+
+        return bestRgb;
+    }
+
+    static correctBackground(bgRGB, textRGB, targetLC, steps = 10) {
+        const bgY = this.getY(bgRGB);
+        const textY = this.getY(textRGB);
+        const startLc = this.apcaFast(textY, bgY);
+
+        if (Math.abs(startLc) >= targetLC) return null;
+
+        const baseLch = this.rgbToOklch(bgRGB);
+        const makeDarker = textY > bgY;
+
+        let lowL = makeDarker ? 0 : baseLch.l;
+        let highL = makeDarker ? baseLch.l : 1;
+        let bestRgb = bgRGB;
+        let bestLc = Math.abs(startLc);
+
+        const lch = { l: baseLch.l, c: baseLch.c * 0.9, h: baseLch.h };
+
+        for (let i = 0; i < steps; i++) {
+            const midL = (lowL + highL) * 0.5;
+            lch.l = midL;
+
+            let rgb = this.oklchToRgb(lch);
+            if (!this.#rgbValid(rgb)) {
+                const maxC = this.#findMaxChroma(lch.l, baseLch.h, lch.c);
+                lch.c = Math.max(0, maxC);
+                rgb = this.oklchToRgb(lch);
+            }
+
+            const clampedRgb = this.#clampRgb(rgb);
+            const currentY = this.getY(clampedRgb);
+            const lc = Math.abs(this.apcaFast(textY, currentY));
+
+            if (lc > bestLc) {
+                bestLc = lc;
+                bestRgb = clampedRgb;
+            }
+
+            if (lc >= targetLC) return clampedRgb;
+
+            if (lc < targetLC) {
+                if (makeDarker) highL = midL;
+                else lowL = midL;
+            } else {
+                if (makeDarker) lowL = midL;
+                else highL = midL;
+            }
+        }
+
+        return bestLc > Math.abs(startLc) ? bestRgb : null;
+    }
+
+    static adjustContrast(fgInput, bgInput, targetLC = this.TARGET_LC_DEFAULT) {
+        const fgRGB = this.convert(fgInput, 'rgba');
+        const bgRGB = this.convert(bgInput, 'rgba');
+
+        if (!fgRGB || !bgRGB) return { fg: fgInput, bg: bgInput, changed: false };
+
+        const correctedFg = this.correctColor(fgRGB, bgRGB, targetLC);
+        const finalFg = correctedFg || fgRGB;
+
+        let correctedBg = null;
+        if (correctedFg) {
+            const currentLc = Math.abs(this.apca(finalFg, bgRGB));
+            if (currentLc < targetLC * 0.7) {
+                correctedBg = this.correctBackground(bgRGB, finalFg, targetLC);
+            }
+        }
+
+        return {
+            fg: finalFg,
+            bg: correctedBg,
+            changed: Boolean(correctedFg || correctedBg)
+        };
     }
 }
 
@@ -1704,7 +1994,7 @@ class MasonryLayout {
             maxOverscanScreens: options.maxOverscanScreens ?? 2.4,
             basePaddingFactor: options.basePaddingFactor ?? .6,
             lookAheadTime: options.lookAheadTime ?? 300,
-            layerHeight: options.layerHeight ?? 1500,
+            layerHeight: options.layerHeight ?? 1000,
             stopThreshold: options.stopThreshold ?? 0.1,
             cooldownTime: options.cooldownTime ?? 200,
         };
@@ -2106,7 +2396,7 @@ class MasonryLayout {
     #addToLayer(item) {
         const options = this.#options;
 
-        const layerIndex = Math.floor(item.boundTop / (options.layerHeight ?? 1500));
+        const layerIndex = Math.floor(item.boundTop / options.layerHeight);
 
         let layer = this.#layers[layerIndex];
         if (!layer) {
@@ -2354,7 +2644,7 @@ class MasonryLayout {
         }
 
         const startTime = performance.now();
-        const FRAME_BUDGET = 2;             // 2 ms
+        const FRAME_JS_BUDGET = 2;          // 2 ms
         const MAX_WEIGHT_PER_FRAME = 60;    // 6 large images or 12 blurhashes
 
         // If the scrolling is too fast -> lower the maximum weight
@@ -2362,7 +2652,7 @@ class MasonryLayout {
 
         let consumedWeight = 0;
         for (const itemId of this.#queueList) {
-            if (performance.now() - startTime > FRAME_BUDGET || consumedWeight >= MAX_WEIGHT_PER_FRAME) break;
+            if (performance.now() - startTime > FRAME_JS_BUDGET || consumedWeight >= MAX_WEIGHT_PER_FRAME) break;
 
             const item = this.#itemsById.get(itemId);
             if (!item) {
