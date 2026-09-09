@@ -900,7 +900,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 metadata: metadata || {},
                 hashes: file.hashes ? Object.fromEntries(file.hashes.map(h => ([ h.type, h.hash ]))) : {},
                 url: file.url,
-                downloadUrl: `${CONFIG.civitai_url}/api/download/${type}/${file.id}?type=${file.type}${metadata ? `&format=${metadata.format}&size=${metadata.size}&fp=${metadata.fp}` : ''}`,
+                downloadUrl: `${CONFIG.civitai_url}/api/download/models/${file.modelVersionId}?fileId=${file.id}`,
+                // downloadUrl: `${CONFIG.civitai_url}/api/download/${type}/${file.id}?type=${file.type}${metadata ? `&format=${metadata.format}${metadata.size ? `&size=${metadata.size}`: ''}&fp=${metadata.fp}` : ''}`,
             }
         });
     }
