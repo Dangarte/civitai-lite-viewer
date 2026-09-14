@@ -1138,6 +1138,418 @@ async function generateVideoPoster(url) {
 
 // ===
 
+class ImageGenerationPromptAnalyzer {
+    // Model configuration definitions
+    static #modelConfigs = {
+        default: {
+            supportsWeights: true,
+            weightStep: 1.1,
+            matchKeyword(text, pos) {
+                const word = ImageGenerationPromptAnalyzer.#extractWord(text, pos);
+                return word === 'BREAK' ? word : null;
+            }
+        },
+        sdxl: {
+            supportsWeights: true,
+            weightStep: 1.1,
+            matchKeyword(text, pos) {
+                const word = ImageGenerationPromptAnalyzer.#extractWord(text, pos);
+                return word === 'BREAK' ? word : null;
+            }
+        },
+        pony: {
+            supportsWeights: true,
+            weightStep: 1.1,
+            scoreRegex: /score_\d+(?:_up)?/iy,
+            matchKeyword(text, pos) {
+                const char = text[pos];
+                if (char === 's' || char === 'S') {
+                    this.scoreRegex.lastIndex = pos;
+                    const match = this.scoreRegex.exec(text);
+                    if (match) return match[0];
+                }
+                const word = ImageGenerationPromptAnalyzer.#extractWord(text, pos);
+                return word === 'BREAK' ? word : null;
+            }
+        },
+        illustrious: {
+            supportsWeights: true,
+            weightStep: 1.1,
+            yearRegex: /year \d{4}/iy,
+            artistRegex: /by [^,():<>\n]+/iy,
+            qualityRegex: /(?:best|good|normal|low|bad|worst) quality/iy,
+            staticKeywords: new Set([
+                'masterpiece', 'sensitive', 'explicit', 
+                'safe', 'nsfw', 'newest', 'recent', 'early', 'mid', 'old'
+            ]),
+            matchKeyword(text, pos) {
+                const char = text[pos];
+                const lowerChar = char.toLowerCase();
+
+                // Artist tags (by artist)
+                if (char === 'b') {
+                    this.artistRegex.lastIndex = pos;
+                    const match = this.artistRegex.exec(text);
+                    if (match) return match[0];
+                }
+
+                // Year tags (year 2025)
+                if (lowerChar === 'y') {
+                    this.yearRegex.lastIndex = pos;
+                    const match = this.yearRegex.exec(text);
+                    if (match) return match[0];
+                }
+
+                // Multi-word quality phrases
+                if ('bgnlw'.includes(lowerChar)) {
+                    this.qualityRegex.lastIndex = pos;
+                    const match = this.qualityRegex.exec(text);
+                    if (match) {
+                        const nextChar = text[pos + match[0].length];
+                        if (!nextChar || /[\s,():<>\\]/.test(nextChar)) {
+                            return match[0];
+                        }
+                    }
+                }
+
+                // Static keywords
+                const word = ImageGenerationPromptAnalyzer.#extractWord(text, pos);
+                if (word === 'BREAK') return word;
+                return word && this.staticKeywords.has(word.toLowerCase()) ? word : null;
+            }
+        },
+        anima: {
+            supportsWeights: true,
+            weightStep: 1.1,
+            scoreRegex: /score_\d+/iy,
+            yearRegex: /year \d{4}/iy,
+            artistRegex: /@[^,():<>\n]+/iy,
+            qualityRegex: /(?:best|good|normal|low|worst) quality/iy,
+            staticKeywords: new Set([
+                'masterpiece', 'sensitive', 'explicit', 
+                'safe', 'nsfw', 'newest', 'recent', 'early', 'mid', 'old'
+            ]),
+            matchKeyword(text, pos) {
+                const char = text[pos];
+                const lowerChar = char.toLowerCase();
+
+                // Artist tags (@artist)
+                if (char === '@') {
+                    this.artistRegex.lastIndex = pos;
+                    const match = this.artistRegex.exec(text);
+                    if (match) return match[0];
+                }
+
+                // Score tags (score_9)
+                if (lowerChar === 's') {
+                    this.scoreRegex.lastIndex = pos;
+                    const match = this.scoreRegex.exec(text);
+                    if (match) return match[0];
+                }
+
+                // Year tags (year 2025)
+                if (lowerChar === 'y') {
+                    this.yearRegex.lastIndex = pos;
+                    const match = this.yearRegex.exec(text);
+                    if (match) return match[0];
+                }
+
+                // Multi-word quality phrases
+                if ('bgnlw'.includes(lowerChar)) {
+                    this.qualityRegex.lastIndex = pos;
+                    const match = this.qualityRegex.exec(text);
+                    if (match) {
+                        const nextChar = text[pos + match[0].length];
+                        if (!nextChar || /[\s,():<>\\]/.test(nextChar)) {
+                            return match[0];
+                        }
+                    }
+                }
+
+                // Static keywords
+                const word = ImageGenerationPromptAnalyzer.#extractWord(text, pos);
+                if (word === 'BREAK') return word;
+                return word && this.staticKeywords.has(word.toLowerCase()) ? word : null;
+            }
+        }
+    };
+
+    static #round(v) {
+        return Math.round(v * 1000000) / 1000000;
+    }
+
+    static #calculateWeightAttributes(sum) {
+        const roundedSum = this.#round(sum);
+        const diff = Math.abs(roundedSum - 1);
+        const strength = Math.round(Math.min(1, Math.sqrt(diff)) * 100);
+        const attrs = {
+            class: 'weight-container',
+            style: `--weight: ${roundedSum}; --weight-strength: ${strength}%;`,
+            'data-weight': roundedSum,
+            'data-weight-direction': roundedSum >= 1 ? 'up' : 'down'
+        };
+        if (diff >= 1) attrs['data-weight-level'] = 'high';
+
+        return { roundedSum, attrs };
+    }
+
+    static #updateWeightAttributes(container, sum) {
+        const { roundedSum, attrs } = this.#calculateWeightAttributes(sum);
+        container.setAttribute('style', attrs.style);
+        container.setAttribute('data-weight', attrs['data-weight']);
+        container.setAttribute('data-weight-direction', attrs['data-weight-direction']);
+        if (attrs['data-weight-level']) container.setAttribute('data-weight-level', attrs['data-weight-level']);
+        else container.removeAttribute('data-weight-level');
+
+        return roundedSum;
+    }
+
+    static #updateWeightRecursively(item, weightChange) {
+        item.weight = this.#updateWeightAttributes(item.container, item.weight * weightChange);
+        item.appliedStrength *= weightChange;
+
+        for (const child of item.children) {
+            this.#updateWeightRecursively(child, weightChange);
+        }
+    }
+
+    // Fast character code lookup table for syntax rules
+    static #tokenizerRules = new Array(128);
+
+    static {
+        const rules = this.#tokenizerRules;
+
+        // Backslash '\' (Escape)
+        rules[92] = (ctx) => {
+            ctx.textBuffer += ctx.text[ctx.pos] + (ctx.text[ctx.pos + 1] || '');
+            ctx.pos += 2;
+            return true;
+        };
+
+        // Open Parenthesis '('
+        rules[40] = (ctx) => {
+            if (!ctx.config.supportsWeights) return false;
+
+            ctx.flushText();
+            const parentItem = ctx.stack.at(-1);
+            const parentWeight = parentItem?.weight ?? 1.0;
+            const defaultStrength = ctx.config.weightStep;
+            const rawSum = parentWeight * defaultStrength;
+            const { roundedSum, attrs } = ImageGenerationPromptAnalyzer.#calculateWeightAttributes(rawSum);
+            const container = insertElement('span', ctx.currentContainer, attrs);
+
+            insertElement('span', container, { class: 'bracket' }, '(');
+
+            const newItem = {
+                char: '(',
+                container,
+                weight: roundedSum,
+                appliedStrength: defaultStrength,
+                children: []
+            };
+
+            if (parentItem) {
+                parentItem.children.push(newItem);
+            }
+
+            ctx.stack.push(newItem);
+            ctx.currentContainer = container;
+            ctx.pos++;
+            return true;
+        };
+
+        // Close Parenthesis ')'
+        rules[41] = (ctx) => {
+            if (!ctx.config.supportsWeights) return false;
+
+            const last = ctx.stack.at(-1);
+
+            if (last && last.char === '(') {
+                ctx.flushText();
+                insertElement('span', ctx.currentContainer, { class: 'bracket' }, ')');
+
+                ctx.stack.pop();
+                ctx.currentContainer = ctx.stack.at(-1)?.container ?? ctx.fragment;
+                ctx.pos++;
+                return true;
+            }
+            return false;
+        };
+
+        // Colon ':' (Explicit weight parsing like ':1.2)')
+        rules[58] = (ctx) => {
+            if (!ctx.config.supportsWeights || ctx.stack.length === 0) return false;
+
+            const match = ctx.text.slice(ctx.pos).match(/^:-?[0-9.]+/);
+            if (!match) return false;
+
+            const weightStr = match[0];
+            const nextCharPos = ctx.pos + weightStr.length;
+
+            if (ctx.text[nextCharPos] === ')') {
+                ctx.flushText();
+                const explicitWeight = Number(weightStr.substring(1));
+
+                insertElement('span', ctx.currentContainer, { class: 'weight' }, weightStr);
+
+                const currentItem = ctx.stack.at(-1);
+                if (currentItem && !isNaN(explicitWeight)) {
+                    const weightChange = explicitWeight / currentItem.appliedStrength;
+                    ImageGenerationPromptAnalyzer.#updateWeightRecursively(currentItem, weightChange);
+                }
+
+                ctx.pos += weightStr.length;
+                return true;
+            }
+            return false;
+        };
+
+        // LoRA Tag '<lora:...>'
+        rules[60] = (ctx) => {
+            if (!ctx.text.startsWith('<lora:', ctx.pos)) return false;
+            
+            const endPos = ctx.text.indexOf('>', ctx.pos);
+            if (endPos === -1) return false;
+
+            ctx.flushText();
+            const loraText = ctx.text.substring(ctx.pos, endPos + 1);
+            insertElement('span', ctx.currentContainer, { class: 'lora' }, loraText);
+
+            ctx.pos = endPos + 1;
+            return true;
+        };
+
+        // URL 'https://'
+        rules[104] = (ctx) => {
+            if (!ctx.text.startsWith('https://', ctx.pos)) return false;
+
+            const urlRegex = /^https:\/\/[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}(?:\/[^\s,.:;!?)]*)?/;
+            const match = ctx.text.slice(ctx.pos).match(urlRegex);
+            if (!match) return false;
+
+            ctx.flushText();
+            const value = match[0];
+            const url = toURL(value);
+
+            if (url) {
+                if (CONFIG.civitai_origins.has(url.origin)) {
+                    const a = insertElement('a', ctx.currentContainer, { class: 'link external-link', href: url.toString(), target: '_blank', rel: 'noopener' }, value);
+
+                    const { params } = Controller.parseCivUrl(url);
+                    if (params.imageId || params.postId || params.modelId || params.articleId || params.collectionId) {
+                        a.setAttribute('data-link-preview', '');
+                    }
+                } else {
+                    insertElement('span', ctx.currentContainer, { class: 'link link-not-civitai' }, value);
+                }
+            } else {
+                insertElement('span', ctx.currentContainer, { class: 'link' }, value);
+            }
+
+            ctx.pos += value.length;
+            return true;
+        };
+    }
+
+    // Helper method to extract contiguous word characters from current position
+    static #extractWord(text, pos) {
+        let end = pos;
+        const len = text.length;
+
+        while (end < len) {
+            const code = text.charCodeAt(end);
+            const isWordChar = 
+                (code >= 65 && code <= 90)  || // A-Z
+                (code >= 97 && code <= 122) || // a-z
+                (code >= 48 && code <= 57)  || // 0-9
+                code === 95 || code === 45 || code === 64; // '_', '-', '@'
+
+            if (!isWordChar) break;
+            end++;
+        }
+
+        return end > pos ? text.substring(pos, end) : null;
+    }
+
+    // Handler for keywords (phrases, dynamic tags, single-word set matches) and text buffer
+    static #handleKeywordOrWord(ctx) {
+        const keyword = ctx.config.matchKeyword(ctx.text, ctx.pos);
+
+        if (keyword) {
+            ctx.flushText();
+
+            if (keyword === 'BREAK') {
+                ctx.stack = [];
+                ctx.currentContainer = ctx.fragment;
+            }
+
+            insertElement('span', ctx.currentContainer, { class: 'keyword', 'data-keyword': keyword }, keyword);
+            ctx.pos += keyword.length;
+            return true;
+        }
+
+        const word = this.#extractWord(ctx.text, ctx.pos);
+        if (!word) return false;
+
+        ctx.textBuffer += word;
+        ctx.pos += word.length;
+        return true;
+    }
+
+    // Main analysis entry point
+    static analyze(codeElement, baseModel = '') {
+        if (!codeElement) return;
+
+        const config = this.#modelConfigs[baseModel] || this.#modelConfigs.default;
+        
+        const text = codeElement.textContent
+            .replace(/(,)(?!\s)/g, '$1 ')
+            .replace(/\s+/g, ' ')
+            .replace(/\n\s*\n\s*\n/g, '\n\n')
+            .trim();
+
+        const len = text.length;
+
+        const ctx = {
+            text,
+            pos: 0,
+            textBuffer: '',
+            fragment: document.createDocumentFragment(),
+            currentContainer: null,
+            stack: [],
+            config,
+            flushText() {
+                if (this.textBuffer.length > 0) {
+                    this.currentContainer.appendChild(document.createTextNode(this.textBuffer));
+                    this.textBuffer = '';
+                }
+            }
+        };
+
+        ctx.currentContainer = ctx.fragment;
+
+        while (ctx.pos < len) {
+            const charCode = text.charCodeAt(ctx.pos);
+
+            const rule = this.#tokenizerRules[charCode];
+            if (rule && rule(ctx)) {
+                continue;
+            }
+
+            if (this.#handleKeywordOrWord(ctx)) {
+                continue;
+            }
+
+            ctx.textBuffer += text[ctx.pos];
+            ctx.pos++;
+        }
+
+        ctx.flushText();
+        codeElement.textContent = '';
+        codeElement.appendChild(ctx.fragment);
+    }
+}
+
 
 // TODO: search
 // TODO: fix scroll jumps after image load during scrolling (add transform translateY to content during scroll and remove when idle)

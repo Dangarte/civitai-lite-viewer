@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 49,
-    updated: '2026-09-09T12:00:00.000Z',
+    version: 50,
+    updated: '2026-09-14T12:00:00.000Z',
     extensionVertsion: 5,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -196,7 +196,7 @@ const SETTINGS = {
     disableTagsAutoload: true,      // Completely disables automatic loading of tags (image full page)
     disablePromptFormatting: false, // Completely disable formatting of blocks with prompts (show original content)
     assumeListSameAsModel: false,   // When opening a model from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate model, the data is the same)
-    assumeListSameAsImage: true,    // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
+    assumeListSameAsImage: false,   // When opening a image from a list, use the value from the list (instead of loading it separately), (assume that when loading a list and a separate image, the data is the same)
 };
 
 const DEVMODE = Boolean(localStorage.getItem('civitai-lite-viewer--devmode'));
@@ -357,7 +357,14 @@ class CivitaiPublicAPI {
         if (nsfwLevel) url.searchParams.append('nsfw', nsfwLevel);
 
         const data = await this.#getJSON({ url, target: `image meta (id: ${id}; nsfwLevel: ${nsfwLevel})` });
-        return data?.items?.[0] ?? null;
+        const image = data?.items?.[0] ?? null;
+
+        if (image) {
+            const meta = image.meta?.meta || image.meta;
+            if (meta && !meta.baseModel && image.baseModel) meta.baseModel = image.baseModel;
+        }
+
+        return image;
     }
 
     async fetchModelInfo(id) {
@@ -481,12 +488,12 @@ class CivitaiPublicAPI {
 
         if (!rawTags || !Array.isArray(rawTags) || !rawTags.length) return { tags, tagIds };
 
-        const fromObject = Boolean(rawTags[0].name !== undefined && rawTags[0].id !== undefined);
+        const fromObject = Boolean(rawTags[0].name !== undefined || rawTags[0].id !== undefined);
         const fromTagIds = Boolean(!fromObject && typeof rawTags[0] === 'number');
         if (fromObject) {
             for (const tag of rawTags) {
                 tags.push(tag);
-                tagIds.push(tag.id);
+                if (tag.id !== undefined) tagIds.push(tag.id);
             }
         } else {
             for (const tag of rawTags) {
@@ -885,7 +892,15 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 format: file.metadata.format,
                 size: file.metadata.size,
                 fp: file.metadata.fp,
-            } : null;
+            } : {};
+
+            const hashes = {};
+            if (file.hashes) {
+                for(const h of file.hashes) {
+                    hashes[h.type] = h.hash;
+                }
+            }
+
             return {
                 id: file.id,
                 modelVersionId: file.modelVersionId,
@@ -897,8 +912,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                 virusScanResult: file.virusScanResult,
                 virusScanMessage: file.virusScanMessage,
                 scannedAt: file.scannedAt,
-                metadata: metadata || {},
-                hashes: file.hashes ? Object.fromEntries(file.hashes.map(h => ([ h.type, h.hash ]))) : {},
+                metadata: metadata,
+                hashes: hashes,
                 url: file.url,
                 downloadUrl: `${CONFIG.civitai_url}/api/download/models/${file.modelVersionId}?fileId=${file.id}`,
                 // downloadUrl: `${CONFIG.civitai_url}/api/download/${type}/${file.id}?type=${file.type}${metadata ? `&format=${metadata.format}${metadata.size ? `&size=${metadata.size}`: ''}&fp=${metadata.fp}` : ''}`,
@@ -1214,19 +1229,20 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
                 dataPublicModelVersionsById.set(version.id, version);
             }
-    
+
             // Fix creator id
             if (dataPublic.creator && !dataPublic.creator?.id && dataPublic.userId) dataPublic.creator.id = dataPublic.userId;
         }
 
         const model = data;
 
-        const normalizedTags = CivitaiPublicAPI._normalizeTags(model.tags);
+        const normalizedTags = CivitaiPublicAPI._normalizeTags(model.tags || dataPublic.tags);
 
         return {
             id: model.id,
             availability: model.availability,
             checkpointType: model.checkpointType,
+            type: model.type,
             earlyAccessDeadline: model.earlyAccessDeadline,
             hasSuggestedResources: model.hasSuggestedResources,
             name: model.name,
@@ -1238,7 +1254,7 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
             modelVersions: model.modelVersions.map(version => {
                 const publicVersion = dataPublicModelVersionsById.get(version.id);
 
-                const images = Array.isArray(version.images) ? version.images : Array.isArray(publicVersion.images) ? publicVersion.images : null;
+                const images = version?.images && Array.isArray(version.images) ? version.images : publicVersion?.images && Array.isArray(publicVersion.images) ? publicVersion.images : null;
 
                 return {
                     id: version.id,
@@ -1367,9 +1383,15 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                     versionName: resource.versionName,
                     modelName: resource.modelName,
                     modelType: resource.modelType,
+                    baseModel: resource.baseModel,
                     modelVersionId: resource.modelVersionId,
                 });
             });
+
+            if (!resultImage.meta.baseModel) {
+                const baseModel = generation.resources.find(model => model.modelType === 'Checkpoint')?.baseModel || generation.resources[0]?.baseModel || '';
+                if (baseModel) resultImage.meta.baseModel = baseModel;
+            }
         }
 
         return resultImage;
@@ -1500,6 +1522,10 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
     }
 }
 
+
+// TODO: Migrate this to the new architecture.
+//       (Creating a controller for the navigation state will be problematic with this piece... of the massive class)
+// TODO: Move button "Open CivitAI" to footer? or where? looks bad in current place.
 class Controller {
     static api = EXTENSION_INSTALLED ? new CivitaiExtensionProxyAPI(CONFIG.api_url) : new CivitaiPublicAPI(CONFIG.api_url);
     static appElement = document.getElementById('app');
@@ -2106,9 +2132,9 @@ class Controller {
                 this.appElement.appendChild(result.element);
 
                 const header = document.getElementsByTagName('header')[0];
-                const dataFormatStart = header?.getAttribute('data-format') ?? null;
-                if (result.headerFormat === 'mini') header?.setAttribute('data-format', 'mini');
-                else header?.removeAttribute('data-format');
+                const dataFormatStart = header?.classList.contains('header-mini') ? 'mini' : null;
+                if (result.headerFormat === 'mini') header?.classList.add('header-mini');
+                else header?.classList.remove('header-mini');
 
                 if (header && dataFormatStart !== (result.headerFormat ?? null) && !document.body.classList.contains('page-scrolled')) {
                     const keyframes = result.headerFormat === 'mini' ? { transform: [ 'translateY(1em)', 'translateY(0)' ] } : { transform: [ 'translateY(-1em)', 'translateY(0)' ] };
@@ -2120,8 +2146,8 @@ class Controller {
                 }
 
                 const footer = document.getElementsByTagName('footer')[0];
-                if (result.footerBehavior === 'static') footer?.setAttribute('data-behavior', 'static');
-                else footer?.removeAttribute('data-behavior');
+                if (result.footerBehavior === 'static') footer?.classList.add('footer-static');
+                else footer?.classList.remove('footer-static');
             }
             if (result.title !== undefined) this.#setTitle(result.title);
 
@@ -2163,7 +2189,7 @@ class Controller {
             const parts = textTemplate.split('{{api-status}}');
 
             if (parts[0]) errorContainer.appendChild(document.createTextNode(parts[0]));
-            insertElement('a', errorContainer, { href: CONFIG.api_status_url, target: '_blank' }, 'CivitaAI API Status');
+            insertElement('a', errorContainer, { class: 'external-link', href: CONFIG.api_status_url, target: '_blank' }, 'CivitaAI API Status');
             if (parts[1]) errorContainer.appendChild(document.createTextNode(parts[1]));
 
             document.querySelector('body header').appendChild(errorContainer);
@@ -2230,7 +2256,7 @@ class Controller {
 
         // Open in CivitAI
         const civitaiUrl = this.createCivitUrl();
-        if (civitaiUrl) insertElement('a', appContent, { href: civitaiUrl, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        if (civitaiUrl) insertElement('a', appContent, { href: civitaiUrl, target: '_blank', class: 'link-button link-open-civitai external-link'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
         return { element: appContent, title: window.languagePack?.errors?.error ?? 'Error' };
     }
@@ -2865,9 +2891,11 @@ class Controller {
             const modelTagsWrap = insertElement('div', page, { class: 'badges model-tags' });
             const updateTags = tags => {
                 modelTagsWrap.textContent = '';
+                const badTags = new Set(SETTINGS.blackListTags);
+                const badTagIds = new Set(SETTINGS.blackListTagIds);
                 let categoryLink;
                 tags.forEach((tag, i) => {
-                    const a = insertElement('a', modelTagsWrap, { href: `#articles?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id) ? 'badge error-text' : 'badge') }, tag.name)
+                    const a = insertElement('a', modelTagsWrap, { href: `#articles?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: `badge ${badTags.has(tag.name) || badTagIds.has(tag.id) ? ' error-text' : ''}` }, tag.name)
                     if (tag.name === article.category) categoryLink = a;
                 });
                 if (!categoryLink) categoryLink = createElement('div', { class: 'badge' }, article.category);
@@ -2979,7 +3007,7 @@ class Controller {
             }
 
             // Open in CivitAI
-            insertElement('a', page, { href: `${CONFIG.civitai_url}/articles/${article.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+            insertElement('a', page, { href: `${CONFIG.civitai_url}/articles/${article.id}`, target: '_blank', class: 'link-button link-open-civitai external-link' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
             fragment.appendChild(this.#genScrollToTopButton());
 
@@ -3043,7 +3071,7 @@ class Controller {
             if (error?.message.startsWith('Invalid id,')) insertElement('p', appContent, { class: 'error-text' }, 'The API returned the wrong image, you can try opening this image on the original site');
             appContent.style.display = 'flex';
             appContent.style.flexDirection = 'column';
-            insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+            insertElement('a', appContent, { href: `${CONFIG.civitai_url}/images/${imageId}`, target: '_blank', class: 'link-button link-open-civitai external-link' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
             return { element: appContent };
         });
 
@@ -3548,7 +3576,7 @@ class Controller {
                 if (userBlacklist.has(originalModel?.creator?.id)) continue;
 
                 // Early Access check
-                if (SETTINGS.hideEarlyAccess && originalModel.modelVersions.some(version => version.earlyAccessDeadline)) continue;
+                if (SETTINGS.hideEarlyAccess && originalModel.modelVersions.some(version => version.earlyAccessDeadline || version.paidAccess?.permanent || version.paidAccess?.terms?.download?.price)) continue;
 
                 // Shallow clone
                 const model = {
@@ -3850,10 +3878,10 @@ class Controller {
             { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
         ];
 
-        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : modelVersion.paidAccess?.endsAt && modelVersion.paidAccess.endsAt > new Date().toISOString() ? 'EarlyAccess' : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
+        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : modelVersion.paidAccess?.endsAt && modelVersion.paidAccess.endsAt > new Date().toISOString() ? 'EarlyAccess' : modelVersion.paidAccess?.permanent || modelVersion.paidAccess?.terms?.download?.price ? 'Paid' : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
         const statsFragment = this.#genStats(statsList);
         if (availabilityBadge) {
-            const iconId = { 'EarlyAccess': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
+            const iconId = { 'EarlyAccess': 'thunder', 'Paid': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
             const badge = createElement('div', { class: `badge model-availability badge-with-value badge-value-${availabilityBadge}` }, window.languagePack?.text?.[availabilityBadge] ?? availabilityBadge);
             badge.prepend(getIcon(iconId || 'information'));
             if (availabilityBadge === 'EarlyAccess') {
@@ -3867,33 +3895,14 @@ class Controller {
         }
         modelNameH1.appendChild(statsFragment);
 
-        // Download buttons
-        const downloadButtons = insertElement('div', modelNameWrap, { class: 'model-download-files' });
-        const fileTypeRegex = /\.([^\.]+)$/;
-        const downloadFileHashes = new Set();
-        modelVersion.files.forEach(file => {
-            const hash = file.hashes?.SHA256 || file.hashes?.AutoV3 || file.hashes?.AutoV2 || null;
-            if (!hash) console.log('This file has no hashes', file);
-            if (downloadFileHashes.has(hash)) return;
-            downloadFileHashes.add(hash);
-            const formatString = file.metadata.format === 'SafeTensor' || file.metadata.format === 'Other' ? '' : file.metadata.format;
-            const fpString = file.metadata.fp ? file.metadata.fp : '';
-            const dwonloadTitle = `${file.type} ${formatString ? ` ${formatString}` : ''}${fpString ? ` (${fpString})` : ''}`;
-            const fileSize = filesizeToString(file.sizeKB / 0.0009765625);
-            const a = insertElement('a', downloadButtons, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-text': `<b>${escapeHtml(file.type)}</b><br><span style="word-break:break-word;">${escapeHtml(file.name)?.replace(fileTypeRegex, '<span style="color:var(--c-text-darker);">.$1</span>') || ''}</span>`, 'lilpipe-delay': 600 });
-            a.appendChild(getIcon('download'));
-            insertTextNode(` ${dwonloadTitle}`, a);
-            insertElement('span', a, { class: 'dark-text' }, ` · ${fileSize}`);
-            if (file.type === 'Archive') a.appendChild(getIcon('file_zip'));
-
-            if (file.virusScanResult !== 'Success') {
-                a.classList.add('link-warning');
-                a.setAttribute('lilpipe-text', `${a.getAttribute('lilpipe-text') || ''}<br><b>${escapeHtml(file.virusScanMessage ?? file.virusScanResult)}</b>`);
-                a.appendChild(getIcon('warning'));
-            }
-            if (file.name) a.setAttribute('data-filename', file.name);
+        // scroll to download buttons
+        const scrollToDownload = insertElement('button', modelNameWrap, { class: 'model-scroll-to-download' }, window.languagePack?.text?.toDownload || 'To files');
+        insertElement('span', scrollToDownload, { class: 'badge-count' }, modelVersion.files.length);
+        scrollToDownload.prepend(getIcon('arrow_down_alt'));
+        if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') scrollToDownload.setAttribute('inert', '');
+        scrollToDownload.addEventListener('click', () => {
+            document.querySelector('.model-download-files')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
         });
-        if (availabilityBadge === 'EarlyAccess') downloadButtons.setAttribute('inert', '');
 
         // Model sub name
         const createdAt = new Date(modelVersion.createdAt);
@@ -3902,8 +3911,10 @@ class Controller {
         const updateTags = tags => {
             modelTagsWrap.textContent = '';
             let categoryLink;
+            const badTags = new Set(SETTINGS.blackListTags);
+            const badTagIds = new Set(SETTINGS.blackListTagIds);
             tags.forEach(tag => {
-                const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id)? 'badge error-text' : 'badge') }, tag.name);
+                const a = insertElement('a', modelTagsWrap, { href: `#models?tag=${encodeURIComponent(tag.id ?? tag.name)}`, class: (badTags.has(tag.name) || badTagIds.has(tag.id)? 'badge error-text' : 'badge') }, tag.name);
                 if (tag.name === modelVersion.baseModel) categoryLink = a;
             });
 
@@ -4036,7 +4047,7 @@ class Controller {
             const modelVersionsElements = [];
             modelVersions.forEach(version => {
                 const href = `#models?model=${encodeURIComponent(model.id)}&version=${encodeURIComponent(version.id)}`;
-                const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '', 'data-draggable-title': this.#prepareTitle([ model.name, version.name, version.baseModel ]) });
+                const button = insertElement('a', modelVersionsWrap, { class: 'badge', href, tabindex: -1, 'data-replace-history': '', 'data-draggable-title': this.#prepareTitle([ model.name, version.name, version.baseModel ]) }, version.name);
 
                 const isActive = version.id === modelVersion.id;
                 const isDifferentBase = version.baseModel !== modelVersion.baseModel;
@@ -4050,7 +4061,7 @@ class Controller {
                         const updatedLabel = window.languagePack?.text?.Updated ?? 'Updated';
                         const baseLabel = this.#models.labels[version.baseModel] ?? version.baseModel ?? 'Unknown base';
 
-                        const fragment = document.createDocumentFragment();
+                        const fragment = new DocumentFragment();
 
                         // label and relative-time element
                         const row1 = createElement('div');
@@ -4081,7 +4092,6 @@ class Controller {
                 if (isDifferentBase) button.classList.add('different-basemodel');
                 if (isActive) button.classList.add('active');
 
-                button.appendChild(this.#formatModelVersionName(version.name));
                 modelVersionsElements.push(button);
             });
             applyFakeFocusSelector(modelVersionsWrap);
@@ -4096,7 +4106,7 @@ class Controller {
             Object.keys(modelVersionsByBaseModel).forEach(baseModel => {
                 const isActive = baseModel === modelVersion.baseModel;
                 const button = insertElement('button', modelVersionSelectorMenu, { class: 'badge base-model', 'data-base-model': baseModel }, specificModelLabels[baseModel] || this.#models.labels[baseModel] || baseModel);
-                insertElement('span', button, { class: 'version-count' }, modelVersionsByBaseModel[baseModel].length);
+                insertElement('span', button, { class: 'badge-count' }, modelVersionsByBaseModel[baseModel].length);
                 if (isActive) button.classList.add('active', 'selected');
             });
 
@@ -4206,6 +4216,7 @@ class Controller {
                 if (containerRect.height === 0 || container.clientHeight === 0) {
                     if (descriptionFragment.hasChildNodes()) container.appendChild(descriptionFragment);
                     container.classList.remove('hide-long-description');
+                    showMore.remove();
                     return;
                 }
 
@@ -4268,8 +4279,7 @@ class Controller {
         // Model version description block
         const modelVersionDescription = insertElement('div', page, { class: 'model-description model-version-description' });
         const modelVersionNameWrap = insertElement('h2', modelVersionDescription, { class: 'model-version' });
-        const modelVersionNameWrapSpan = insertElement('span', modelVersionNameWrap);
-        modelVersionNameWrapSpan.appendChild(this.#formatModelVersionName(modelVersion.name));
+        insertElement('span', modelVersionNameWrap, undefined, modelVersion.name);
         const versionStatsList = [
             { icon: 'like', value: modelVersion.stats.thumbsUpCount, unit: 'like' },
             { icon: 'download', value: modelVersion.stats.downloadCount, unit: 'download' },
@@ -4345,20 +4355,226 @@ class Controller {
             mountDescription('model', modelDescriptionFragment, modelDescription);
         }
 
+        // Download buttons
+        const downloadButtons = insertElement('div', page, { class: 'model-download-files' });
+        if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') downloadButtons.setAttribute('inert', '');
+
+        const seenHashes = new Set();
+        const filesByType = new Map();
+
+        const formatPriorityList = {
+            'SafeTensor': 1,
+            '': 1,
+            'GGUF': 2,
+            default: 3
+        };
+
+        for (let i = 0; i < modelVersion.files.length; i++) {
+            const file = modelVersion.files[i];
+            const hash = file.hashes?.SHA256 || file.hashes?.AutoV3 || file.hashes?.AutoV2;
+
+            if (hash) {
+                if (seenHashes.has(hash)) continue;
+                seenHashes.add(hash);
+            } else {
+                console.log('This file has no hashes', file);
+            }
+
+            // Shallow copy
+            const fileCopy = { ...file };
+            const format = file.metadata?.format || '';
+            const fpKey = fileCopy.fpKey = `${file.metadata?.fp || ''}_${format}`;
+            fileCopy.priority = formatPriorityList[format] ?? formatPriorityList.default;
+            if (!fileCopy.name || typeof fileCopy.name !== 'string') fileCopy.name = '';
+
+            const type = file.type || 'Other';
+            let group = filesByType.get(type);
+            if (!group) {
+                group = { files: [], quants: {} };
+                filesByType.set(type, group);
+            }
+            group.files.push(fileCopy);
+
+            if (!group.quants[fpKey]) group.quants[fpKey] = { files: [], cache: null };
+            group.quants[fpKey].files.push(fileCopy);
+        }
+
+        const fileNamePatterns = {};
+        const prepareFileName = (fileName, fileQuants, container) => {
+            const dotIndex = fileName.lastIndexOf('.');
+
+            // File without extension
+            if (dotIndex <= 0) {
+                insertTextNode(fileName, container);
+                return;
+            }
+
+            const extension = fileName.slice(dotIndex);
+            const files = fileQuants?.files;
+            const totalFiles = files ? files.length : 0;
+
+            // Single file handling
+            if (totalFiles <= 1) {
+                insertTextNode(fileName.slice(0, dotIndex), container);
+                insertElement('span', container, { class: 'darker-text' }, extension);
+                return;
+            }
+
+            if (!fileNamePatterns.compiled) {
+                fileNamePatterns.compiled = true;
+                fileNamePatterns.word = /[\p{L}\p{N}]+/gu;
+                fileNamePatterns.token = /[\p{L}\p{N}]+|[^\p{L}\p{N}]+/gu;
+                fileNamePatterns.isWord = /^[\p{L}\p{N}]+$/u;
+                // CamelCase/PascalCase, numbers, and non-alphanumeric
+                // const wordPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+/gu;
+                // const tokenPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+|[^\p{L}\p{N}]+/gu;
+            }
+
+            // Build word frequency cache for multiple files
+            if (!fileQuants.cache) {
+                const seenInFileSet = new Set();
+                const wordCounts = new Map();
+                const wordPattern = fileNamePatterns.word;
+
+                for (let j = 0; j < totalFiles; j++) {
+                    const fName = fileQuants.files[j].name || '';
+                    const dIdx = fName.lastIndexOf('.');
+                    const base = dIdx > 0 ? fName.slice(0, dIdx) : fName;
+
+                    seenInFileSet.clear();
+                    wordPattern.lastIndex = 0;
+
+                    let match;
+                    while ((match = wordPattern.exec(base)) !== null) {
+                        seenInFileSet.add(match[0].toLowerCase());
+                    }
+
+                    for (const word of seenInFileSet) {
+                        wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
+                    }
+                }
+
+                fileQuants.cache = { wordCounts, total: totalFiles };
+            }
+
+            const baseName = fileName.slice(0, dotIndex);
+            fileNamePatterns.token.lastIndex = 0;
+            const tokens = baseName.match(fileNamePatterns.token) || [baseName];
+            const { wordCounts, total } = fileQuants.cache;
+
+            let textBuffer = '';
+
+            const flushTextBuffer = () => {
+                if (textBuffer) {
+                    insertTextNode(textBuffer, container);
+                    textBuffer = '';
+                }
+            };
+
+            const isWordPattern = fileNamePatterns.isWord;
+
+            const tokenCount = tokens.length;
+            for (let j = 0; j < tokenCount; j++) {
+                const token = tokens[j];
+                const isWord = isWordPattern.test(token);
+                const isDiff = isWord && (wordCounts.get(token.toLowerCase()) || 0) < total;
+
+                if (isDiff) {
+                    flushTextBuffer();
+                    insertElement('b', container, { class: 'file-quant-name-diff' }, token);
+                } else {
+                    textBuffer += token;
+                }
+            }
+
+            flushTextBuffer();
+            insertElement('span', container, { class: 'darker-text' }, fileName.slice(dotIndex));
+        };
+
+        filesByType.forEach((group, type) => {
+            const { files, quants } = group;
+            if (files.length > 1) {
+                const NAT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+                files.sort((a, b) => {
+                    if (a.priority !== b.priority) return a.priority - b.priority;
+
+                    const fpCompare = NAT_COLLATOR.compare(a.fpKey, b.fpKey);
+                    if (fpCompare !== 0) return fpCompare;
+
+                    return NAT_COLLATOR.compare(a.name, b.name);
+                });
+            }
+
+            const groupWrap = insertElement('div', downloadButtons, { class: 'download-group' });
+
+            // Group Header
+            const header = insertElement('div', groupWrap, { class: 'download-group-header' });
+            insertElement('span', header, undefined, this.#types.labels[type] || type);
+            insertElement('span', header, { class: 'badge-count' }, `${files.length}`);
+
+            // Group Files List
+            const list = insertElement('div', groupWrap, { class: 'download-file-list' });
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const metadata = file.metadata;
+                const formatString = metadata?.format === 'SafeTensor' || metadata?.format === 'Other' ? '' : metadata?.format;
+                const fpString = metadata?.fp || '';
+                const fileSize = filesizeToString(file.sizeKB * 1024);
+                const fileQuants = quants[file.fpKey];
+
+                const row = insertElement('div', list, { class: 'download-file-row' });
+
+                const fileDetails = insertElement('div', row, { class: 'file-details' });
+
+                if (fpString || formatString) {
+                    const badgeContainer = insertElement('div', fileDetails, { class: 'file-badges badges' });
+                    if (fpString) insertElement('span', badgeContainer, { class: 'badge badge-fp' }, fpString);
+                    if (formatString) insertElement('span', badgeContainer, { class: 'badge badge-format' }, formatString);
+                }
+
+                const nameSpan = insertElement('span', fileDetails, { class: 'file-name' });
+                const fileName = file.name;
+
+                if (fileName) prepareFileName(fileName, fileQuants, nameSpan);
+                else insertTextNode(type, nameSpan);
+
+                const fileActions = insertElement('div', row, { class: 'file-actions' });
+                insertElement('span', fileActions, { class: 'file-size' }, fileSize);
+
+                const a = insertElement('a', fileActions, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-delay': 600 }, ` ${ window.languagePack?.text?.download || 'Download'}`);
+                a.prepend(getIcon('download'));
+                if (file.type === 'Archive') a.appendChild(getIcon('file_zip'));
+
+                if (file.virusScanResult !== 'Success') {
+                    a.classList.add('link-warning');
+                    const lilpipeText = `<b>${escapeHtml(file.virusScanMessage ?? file.virusScanResult)}</b>`;
+                    a.setAttribute('lilpipe-text', lilpipeText);
+                    a.appendChild(getIcon('warning'));
+                }
+
+                if (fileName) a.setAttribute('data-filename', fileName);
+            }
+        });
+
         // Comments
         if (EXTENSION_INSTALLED) { // model.stats?.commentCount often 0, so skip the check
+            const commentsWrap = insertElement('div', page, { class: 'model-comments' });
             const timeline = model.modelVersions.map(version => {
                 return {
                     date: version.publishedAt,
                     label: version.name
                 };
             });
+            const commentsTitle = insertElement('h2', commentsWrap, { style: 'justify-content: center;' }, window.languagePack?.text?.comments ?? 'Comments');
+            commentsTitle.prepend(getIcon('chat'));
+
             const { element: commentsElement, promise } = this.#genComments({ entityId: model.id, entityType: 'model', timeline, opCreator: model.creator?.username || null, state: navigationState });
-            page.appendChild(commentsElement);
+            commentsWrap.appendChild(commentsElement);
         }
 
         // Open in CivitAI
-        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button link-open-civitai'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+        insertElement('a', page, { href: `${CONFIG.civitai_url}/models/${model.id}?modelVersionId=${modelVersion.id}`, target: '_blank', class: 'link-button link-open-civitai external-link'}, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
         return page;
     }
@@ -4443,8 +4659,10 @@ class Controller {
             const tagsBlock = insertElement('div', container, { class: 'badges image-tags' });
             const updateTags = tags => {
                 tagsBlock.textContent = '';
+                const badTags = new Set(SETTINGS.blackListTags);
+                const badTagIds = new Set(SETTINGS.blackListTagIds);
                 tags.forEach(tag => {
-                    insertElement('div', tagsBlock, { class: (SETTINGS.blackListTags.includes(tag.name) || SETTINGS.blackListTagIds.includes(tag.id)? 'badge error-text' : 'badge'), 'data-id': tag.id }, tag.name);
+                    insertElement('div', tagsBlock, { class: (badTags.has(tag.name) || badTagIds.has(tag.id)? 'badge error-text' : 'badge'), 'data-id': tag.id }, tag.name);
                 });
             };
 
@@ -4521,7 +4739,7 @@ class Controller {
             }
 
             // Open in CivitAI
-            insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
+            insertElement('a', container, { href: `${CONFIG.civitai_url}/images/${media.id}`, target: '_blank', class: 'link-button link-open-civitai external-link' }, window.languagePack?.text?.openOnCivitAI ?? 'Open CivitAI');
 
             return { title };
         };
@@ -5266,6 +5484,9 @@ class Controller {
             cursor = undefined;
             hiddenItems = 0;
 
+            // Pause all videos
+            element.querySelectorAll('video').forEach(video => video.pause());
+
             const result = loadItems();
             if (!(result instanceof Promise)) {
                 reloadAttempts = 0;
@@ -5306,7 +5527,7 @@ class Controller {
                 element.textContent = '';
                 element.style.height = '';
                 element.classList.add('error');
-                
+
                 const is429 = error.cause?.status === 429;
                 const error_detail = error.cause?.detail || '';
                 const errorBlock = this.#genErrorPage(is429 ? `Error 429: Rate limit.${error_detail ? ` ${error_detail}` : ''}` : error?.message ?? 'Error');
@@ -5733,7 +5954,7 @@ class Controller {
 
     static #analyzeModelDescriptionString(description) {
         const rules = [
-            { 
+            {
                 skip: !description.includes('<p>@') && !description.includes('<code>@'),
                 regex: /<(?:p|code)>(@\w+{[\s\S]*?})<\/(?:p|code)>/gim,
                 replacement: (_, block) => {
@@ -5831,12 +6052,23 @@ class Controller {
             });
         });
 
-        description.querySelectorAll('span[data-type="mention"]').forEach(m => {
-            m.className = 'mention';
-            const label = m.getAttribute('data-label');
-            m.removeAttribute('data-label');
-            m.removeAttribute('data-type');
-            if (label) m.setAttribute('lilpipe-text', label);
+        // Mentions
+        description.querySelectorAll('span[data-type="mention"]').forEach(el => {
+            el.className = 'mention';
+            const label = el.getAttribute('data-label');
+            if (!el.textContent && label) el.textContent = `@${label}`;
+            el.removeAttribute('data-label');
+            el.removeAttribute('data-type');
+        });
+
+        // Stickers
+        description.querySelectorAll('span[data-type="sticker"]').forEach(el => {
+            el.className = 'sticker';
+            const label = el.getAttribute('data-label');
+            if (!el.textContent) el.textContent = `:${label}:`;
+            el.removeAttribute('data-label');
+            el.removeAttribute('data-type');
+            if (label) el.setAttribute('lilpipe-text', label);
         });
 
         // Remove headings if most of the description consists of them
@@ -6017,6 +6249,8 @@ class Controller {
             a.classList.add('link-hover-preview', 'link-with-favicon', 'favicon-civitai');
             a.setAttribute('data-link-preview', '');
         };
+        const linkEdgeRegexStart = /^(\s+)([\s\S]*)$/;
+        const linkEdgeRegexEnd = /^([\s\S]*?)(\s+)$/;
         const cleanLinkEdge = (a, isStart) => {
             while (true) {
                 let target = isStart ? a.firstChild : a.lastChild;
@@ -6031,9 +6265,7 @@ class Controller {
                 // text
                 if (target.nodeType === 3) { // Node.TEXT_NODE
                     const text = target.nodeValue;
-                    const match = isStart 
-                        ? text.match(/^(\s+)([\s\S]*)$/) 
-                        : text.match(/^([\s\S]*?)(\s+)$/);
+                    const match = isStart ? text.match(linkEdgeRegexStart) : text.match(linkEdgeRegexEnd);
 
                     if (!match) break;
 
@@ -6052,6 +6284,8 @@ class Controller {
 
                 // deep check
                 if (target.nodeType === 1) { // Node.ELEMENT_NODE
+                    if (target.nodeName === 'IMG') break;
+
                     if (!target.hasChildNodes()) {
                         target.remove();
                         continue;
@@ -6079,6 +6313,8 @@ class Controller {
             a.setAttribute('rel', rel.join(' ').trim());
             a.setAttribute('target', '_blank');
             fixLinkSpacing(a);
+
+            a.classList.add('external-link');
 
             // Add link preview and check url syntax
             const url = href.startsWith('/') ? toURL(href, CONFIG.civitai_url) : toURL(href);
@@ -6183,15 +6419,15 @@ class Controller {
         description.normalize();
     }
 
-    // TODO: baseModel rules
     static #analyzePromptCode(codeElement, baseModel = '') {
         if (!codeElement) return;
 
-        // TODO: baseModel rules (keywords / weights)
-        // Pony - score_9, score_8, etc. (also weights)
-        // Illustrious - by artistName, best quality, etc. (also weights)
-        // SD*, SDXL* - weights (tag:weight)
-        // Anima - @artist name, score_9, score_8, best quality, etc. (also weights)
+        ImageGenerationPromptAnalyzer.analyze(codeElement, baseModel.toLowerCase());
+    }
+
+    // OLD
+    static #analyzePromptCode_old(codeElement, baseModel = '') {
+        if (!codeElement) return;
 
         const fragment = new DocumentFragment();
         const keywords = new Set([ 'BREAK' ]);
@@ -6310,7 +6546,7 @@ class Controller {
                 const url = toURL(value);
                 if (url) {
                     if (CONFIG.civitai_origins.has(url.origin)) {
-                        const a = insertElement('a', weightContainer, { class: 'link', href: url.toString(), target: '_blank', rel: 'noopener' }, value);
+                        const a = insertElement('a', weightContainer, { class: 'link external-link', href: url.toString(), target: '_blank', rel: 'noopener' }, value);
                         const { params } = this.parseCivUrl(url.toString());
                         if (params.imageId || params.postId || params.modelId || params.articleId || params.collectionId) a.setAttribute('data-link-preview', '');
                     } else {
@@ -6552,7 +6788,7 @@ class Controller {
                     whenImageSettles(img).then(isOk => {
                         if (isOk) return;
                         item.hasErrors = true;
-    
+
                         const icon = createElement('div', { class: 'meta-media', style });
                         icon.appendChild(getIcon('image'));
                         img.replaceWith(icon);
@@ -6728,7 +6964,7 @@ class Controller {
 
             const resourcePromises = [];
             const createResourceRowContent = info => {
-                const { title, version, href, weight = 1, type, baseModel, air, updatedAt = null, earlyAccessDeadline = null } = info;
+                const { title, version, href, weight = 1, type, baseModel, air, updatedAt = null, earlyAccessDeadline = null, permanentPaid = false } = info;
 
                 const el = createElement(href ? 'a' : 'div', { class: 'meta-resource' });
                 if (href) el.href = href;
@@ -6752,6 +6988,9 @@ class Controller {
                         const lilpipeText = `<relative-time class="dark-text" datetime="${date.toISOString()}"></relative-time> <br>${date.toLocaleDateString()} <span class="dark-text">${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
                         badge.setAttribute('lilpipe-text', lilpipeText);
                     }
+                }
+                if (permanentPaid) {
+                    insertElement('div', titleElement, { class: 'model-availability badge badge-with-value badge-value-Paid' }, window.languagePack?.text?.Paid ?? 'Paid');
                 }
 
                 return el;
@@ -6783,6 +7022,7 @@ class Controller {
                     weight: item.weight,
                     href: info.modelId && info.name ? `#models?model=${info.modelId}&version=${info.name}` : undefined,
                     earlyAccessDeadline: info.earlyAccessDeadline || info.paidAccess?.endsAt || null,
+                    permanentPaid: info.paidAccess?.permanent || info.paidAccess?.terms?.download?.price,
                     updatedAt: info.updatedAt || null,
                 });
                 newEl.setAttribute('data-link-preview', '');
@@ -6790,7 +7030,15 @@ class Controller {
                 return info;
             };
             const processResources = items => {
-                items = items.filter(Boolean);
+                const itemIdsSet = new Set();
+                items = items.filter(item => {
+                    if (!item) return false;
+                    if (item.id) {
+                        if (itemIdsSet.has(item.id)) return false;
+                        else itemIdsSet.add(item.id);
+                    }
+                    return true;
+                });
                 const trainedWords = new Set();
                 const triggerResources = {};
                 this.#log('Loaded resources', items);
@@ -6906,6 +7154,7 @@ class Controller {
                     baseModel: modelInfo?.baseModel ?? 'Unknown base model',
                     href: modelInfo?.modelId && modelInfo?.name ? `#models?model=${modelInfo.modelId}&version=${modelInfo.name}` : undefined,
                     earlyAccessDeadline: modelInfo?.earlyAccessDeadline || modelInfo?.paidAccess?.endsAt || null,
+                    permanentPaid: modelInfo?.paidAccess?.permanent || modelInfo?.paidAccess?.terms?.download?.price || false,
                     updatedAt: modelInfo?.updatedAt || null,
                 });
                 resourcesContainer.appendChild(el);
@@ -7005,64 +7254,6 @@ class Controller {
         return { resources };
     }
 
-    static #formatModelVersionName(modelVersionName) {
-        if (!modelVersionName) return document.createTextNode('');
-
-        const fragment = document.createDocumentFragment();
-        let matched = false;
-
-        const stack = [];
-        let buffer = '';
-        let i = 0;
-
-        const pushBuffer = () => {
-            if (!buffer) return;
-            if (stack.length === 0) fragment.appendChild(document.createTextNode(buffer));
-            else stack[stack.length - 1].content += buffer;
-            buffer = '';
-        };
-
-        for (let i = 0; i < modelVersionName.length; i++) {
-            const char = modelVersionName[i];
-
-            if (char === '[' || char === '(') {
-                pushBuffer();
-                stack.push({ type: char, content: '' });
-            } else if (
-                (char === ']' && stack.length > 0 && stack[stack.length - 1].type === '[') ||
-                (char === ')' && stack.length > 0 && stack[stack.length - 1].type === '(')
-            ) {
-                pushBuffer();
-                const stackItem = stack.pop();
-                if (stack.length === 0) {
-                    const tag = stackItem.type === '[' ? 'strong' : 'em';
-                    const open = stackItem.type;
-                    const close = char;
-                    insertElement(tag, fragment, undefined, `${open}${stackItem.content}${close}`);
-                    matched = true;
-                } else {
-                    const open = stackItem.type;
-                    stack[stack.length - 1].content += `${open}${stackItem.content}${char}`;
-                }
-            } else {
-                buffer += char;
-            }
-        }
-
-        pushBuffer();
-
-        while (stack.length > 0) {
-            const item = stack.pop();
-            const close = item.type === '[' ? ']' : ')';
-            const restoredText = item.type + item.content + close;
-
-            if (stack.length === 0) fragment.appendChild(document.createTextNode(restoredText));
-            else stack[stack.length - 1].content += restoredText;
-        }
-
-        return matched ? fragment : document.createTextNode(modelVersionName);
-    }
-
     // used only in link previews
     static #genCollectionCard(collection, options) {
         const { itemWidth, itemHeight, forceAutoplay } = options ?? {};
@@ -7156,7 +7347,7 @@ class Controller {
                 if (article.coverImage) {
                     if (previewMedia) {
                         if (previewMedia.hash) this.#insertMediaBlurhash(mediaContainer, { media: previewMedia });
-    
+
                         // play button
                         if (!(forceAutoplay ?? SETTINGS.autoplay) && previewMedia.type === 'video') {
                             const videoPlayButton = insertElement('div', mediaContainer, { class: 'video-play-button' });
@@ -7348,6 +7539,7 @@ class Controller {
                 let availabilityBadge = null;
                 if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
                 else if (modelVersion.earlyAccessDeadline) availabilityBadge = 'EarlyAccess';
+                else if (modelVersion.paidAccess?.permanent || modelVersion.paidAccess?.terms?.download?.price) availabilityBadge = 'Paid';
                 else {
                     if (model._modelUpdatedRecently === undefined) model._modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
                     if (model._modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
@@ -7614,7 +7806,7 @@ class Controller {
         }
 
         const tooltipGenerator = () => {
-            const fragment = document.createDocumentFragment();
+            const fragment = new DocumentFragment();
 
             for (const d of sorted) {
                 const itemDiv = createElement('div', { style: 'margin-block-start:.5em' });
@@ -7829,7 +8021,7 @@ class Controller {
 
         if (previewImageOriginal.tagName === 'VIDEO') {
             if (mediaOriginal.hasAttribute('data-autoplay')) pauseVideo(mediaOriginal, 'data-autoplay');
-            else if (mediaOriginal.hasAttribute('data-focus-play')) pauseVideo(mediaOriginal, 'data-focus-play');
+            else if (mediaOriginal.classList.contains('focus-play')) pauseVideo(mediaOriginal, 'focus-play');
             previewImageOriginal = mediaOriginal.querySelector(`.media-element`);
         }
 
@@ -8601,11 +8793,11 @@ class Controller {
                 const key = displayedList[focusIndex];
                 if (listElements[key]) {
                     setValue(displayedList[focusIndex]);
-                    element.blur();
+                    searchInput.blur();
                     onfocusout(e);
                 }
             } else if (e.code === 'Escape') {
-                element.blur();
+                searchInput.blur();
                 onfocusout(e);
             }
         };
@@ -8614,7 +8806,7 @@ class Controller {
             const key = e.target.closest('.list-option[data-option]')?.getAttribute('data-option');
             if (key) {
                 setValue(key);
-                element.blur();
+                searchInput.blur();
                 onfocusout(e);
             }
         };
@@ -8928,6 +9120,12 @@ class Controller {
 
         // When navigating through history, it is not possible to save the state before navigation
         this.#saveStateThrottle();
+    }
+
+    static onThemeChanged(isDark) {
+        CONFIG.theme = isDark ? CONFIG.theme_dark : CONFIG.theme_light;
+        document.documentElement.classList.remove(isDark ? 'theme-light' : 'theme-dark');
+        document.documentElement.classList.add(isDark ? 'theme-dark' : 'theme-light');
     }
 
     static get state() {
@@ -9524,8 +9722,8 @@ function onVisibilityChange() {
                 video._wasPlaying = true;
             }
         });
-        document.querySelectorAll('.media-container[data-focus-play-timer]').forEach(v => v.removeAttribute('data-focus-play-timer'));
-        document.querySelectorAll('.media-container[data-focus-play]').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
+        document.querySelectorAll('.media-container.focus-play-timer').forEach(v => v.classList.remove('focus-play-timer'));
+        document.querySelectorAll('.media-container.focus-play').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
         if (cacheClearTimer) {
             clearInterval(cacheClearTimer);
             cacheClearTimer = null;
@@ -9827,9 +10025,9 @@ function onDragleave(e) {
     document.body.classList.remove('drop-hover');
 }
 
-function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
-    if (mediaContainer.hasAttribute(attrCheck)) return Promise.reject();
-    mediaContainer.setAttribute(attrCheck, '');
+function playVideo(mediaContainer, classCheck = 'focus-play') {
+    if (mediaContainer.classList.contains(classCheck)) return Promise.reject();
+    mediaContainer.classList.add(classCheck);
 
     const src = mediaContainer.getAttribute('data-src');
     const timestamp = mediaContainer.getAttribute('data-timestamp');
@@ -9854,7 +10052,7 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
         const play = e => {
             video.removeEventListener(canplayEventName, play);
             video.removeEventListener('error', play);
-            if (!mediaContainer.hasAttribute(attrCheck)) {
+            if (!mediaContainer.classList.contains(classCheck)) {
                 video.src = '';
                 reject();
                 return;
@@ -9875,9 +10073,9 @@ function playVideo(mediaContainer, attrCheck = 'data-focus-play') {
     });
 }
 
-function pauseVideo(mediaContainer, attrCheck = 'data-focus-play') {
-    if (!mediaContainer.hasAttribute(attrCheck)) return;
-    mediaContainer.removeAttribute(attrCheck);
+function pauseVideo(mediaContainer, classCheck = 'focus-play') {
+    if (!mediaContainer.classList.contains(classCheck)) return;
+    mediaContainer.classList.remove(classCheck);
 
     const video = mediaContainer.querySelector('video:not([inert])');
     if (!video || video.paused) return;
@@ -9983,21 +10181,21 @@ function replaceImageElement(img, newUrl, options) {
 }
 
 function startVideoPlayEvent(target, options = { fromFocus: false }) {
-    const selector = '.media-container[data-src][data-poster][data-timestamp]:not([data-focus-play]):not([data-focus-play-timer])';
+    const selector = '.media-container[data-src][data-poster][data-timestamp]:not(.focus-play):not(.focus-play-timer)';
     const container = target.matches(selector) ? target : target.querySelector(selector);
     if (!container) return;
 
-    document.querySelectorAll('.media-container[data-focus-play-timer]').forEach(v => v.removeAttribute('data-focus-play-timer'));
-    document.querySelectorAll('.media-container[data-focus-play]').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
+    document.querySelectorAll('.media-container.focus-play-timer').forEach(v => v.classList.remove('focus-play-timer'));
+    document.querySelectorAll('.media-container.focus-play').forEach(v => stopVideoPlayEvent({target: v.closest('.video-hover-play')}));
 
-    container.setAttribute('data-focus-play-timer', '');
+    container.classList.add('focus-play-timer');
 
     // Delay to avoid starting loading when it is not needed, for example the user simply moved the mouse over
     const isFirstPlay = container.getAttribute('data-timestamp') === '0';
     setTimeout(() => {
-        if (!container.hasAttribute('data-focus-play-timer')) return;
+        if (!container.classList.contains('focus-play-timer')) return;
 
-        playVideo(container, 'data-focus-play').catch(() => null);
+        playVideo(container, 'focus-play').catch(() => null);
     }, isFirstPlay ? 250 : 100);
 
     target.addEventListener('blur', stopVideoPlayEvent, { passive: true });
@@ -10005,11 +10203,11 @@ function startVideoPlayEvent(target, options = { fromFocus: false }) {
 }
 
 function stopVideoPlayEvent(e) {
-    const selector = '.media-container[data-focus-play-timer]';
+    const selector = '.media-container.focus-play-timer';
     const container = e.target.matches(selector) ? e.target : e.target.querySelector(selector);
     if (container) {
-        container.removeAttribute('data-focus-play-timer');
-        pauseVideo(container, 'data-focus-play');
+        container.classList.remove('focus-play-timer');
+        pauseVideo(container, 'focus-play');
     }
     e.target.removeEventListener('blur', stopVideoPlayEvent);
     e.target.removeEventListener('pointerleave', stopVideoPlayEvent);
@@ -10230,9 +10428,8 @@ function init() {
 
     // Theme config control
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const onThemeChange = matches => CONFIG.theme = matches ? CONFIG.theme_dark : CONFIG.theme_light;
-    mediaQuery.addEventListener('change', e => onThemeChange(e.matches));
-    onThemeChange(mediaQuery.matches);
+    mediaQuery.addEventListener('change', e => Controller.onThemeChanged(e.matches));
+    Controller.onThemeChanged(mediaQuery.matches);
 
     Controller.appElement = document.getElementById('app');
     loadLanguagePack(SETTINGS.language);
@@ -10240,7 +10437,7 @@ function init() {
     const initialHash = location.hash || '#home';
 
     // TEMP // TODO: normal solution
-    if (initialHash.startsWith('#images') && initialHash.includes('image=')) document.getElementsByTagName('header')[0]?.setAttribute('data-format', 'mini');
+    if (initialHash.startsWith('#images') && initialHash.includes('image=')) document.getElementsByTagName('header')[0]?.classList.add('header-mini');
 
     Controller.navigate({ hash: initialHash, historyMode: 'replace' });
     Controller.onResize();
