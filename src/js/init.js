@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 50,
-    updated: '2026-09-14T12:00:00.000Z',
+    version: 51,
+    updated: '2026-09-24T12:00:00.000Z',
     extensionVertsion: 5,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -122,15 +122,15 @@ const CONFIG = {
                 "+2561" // "vore"
             ],
             hideGay: [
-                "+3822", // "yaoi"
-                "+114923+304|2013", // "male focus" and "nude" or "nudity"
-                "+279", // "futanari"
+                // "+3822", // "yaoi" // some times may be wrong tagged
+                "+114923+304|2013-5133", // "male focus" and "nude" or "nudity" and not "woman"
+                "+279|155871", // "futanari" or "futanari masturbation"
                 "+162559", // "ejaculating while penetrated"
-                "+308+1788-111991", // "penis" and "close-up" and not "sexual activity"
+                "+308+1788-111991-5146", // "penis" and "close-up" and not "sexual activity" or "sex"
                 "+3485" // "femboy"
             ],
             hideGay_nsfw: [ // Soft+ (Mature+ doesn't work because the tags aren't always accurate, and the "futanari" tag might not be in the list at all, and you need to filter it somehow even if the level is only "soft")
-                "+114923+5262|3852", // "male focus" and "solo"
+                "+114923+5262|3852-111991-5146", // "male focus" and "solo" but not "sexual activity" or "sex"
                 // "+5262|3852+112481" // "solo" or "solo focus" and "graphic male nudity"
             ]
         },
@@ -1139,14 +1139,32 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
 
             if (modelVersions.length) {
                 // Set some fields from the private API, such as images with tags
+                let hasPrivateVersion = false;
                 for (const modelVersion of modelVersions) {
                     if (modelVersion.id === version.id) {
                         modelVersion.images = CivitaiPublicAPI._convertImages(item.images, browsingLevel);
                         modelVersion.availability = version.availability;
                         modelVersion.earlyAccessDeadline = item.earlyAccessDeadline;
                         modelVersion.hasActivePaidAccess = item.hasActivePaidAccess;
+                        hasPrivateVersion = true;
                         break;
                     }
+                }
+                if (!hasPrivateVersion) {
+                    modelVersions.unshift({
+                        id: version.id,
+                        name: version.name,
+                        images: CivitaiPublicAPI._convertImages(item.images, browsingLevel),
+                        availability: version.availability,
+                        earlyAccessDeadline: item.earlyAccessDeadline,
+                        hasActivePaidAccess: item.hasActivePaidAccess,
+                        baseModel: version.baseModel,
+                        createdAt: version.createdAt instanceof Date ? version.createdAt.toISOString() : version.createdAt,
+                        publishedAt: version.publishedAt instanceof Date ? version.publishedAt.toISOString() : version.publishedAt,
+                        nsfwLevel: version.nsfwLevel,
+                        trainedWords: version.trainedWords || [],
+                        stats: null
+                    });
                 }
             } else {
                 modelVersions.push({
@@ -1157,8 +1175,8 @@ class CivitaiExtensionProxyAPI extends CivitaiPublicAPI {
                     earlyAccessDeadline: item.earlyAccessDeadline,
                     hasActivePaidAccess: item.hasActivePaidAccess,
                     baseModel: version.baseModel,
-                    createdAt: version.createdAt,
-                    publishedAt: version.publishedAt,
+                    createdAt: version.createdAt instanceof Date ? version.createdAt.toISOString() : version.createdAt,
+                    publishedAt: version.publishedAt instanceof Date ? version.publishedAt.toISOString() : version.publishedAt,
                     nsfwLevel: version.nsfwLevel,
                     trainedWords: version.trainedWords || [],
                     stats: null
@@ -1587,6 +1605,7 @@ class Controller {
             'Pony',
             'Pony V7',
             'Qwen',
+            'Qwen 2.1',
             'SD 1.4',
             'SD 1.5',
             'SD 1.5 Hyper',
@@ -1631,13 +1650,23 @@ class Controller {
             'MageFlow',
             'MiniMax H3',
             'MiniMax Music 3',
+            'YuE2',
+
+            // 0 models on site
+            // 'PolyGen',
+            // 'Tripo',
+            // 'Hunyuan3D',
+            // 'Pixal3D',
+            // 'Trellis.2',
 
             // API-only models
             'Wan Video 2.5 I2V',
             'Wan Video 2.5 T2V',
             'Wan Image 2.7',
             'Wan Video 2.7',
+            'Wan Video 3.0',
             'Qwen 2',
+            'Qwen 3',
             'Vidu Q1',
             'Seedream',
             'Seedance',
@@ -1650,7 +1679,9 @@ class Controller {
             'Imagen4',
             'MAI',
             'Reve',
+            'Grok',
             'Muse Image',
+            'Flux 3 Video',
 
             'Other'
         ],
@@ -1727,6 +1758,7 @@ class Controller {
             'Flux.2 Klein 9B-base': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'Flux.2 Klein 4B': ['image', 'weights', 'black-forest-labs', 'multilingual'],
             'Flux.2 Klein 4B-base': ['image', 'weights', 'black-forest-labs', 'multilingual'],
+            'Flux 3 Video': ['video', 'closed', 'black-forest-labs', 'multilingual'],
             'HiDream': ['image', 'weights', 'chinese'],
             'HiDream-O1': ['image', 'weights', 'hidream.ai', 'multilingual'],
             'Hunyuan 1': ['image', 'weights', 'tencent', 'multilingual'],
@@ -1748,6 +1780,8 @@ class Controller {
             'Playground v2': ['image', 'weights', 'sdxl', 'playground-ai', 'multilingual'],
             'Qwen': ['image', 'weights', 'alibaba', 'multilingual'],
             'Qwen 2': ['image', 'closed', 'alibaba', 'multilingual'],
+            'Qwen 2.1': ['image', 'weights', 'alibaba', 'multilingual'],
+            'Qwen 3': ['image', 'closed', 'alibaba', 'multilingual'],
             'SD 1.4': ['image', 'weights', 'sd15', 'stability-ai', 'legacy'],
             'SD 1.5': ['image', 'weights', 'sd15', 'stability-ai'],
             'SD 1.5 Hyper': ['image', 'weights', 'sd15', 'stability-ai'],
@@ -1787,6 +1821,7 @@ class Controller {
             'Wan Video 2.5 T2V': ['video', 'closed', 'alibaba', 't2v', 'multilingual', 'censored'],
             'Wan Image 2.7': ['image', 'closed', 'alibaba', 'multilingual', 'censored'],
             'Wan Video 2.7': ['video', 'closed', 'alibaba', 't2v', 'multilingual', 'censored'],
+            'Wan Video 3.0': ['video', 'closed', 'alibaba', 't2v', 'multilingual', 'censored'],
             'ZImageTurbo': ['image', 'weights', 'multilingual'],
             'ZImageBase': ['image', 'weights', 'multilingual'],
             'Anima': ['image', 'weights', 'cosmos', 'circlestone-labs', 'uncensored'],
@@ -1809,6 +1844,8 @@ class Controller {
             'MiniMax H3': ['video', 'weights', 'minimax', 'uncensored', 'multilingual'], // multilingual?
             'MiniMax Music 3': ['audio', 'weights', 'minimax', 'censored', 'multilingual'], // multilingual?
             'Muse Image': ['image', 'closed', 'meta', 'censored', 'multilingual'], // multilingual?
+            'Grok': ['image', 'closed', 'xai', 'censored', 'multilingual'],
+            'YuE2': ['audio', 'weights', 'm-a-p', 'multilingual'],
             'Other': ['misc']
         }
     };
@@ -1825,16 +1862,27 @@ class Controller {
             'Upscaler',
             'MotionModule',
             'VAE',
+            'TextEncoder',
+            'UNet',
+            'CLIPVision',
             'Poses',
             'Wildcards',
             'Workflows',
+            'ComfyWorkflows',
             'Detection',
+            'VisionLanguage',
+            'CLIP',
+            'LLM',
             'Other'
         ],
         labels: {
             TextualInversion: 'Textual Inversion',
             AestheticGradient: 'Aesthetic Gradient',
             MotionModule: 'Motion',
+            TextEncoder: 'Text Encoder',
+            CLIPVision: 'CLIP Vision',
+            ComfyWorkflows: 'Comfy Workflows',
+            VisionLanguage: 'Vision Language',
             Controlnet: 'ControlNet'
         },
     };
@@ -3668,8 +3716,12 @@ class Controller {
         }
     }
 
-    static goto3DModel(options = {}) {
+    static gotoModel3d(options = {}) {
         // TODO: When there are more models on the site, I will finish this.
+    }
+
+    static gotoModels3d(options = {}) {
+        
     }
 
     static createCivitUrl() {
@@ -3878,7 +3930,15 @@ class Controller {
             { icon: 'chat', value: model.stats.commentCount, unit: 'comment' },
         ];
 
-        const availabilityBadge = modelVersion.availability !== 'Public' ? modelVersion.availability : modelVersion.paidAccess?.endsAt && modelVersion.paidAccess.endsAt > new Date().toISOString() ? 'EarlyAccess' : modelVersion.paidAccess?.permanent || modelVersion.paidAccess?.terms?.download?.price ? 'Paid' : ((modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) ? model.modelVersions.length > 1 ? 'Updated' : 'New' : null;
+        let availabilityBadge = null;
+        if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
+        if (!availabilityBadge && modelVersion.paidAccess?.endsAt) {
+            if (modelVersion.paidAccess.endsAt > new Date().toISOString()) availabilityBadge = 'EarlyAccess';
+            // modelVersion.paidAccess?.terms?.download?.price - still can be here, even if paidAccess.endsAt is already done
+        }
+        if (!availabilityBadge && modelVersion.paidAccess?.permanent) availabilityBadge = 'Paid';
+        if (!availabilityBadge && (modelVersion.publishedAt ?? modelVersion.createdAt) > CONFIG.minDateForNewBadge) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
+
         const statsFragment = this.#genStats(statsList);
         if (availabilityBadge) {
             const iconId = { 'EarlyAccess': 'thunder', 'Paid': 'thunder', 'Updated': 'arrow_up_alt', 'New': 'plus' }[availabilityBadge] ?? null;
@@ -3896,13 +3956,15 @@ class Controller {
         modelNameH1.appendChild(statsFragment);
 
         // scroll to download buttons
-        const scrollToDownload = insertElement('button', modelNameWrap, { class: 'model-scroll-to-download' }, window.languagePack?.text?.toDownload || 'To files');
-        insertElement('span', scrollToDownload, { class: 'badge-count' }, modelVersion.files.length);
-        scrollToDownload.prepend(getIcon('arrow_down_alt'));
-        if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') scrollToDownload.setAttribute('inert', '');
-        scrollToDownload.addEventListener('click', () => {
-            document.querySelector('.model-download-files')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        });
+        if (modelVersion.files.length) {
+            const scrollToDownload = insertElement('button', modelNameWrap, { class: 'model-scroll-to-download' }, window.languagePack?.text?.toDownload || 'To files');
+            insertElement('span', scrollToDownload, { class: 'badge-count' }, modelVersion.files.length);
+            scrollToDownload.prepend(getIcon('arrow_down_alt'));
+            if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') scrollToDownload.setAttribute('inert', '');
+            scrollToDownload.addEventListener('click', () => {
+                document.querySelector('.model-download-files')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            });
+        }
 
         // Model sub name
         const createdAt = new Date(modelVersion.createdAt);
@@ -4146,6 +4208,15 @@ class Controller {
             const previewImagesSorted = modelVersion.images.filter(media => media.nsfwLevel <= SETTINGS.browsingLevel);
             const previewImages = previewImagesSorted.length ? previewImagesSorted : modelVersion.images;
 
+            const maxWidth = (CONFIG.appearance.modelPage.carouselItemWidth + CONFIG.appearance.modelPage.carouselGap) * CONFIG.appearance.modelPage.carouselItemsCount - CONFIG.appearance.modelPage.carouselGap;
+            const maxHeight = Math.round(this.windowHeight * .8);
+
+            const previewList = previewImages.map((media, index) => {
+                    const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
+                    if (!media.id && id) media.id = id;
+                    return { id: media.id, data: media, aspectRatio: this.#round(media.width/media.height) };
+                });
+
             const generateMediaPreview = item => {
                 const media = item.data;
                 const element = media.id && media.hasMeta? createElement('a', { href: media.id ? `#images?image=${encodeURIComponent(media.id)}&nsfw=${this.#convertNSFWLevelToString(media.nsfwLevel)}` : '', 'data-id': media.id ?? -1, tabindex: -1 }) : createElement('div');
@@ -4154,37 +4225,48 @@ class Controller {
                 element.appendChild(mediaElement);
                 return element;
             };
-            const onCarouselScroll = currentId => {
-                // In this place, often, the images do not have normal ids...
-                // so you need to store the link...
-                const item = currentId !== undefined ? previewList.find(i => i.id === currentId) : null;
-                this.#state.carouselCurrentUrl = item?.data?.url;
-                this.setState({ carouselCurrentUrl: item?.data?.url });
-            };
-            const previewList = previewImages.map((media, index) => {
-                const id = media.id ?? (media?.url?.match(/(\d+).\S{2,5}$/) || [])[1];
-                if (!media.id && id) media.id = id;
-                return { id: media.id, data: media, aspectRatio: this.#round(media.width/media.height) };
-            });
 
-            const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i?.data?.url === this.#state.carouselCurrentUrl) : -1;
-            const carousel = new InfiniteCarousel(previewList, {
-                gap: CONFIG.appearance.modelPage.carouselGap,
-                viewportWidth: (CONFIG.appearance.modelPage.carouselItemWidth + CONFIG.appearance.modelPage.carouselGap) * CONFIG.appearance.modelPage.carouselItemsCount - CONFIG.appearance.modelPage.carouselGap,
-                viewportMaxHeight: Math.round(this.windowHeight * .8),
-                generator: generateMediaPreview,
-                active: carouselCurrentId !== -1 ? carouselCurrentId : 0,
-                onElementRemove: this.#onCardRemoved.bind(this),
-                onScroll: onCarouselScroll,
-                visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
-            });
-            modelPreviewWrap.appendChild(carousel.element);
+            if (previewImages.length > 1) {
+                const onCarouselScroll = currentId => {
+                    // In this place, often, the images do not have normal ids...
+                    // so you need to store the link...
+                    const item = currentId !== undefined ? previewList.find(i => i.id === currentId) : null;
+                    this.#state.carouselCurrentUrl = item?.data?.url;
+                    this.setState({ carouselCurrentUrl: item?.data?.url });
+                };
 
-            // Try to insert a picture from the previous page, if available
-            for (let i = 0; i < CONFIG.appearance.modelPage.carouselItemsCount; i++) {
-                const element = carousel.getItemElementByIndex(i);
-                if (!element || !previewList[i]) break;
-                this.#genMediaPreviewFromPrevPage(element, previewList[i].id);
+                const carouselCurrentId = this.#state.carouselCurrentUrl !== undefined ? previewList.findIndex(i => i?.data?.url === this.#state.carouselCurrentUrl) : -1;
+                const carousel = new InfiniteCarousel(previewList, {
+                    gap: CONFIG.appearance.modelPage.carouselGap,
+                    viewportWidth: maxWidth,
+                    viewportMaxHeight: maxHeight,
+                    generator: generateMediaPreview,
+                    active: carouselCurrentId !== -1 ? carouselCurrentId : 0,
+                    onElementRemove: this.#onCardRemoved.bind(this),
+                    onScroll: onCarouselScroll,
+                    visibleCount: CONFIG.appearance.modelPage.carouselItemsCount,
+                });
+                modelPreviewWrap.appendChild(carousel.element);
+
+                // Try to insert a picture from the previous page, if available
+                for (let i = 0; i < CONFIG.appearance.modelPage.carouselItemsCount; i++) {
+                    const element = carousel.getItemElementByIndex(i);
+                    if (!element || !previewList[i]) break;
+                    this.#genMediaPreviewFromPrevPage(element, previewList[i].id);
+                }
+            } else {
+                const listItem = { ...previewList[0] };
+                const width = listItem.data.width || 1;
+                const height = listItem.data.height || 1;
+                const sx = maxWidth / width;
+                const sy = maxHeight / height;
+                const scale = Math.min(sx, sy);
+                listItem.width = Math.round(width  * scale);
+                listItem.height = Math.round(height * scale);
+                const mediaElement = generateMediaPreview(listItem);
+                modelPreviewWrap.appendChild(mediaElement);
+                modelPreviewWrap.classList.add('preview-single');
+                if (previewList[0].id) this.#genMediaPreviewFromPrevPage(mediaElement, previewList[0].id);
             }
         }
 
@@ -4356,206 +4438,210 @@ class Controller {
         }
 
         // Download buttons
-        const downloadButtons = insertElement('div', page, { class: 'model-download-files' });
-        if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') downloadButtons.setAttribute('inert', '');
+        
+        if (modelVersion.files.length) {
+            const downloadButtons = insertElement('div', page, { class: 'model-download-files' });
+            if (availabilityBadge === 'EarlyAccess' || availabilityBadge === 'Paid') downloadButtons.setAttribute('inert', '');
 
-        const seenHashes = new Set();
-        const filesByType = new Map();
+            const seenHashes = new Set();
+            const filesByType = new Map();
 
-        const formatPriorityList = {
-            'SafeTensor': 1,
-            '': 1,
-            'GGUF': 2,
-            default: 3
-        };
-
-        for (let i = 0; i < modelVersion.files.length; i++) {
-            const file = modelVersion.files[i];
-            const hash = file.hashes?.SHA256 || file.hashes?.AutoV3 || file.hashes?.AutoV2;
-
-            if (hash) {
-                if (seenHashes.has(hash)) continue;
-                seenHashes.add(hash);
-            } else {
-                console.log('This file has no hashes', file);
-            }
-
-            // Shallow copy
-            const fileCopy = { ...file };
-            const format = file.metadata?.format || '';
-            const fpKey = fileCopy.fpKey = `${file.metadata?.fp || ''}_${format}`;
-            fileCopy.priority = formatPriorityList[format] ?? formatPriorityList.default;
-            if (!fileCopy.name || typeof fileCopy.name !== 'string') fileCopy.name = '';
-
-            const type = file.type || 'Other';
-            let group = filesByType.get(type);
-            if (!group) {
-                group = { files: [], quants: {} };
-                filesByType.set(type, group);
-            }
-            group.files.push(fileCopy);
-
-            if (!group.quants[fpKey]) group.quants[fpKey] = { files: [], cache: null };
-            group.quants[fpKey].files.push(fileCopy);
-        }
-
-        const fileNamePatterns = {};
-        const prepareFileName = (fileName, fileQuants, container) => {
-            const dotIndex = fileName.lastIndexOf('.');
-
-            // File without extension
-            if (dotIndex <= 0) {
-                insertTextNode(fileName, container);
-                return;
-            }
-
-            const extension = fileName.slice(dotIndex);
-            const files = fileQuants?.files;
-            const totalFiles = files ? files.length : 0;
-
-            // Single file handling
-            if (totalFiles <= 1) {
-                insertTextNode(fileName.slice(0, dotIndex), container);
-                insertElement('span', container, { class: 'darker-text' }, extension);
-                return;
-            }
-
-            if (!fileNamePatterns.compiled) {
-                fileNamePatterns.compiled = true;
-                fileNamePatterns.word = /[\p{L}\p{N}]+/gu;
-                fileNamePatterns.token = /[\p{L}\p{N}]+|[^\p{L}\p{N}]+/gu;
-                fileNamePatterns.isWord = /^[\p{L}\p{N}]+$/u;
-                // CamelCase/PascalCase, numbers, and non-alphanumeric
-                // const wordPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+/gu;
-                // const tokenPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+|[^\p{L}\p{N}]+/gu;
-            }
-
-            // Build word frequency cache for multiple files
-            if (!fileQuants.cache) {
-                const seenInFileSet = new Set();
-                const wordCounts = new Map();
-                const wordPattern = fileNamePatterns.word;
-
-                for (let j = 0; j < totalFiles; j++) {
-                    const fName = fileQuants.files[j].name || '';
-                    const dIdx = fName.lastIndexOf('.');
-                    const base = dIdx > 0 ? fName.slice(0, dIdx) : fName;
-
-                    seenInFileSet.clear();
-                    wordPattern.lastIndex = 0;
-
-                    let match;
-                    while ((match = wordPattern.exec(base)) !== null) {
-                        seenInFileSet.add(match[0].toLowerCase());
-                    }
-
-                    for (const word of seenInFileSet) {
-                        wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
-                    }
-                }
-
-                fileQuants.cache = { wordCounts, total: totalFiles };
-            }
-
-            const baseName = fileName.slice(0, dotIndex);
-            fileNamePatterns.token.lastIndex = 0;
-            const tokens = baseName.match(fileNamePatterns.token) || [baseName];
-            const { wordCounts, total } = fileQuants.cache;
-
-            let textBuffer = '';
-
-            const flushTextBuffer = () => {
-                if (textBuffer) {
-                    insertTextNode(textBuffer, container);
-                    textBuffer = '';
-                }
+            const formatPriorityList = {
+                'SafeTensor': 1,
+                '': 1,
+                'GGUF': 2,
+                default: 3
             };
 
-            const isWordPattern = fileNamePatterns.isWord;
+            for (let i = 0; i < modelVersion.files.length; i++) {
+                const file = modelVersion.files[i];
+                const hash = file.hashes?.SHA256 || file.hashes?.AutoV3 || file.hashes?.AutoV2;
 
-            const tokenCount = tokens.length;
-            for (let j = 0; j < tokenCount; j++) {
-                const token = tokens[j];
-                const isWord = isWordPattern.test(token);
-                const isDiff = isWord && (wordCounts.get(token.toLowerCase()) || 0) < total;
-
-                if (isDiff) {
-                    flushTextBuffer();
-                    insertElement('b', container, { class: 'file-quant-name-diff' }, token);
+                if (hash) {
+                    if (seenHashes.has(hash)) continue;
+                    seenHashes.add(hash);
                 } else {
-                    textBuffer += token;
-                }
-            }
-
-            flushTextBuffer();
-            insertElement('span', container, { class: 'darker-text' }, fileName.slice(dotIndex));
-        };
-
-        filesByType.forEach((group, type) => {
-            const { files, quants } = group;
-            if (files.length > 1) {
-                const NAT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-                files.sort((a, b) => {
-                    if (a.priority !== b.priority) return a.priority - b.priority;
-
-                    const fpCompare = NAT_COLLATOR.compare(a.fpKey, b.fpKey);
-                    if (fpCompare !== 0) return fpCompare;
-
-                    return NAT_COLLATOR.compare(a.name, b.name);
-                });
-            }
-
-            const groupWrap = insertElement('div', downloadButtons, { class: 'download-group' });
-
-            // Group Header
-            const header = insertElement('div', groupWrap, { class: 'download-group-header' });
-            insertElement('span', header, undefined, this.#types.labels[type] || type);
-            insertElement('span', header, { class: 'badge-count' }, `${files.length}`);
-
-            // Group Files List
-            const list = insertElement('div', groupWrap, { class: 'download-file-list' });
-
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const metadata = file.metadata;
-                const formatString = metadata?.format === 'SafeTensor' || metadata?.format === 'Other' ? '' : metadata?.format;
-                const fpString = metadata?.fp || '';
-                const fileSize = filesizeToString(file.sizeKB * 1024);
-                const fileQuants = quants[file.fpKey];
-
-                const row = insertElement('div', list, { class: 'download-file-row' });
-
-                const fileDetails = insertElement('div', row, { class: 'file-details' });
-
-                if (fpString || formatString) {
-                    const badgeContainer = insertElement('div', fileDetails, { class: 'file-badges badges' });
-                    if (fpString) insertElement('span', badgeContainer, { class: 'badge badge-fp' }, fpString);
-                    if (formatString) insertElement('span', badgeContainer, { class: 'badge badge-format' }, formatString);
+                    console.log('This file has no hashes', file);
                 }
 
-                const nameSpan = insertElement('span', fileDetails, { class: 'file-name' });
-                const fileName = file.name;
+                // Shallow copy
+                const fileCopy = { ...file };
+                const format = file.metadata?.format || '';
+                const fpKey = fileCopy.fpKey = `${file.metadata?.fp || ''}_${format}`;
+                fileCopy.priority = formatPriorityList[format] ?? formatPriorityList.default;
+                if (!fileCopy.name || typeof fileCopy.name !== 'string') fileCopy.name = '';
 
-                if (fileName) prepareFileName(fileName, fileQuants, nameSpan);
-                else insertTextNode(type, nameSpan);
+                const type = file.type || 'Other';
+                let group = filesByType.get(type);
+                if (!group) {
+                    group = { files: [], quants: {} };
+                    filesByType.set(type, group);
+                }
+                group.files.push(fileCopy);
 
-                const fileActions = insertElement('div', row, { class: 'file-actions' });
-                insertElement('span', fileActions, { class: 'file-size' }, fileSize);
+                if (!group.quants[fpKey]) group.quants[fpKey] = { files: [], cache: null };
+                group.quants[fpKey].files.push(fileCopy);
+            }
+    
+            const fileNamePatterns = {};
+            const prepareFileName = (fileName, fileQuants, container) => {
+                const dotIndex = fileName.lastIndexOf('.');
 
-                const a = insertElement('a', fileActions, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-delay': 600 }, ` ${ window.languagePack?.text?.download || 'Download'}`);
-                a.prepend(getIcon('download'));
-                if (file.type === 'Archive') a.appendChild(getIcon('file_zip'));
-
-                if (file.virusScanResult !== 'Success') {
-                    a.classList.add('link-warning');
-                    const lilpipeText = `<b>${escapeHtml(file.virusScanMessage ?? file.virusScanResult)}</b>`;
-                    a.setAttribute('lilpipe-text', lilpipeText);
-                    a.appendChild(getIcon('warning'));
+                // File without extension
+                if (dotIndex <= 0) {
+                    insertTextNode(fileName, container);
+                    return;
                 }
 
-                if (fileName) a.setAttribute('data-filename', fileName);
-            }
-        });
+                const extension = fileName.slice(dotIndex);
+                const files = fileQuants?.files;
+                const totalFiles = files ? files.length : 0;
+
+                // Single file handling
+                if (totalFiles <= 1) {
+                    insertTextNode(fileName.slice(0, dotIndex), container);
+                    insertElement('span', container, { class: 'darker-text' }, extension);
+                    return;
+                }
+
+                if (!fileNamePatterns.compiled) {
+                    fileNamePatterns.compiled = true;
+                    fileNamePatterns.word = /[\p{L}\p{N}]+/gu;
+                    fileNamePatterns.token = /[\p{L}\p{N}]+|[^\p{L}\p{N}]+/gu;
+                    fileNamePatterns.isWord = /^[\p{L}\p{N}]+$/u;
+                    // CamelCase/PascalCase, numbers, and non-alphanumeric
+                    // const wordPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+/gu;
+                    // const tokenPattern = /\p{Lu}\p{Ll}+|\p{Lu}+(?!\p{Ll})|\p{Ll}+|\p{N}+|[^\p{L}\p{N}]+/gu;
+                }
+
+                // Build word frequency cache for multiple files
+                if (!fileQuants.cache) {
+                    const seenInFileSet = new Set();
+                    const wordCounts = new Map();
+                    const wordPattern = fileNamePatterns.word;
+
+                    for (let j = 0; j < totalFiles; j++) {
+                        const fName = fileQuants.files[j].name || '';
+                        const dIdx = fName.lastIndexOf('.');
+                        const base = dIdx > 0 ? fName.slice(0, dIdx) : fName;
+
+                        seenInFileSet.clear();
+                        wordPattern.lastIndex = 0;
+
+                        let match;
+                        while ((match = wordPattern.exec(base)) !== null) {
+                            seenInFileSet.add(match[0].toLowerCase());
+                        }
+
+                        for (const word of seenInFileSet) {
+                            wordCounts.set(word, (wordCounts.get(word) || 0) + 1);
+                        }
+                    }
+
+                    fileQuants.cache = { wordCounts, total: totalFiles };
+                }
+
+                const baseName = fileName.slice(0, dotIndex);
+                fileNamePatterns.token.lastIndex = 0;
+                const tokens = baseName.match(fileNamePatterns.token) || [baseName];
+                const { wordCounts, total } = fileQuants.cache;
+
+                let textBuffer = '';
+
+                const flushTextBuffer = () => {
+                    if (textBuffer) {
+                        insertTextNode(textBuffer, container);
+                        textBuffer = '';
+                    }
+                };
+
+                const isWordPattern = fileNamePatterns.isWord;
+
+                const tokenCount = tokens.length;
+                for (let j = 0; j < tokenCount; j++) {
+                    const token = tokens[j];
+                    const isWord = isWordPattern.test(token);
+                    const isDiff = isWord && (wordCounts.get(token.toLowerCase()) || 0) < total;
+
+                    if (isDiff) {
+                        flushTextBuffer();
+                        insertElement('b', container, { class: 'file-quant-name-diff' }, token);
+                    } else {
+                        textBuffer += token;
+                    }
+                }
+
+                flushTextBuffer();
+                insertElement('span', container, { class: 'darker-text' }, fileName.slice(dotIndex));
+            };
+
+            filesByType.forEach((group, type) => {
+                const { files, quants } = group;
+                if (files.length > 1) {
+                    const NAT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+                    files.sort((a, b) => {
+                        if (a.priority !== b.priority) return a.priority - b.priority;
+
+                        const fpCompare = NAT_COLLATOR.compare(a.fpKey, b.fpKey);
+                        if (fpCompare !== 0) return fpCompare;
+
+                        return NAT_COLLATOR.compare(a.name, b.name);
+                    });
+                }
+
+                const groupWrap = insertElement('div', downloadButtons, { class: 'download-group' });
+
+                // Group Header
+                const header = insertElement('div', groupWrap, { class: 'download-group-header' });
+                insertElement('span', header, undefined, this.#types.labels[type] || type);
+                insertElement('span', header, { class: 'badge-count' }, `${files.length}`);
+
+                // Group Files List
+                const list = insertElement('div', groupWrap, { class: 'download-file-list' });
+
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const metadata = file.metadata;
+                    const formatString = metadata?.format === 'SafeTensor' || metadata?.format === 'Other' ? '' : metadata?.format;
+                    const fpString = metadata?.fp || '';
+                    const fileSize = filesizeToString(file.sizeKB * 1024);
+                    const fileQuants = quants[file.fpKey];
+
+                    const row = insertElement('div', list, { class: 'download-file-row' });
+
+                    const fileDetails = insertElement('div', row, { class: 'file-details' });
+
+                    if (fpString || formatString) {
+                        const badgeContainer = insertElement('div', fileDetails, { class: 'file-badges badges' });
+                        if (fpString) insertElement('span', badgeContainer, { class: 'badge badge-fp' }, fpString);
+                        if (formatString) insertElement('span', badgeContainer, { class: 'badge badge-format' }, formatString);
+                    }
+
+                    const nameSpan = insertElement('span', fileDetails, { class: 'file-name' });
+                    const fileName = file.name;
+
+                    if (fileName) prepareFileName(fileName, fileQuants, nameSpan);
+                    else insertTextNode(type, nameSpan);
+
+                    const fileActions = insertElement('div', row, { class: 'file-actions' });
+                    insertElement('span', fileActions, { class: 'file-size' }, fileSize);
+
+                    const a = insertElement('a', fileActions, { class: 'link-button', target: '_blank', href: file.downloadUrl, 'lilpipe-delay': 600 }, ` ${ window.languagePack?.text?.download || 'Download'}`);
+                    a.prepend(getIcon('download'));
+                    if (file.type === 'Archive') a.appendChild(getIcon('file_zip'));
+
+                    if (file.virusScanResult !== 'Success') {
+                        a.classList.add('link-warning');
+                        const lilpipeText = `<b>${escapeHtml(file.virusScanMessage ?? file.virusScanResult)}</b>`;
+                        a.setAttribute('lilpipe-text', lilpipeText);
+                        a.appendChild(getIcon('warning'));
+                    }
+
+                    if (fileName) a.setAttribute('data-filename', fileName);
+                }
+            });
+        }
+
 
         // Comments
         if (EXTENSION_INSTALLED) { // model.stats?.commentCount often 0, so skip the check
@@ -5879,25 +5965,30 @@ class Controller {
 
     static #genStats(stats, hideEmpty = false) {
         const badges = createElement('div', { class: 'badges' });
-        stats.forEach(({ icon, iconString, value = 0, unit }) => {
-            if (hideEmpty && !value) return;
-            const badge = document.createElement('div');
-            badge.textContent = iconString ? `${iconString} ${value > 999 ? formatNumber(value) : value}` : value > 999 ? formatNumber(value) : value;
+        const langUnits = window.languagePack?.units ?? [];
+
+        for (const { icon, iconString, value = 0, unit } of stats) {
+            if (hideEmpty && !value) continue;
+
+            const text = iconString ? `${iconString} ${value > 999 ? formatNumber(value) : value}` : value > 999 ? formatNumber(value) : value;
+            const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
+            const units = unit ? langUnits[unit] : null;
+            const lilpipeText = units ? `${lilpipeValue} ${escapeHtml(langUnits[unit][pluralIndex(value)])}` : lilpipeValue;
+
+            const badge = createElement('div', { 'lilpipe-text': lilpipeText }, text);
+
             let className = 'badge';
             if (!value) {
                 badge.setAttribute('inert', '');
                 className += ' badge-empty';
             }
-            const lilpipeValue = value > 999 ? formatNumberIntl(value) : escapeHtml(value);
-            if (unit) {
-                const units = window.languagePack?.units?.[unit];
-                badge.setAttribute('lilpipe-text', units ? `${lilpipeValue} ${escapeHtml(units[pluralIndex(value)])}` : lilpipeValue);
-            } else badge.setAttribute('lilpipe-text', lilpipeValue);
             if (icon) badge.prepend(getIcon(icon));
             else className += ' badge-textonly';
             badge.className = className;
+
             badges.appendChild(badge);
-        });
+        }
+
         return badges;
     }
 
@@ -7522,24 +7613,34 @@ class Controller {
                 const modelTypeWrap = insertElement('div', cardContentTop, { class: 'badge model-type', 'lilpipe-type': 'model-type' }, `${this.#types.labels[model.type] || model.type} · `);
                 const getBaseModelLabel = baseModel => this.#models.labels[baseModel] ?? baseModel ?? '?';
                 const getBaseModelLabelShort = baseModel => this.#models.labels_short[baseModel] ?? baseModel ?? '?';
-                if (model.baseModels?.length && model.baseModels.length > 1) {
-                    const modelsCount = {};
+                const hasVariants = model.baseModels?.length && model.baseModels.length > 1;
+                insertElement('span', modelTypeWrap, hasVariants ? { class: 'has-variants' } : undefined, getBaseModelLabelShort(modelVersion.baseModel));
+                assignDynamicLilpipe(modelTypeWrap, () => {
+                    const fragment = new DocumentFragment();
                     const isRealModels = !model.modelVersions.some(version => version.isPlaceholderModel);
-                    if (isRealModels) model.modelVersions.forEach(version => modelsCount[version.baseModel] ? modelsCount[version.baseModel]++ : (modelsCount[version.baseModel] = 1));
-                    const labels = model.baseModels.map(b => `<li${b === modelVersion.baseModel ? ' class="active"' : ''}>${escapeHtml(getBaseModelLabel(b))}${modelsCount[b] > 1 ? ` <span class="version-count">${modelsCount[b]}</span>` : ''}</li>`).join('');
-                    modelTypeWrap.setAttribute('lilpipe-text', `<h4>${escapeHtml(model.type)}</h4><ul>${labels}</ul>`);
-                    insertElement('span', modelTypeWrap, { class: 'has-variants' }, getBaseModelLabelShort(modelVersion.baseModel));
-                } else {
-                    const count = !model.modelVersions.some(version => version.isPlaceholderModel) ? model.modelVersions.length : -1;
-                    modelTypeWrap.setAttribute('lilpipe-text', `<h4>${escapeHtml(model.type)}</h4><ul><li class="active">${escapeHtml(getBaseModelLabel(modelVersion.baseModel))}${count > 1 ? ` <span class="version-count">${count}</span>` : ''}</li></ul>`);
-                    insertElement('span', modelTypeWrap, undefined, getBaseModelLabelShort(modelVersion.baseModel));
-                }
+
+                    insertElement('h4', fragment, undefined, model.type);
+                    const ul = insertElement('ul', fragment);
+
+                    if (hasVariants) {
+                        const modelsCount = {};
+                        if (isRealModels) model.modelVersions.forEach(version => modelsCount[version.baseModel] ? modelsCount[version.baseModel]++ : (modelsCount[version.baseModel] = 1));
+                        for (const b of model.baseModels) {
+                            const li = insertElement('li', ul, b === modelVersion.baseModel ? { class: 'active' } : undefined, getBaseModelLabel(b));
+                            if (modelsCount[b] > 1) insertElement('span', li, { class: 'badge-count' }, modelsCount[b]);
+                        }
+                    } else {
+                        const li = insertElement('li', ul, { class: 'active' }, getBaseModelLabel(modelVersion.baseModel));
+                        if (isRealModels) insertElement('span', li, { class: 'badge-count' }, model.modelVersions.length);
+                    }
+                    return fragment;
+                });
 
                 // Availability
                 let availabilityBadge = null;
                 if (modelVersion.availability !== 'Public') availabilityBadge = modelVersion.availability;
                 else if (modelVersion.earlyAccessDeadline) availabilityBadge = 'EarlyAccess';
-                else if (modelVersion.paidAccess?.permanent || modelVersion.paidAccess?.terms?.download?.price) availabilityBadge = 'Paid';
+                else if (modelVersion.paidAccess?.permanent) availabilityBadge = 'Paid'; // Here terms (modelVersion.paidAccess?.terms?.download?.price) is empty
                 else {
                     if (model._modelUpdatedRecently === undefined) model._modelUpdatedRecently = model.modelVersions.find(version => (version.publishedAt ?? version.createdAt) > CONFIG.minDateForNewBadge);
                     if (model._modelUpdatedRecently) availabilityBadge = model.modelVersions.length > 1 ? 'Updated' : 'New';
@@ -7555,10 +7656,21 @@ class Controller {
                         modelName = model._modelUpdatedRecently.name;
                     }
                     if (date && !isNaN(date.getTime())) {
-                        const updatedAtISO = date.toISOString();
-                        const lilpipeText = `<div class="model-name"><b>${escapeHtml(modelName || '')}</b></div> <relative-time class="dark-text" datetime="${updatedAtISO}"></relative-time> <br>${date.toLocaleDateString()} <span class="dark-text">${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
-                        badge.setAttribute('lilpipe-text', lilpipeText);
-                        if (forceAutoplay) insertElement('relative-time', cardContentTop, { class: 'dark-text', datetime: updatedAtISO });
+                        if (forceAutoplay) {
+                            const updatedAtISO = date.toISOString();
+                            insertElement('relative-time', cardContentTop, { class: 'dark-text', datetime: updatedAtISO });
+                        } else {
+                            assignDynamicLilpipe(badge, () => {
+                                const updatedAtISO = date.toISOString();
+                                const fragment = new DocumentFragment();
+                                insertElement('b', fragment, { class: 'model-name' }, modelName || '');
+                                insertElement('relative-time', fragment, { class: 'dark-text', datetime: updatedAtISO });
+                                insertElement('br', fragment);
+                                const dateDay = insertElement('span', fragment, undefined, date.toLocaleDateString());
+                                insertElement('span', dateDay, { class: 'dark-text' }, date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                                return fragment;
+                            });
+                        }
                     }
                 }
 
@@ -7617,10 +7729,12 @@ class Controller {
                     image = image.values().next().value;
                 };
 
-                const ratio = image.width / image.height;
                 const draggableTitle = (window.languagePack?.text?.image_by ?? 'Image by {username}').replace('{username}', image.username || 'user');
 
-                if (!ctx.itemHeight) ctx.itemHeight = itemWidth / ratio;
+                if (!ctx.itemHeight) {
+                    const ratio = image.width / image.height;
+                    ctx.itemHeight = itemWidth / ratio;
+                }
 
                 ctx.cardSizeStyle = `width: ${itemWidth}px; height: ${ctx.itemHeight}px;`;
 
@@ -7730,6 +7844,16 @@ class Controller {
     static #genImageCard(image, options) {
         const ctx = { data: image, ...options };
         this.#genImageCardProgressive.forEach(step => step.generator(ctx));
+        return ctx.card;
+    }
+
+    static #genModel3dCardProgressive = [
+        
+    ];
+
+    static #genModel3dCard(model3d, options) {
+        const ctx = { data: model3d, ...options };
+        this.#genModel3dCardProgressive.forEach(step => step.generator(ctx));
         return ctx.card;
     }
 
@@ -8623,9 +8747,8 @@ class Controller {
             switchButton.classList.toggle('switch-value-true', currentValue);
             switchButton.classList.toggle('switch-value-false', !currentValue);
         };
-        const toggleValue = () => setValue(!currentValue);
 
-        element.addEventListener('click', toggleValue, { passive: true });
+        element.addEventListener('click', () => setValue(!currentValue), { passive: true });
 
         return { element, setValue };
     }
@@ -8652,40 +8775,45 @@ class Controller {
             if (s.includes('-')) s = s.replaceAll('-', '_');
             return s;
         };
-        options.forEach((key, index) => {
-            const element = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key });
-            const span = insertElement('span', element, undefined, list[key]);
-            const optionBadges = badges[key];
-            if (optionBadges && optionBadges.length > 0) {
-                const wrap = insertElement('div', element, { class: 'badges' });
-                optionBadges.forEach(badge => {
-                    const el = createElement('div', { class: 'badge' });
-                    if (badge.type === 'icon' && badge.icon) el.appendChild(getIcon(badge.icon));
-                    else if (badge.type === 'element' && badge.element instanceof HTMLElement) el.appendChild(badge.element);
-                    else if (badge.type === 'text' && typeof badge.text === 'string') el.textContent = text;
-                    else return;
-                    if (badge.value) {
-                        const vRaw = String(badge.value);
-                        const v = vRaw.includes(' ') ? vRaw.replaceAll(' ', '_') : vRaw;
-                        el.classList.add('badge-with-value', `badge-value-${v}`);
-                    }
-                    wrap.appendChild(el);
+
+        let lazyOptionsGenerator = () => {
+            lazyOptionsGenerator = null;
+
+            options.forEach((key, index) => {
+                const element = insertElement('div', optionsListElement, { class: 'list-option', 'data-option': key });
+                const span = insertElement('span', element, undefined, list[key]);
+                const optionBadges = badges[key];
+                if (optionBadges && optionBadges.length > 0) {
+                    const wrap = insertElement('div', element, { class: 'badges' });
+                    optionBadges.forEach(badge => {
+                        const el = createElement('div', { class: 'badge' });
+                        if (badge.type === 'icon' && badge.icon) el.appendChild(getIcon(badge.icon));
+                        else if (badge.type === 'element' && badge.element instanceof HTMLElement) el.appendChild(badge.element);
+                        else if (badge.type === 'text' && typeof badge.text === 'string') el.textContent = text;
+                        else return;
+                        if (badge.value) {
+                            const vRaw = String(badge.value);
+                            const v = vRaw.includes(' ') ? vRaw.replaceAll(' ', '_') : vRaw;
+                            el.classList.add('badge-with-value', `badge-value-${v}`);
+                        }
+                        wrap.appendChild(el);
+                    });
+                }
+                const text = list[key] || '';
+                const optionTags = [ text, key, ...(tags[key] || []) ];
+                const tagLabels = {};
+                const searchTags = [];
+                optionTags.forEach(label => {
+                    const tag = normalizeTag(label);
+                    tagLabels[tag] = label;
+                    searchTags.push(tag);
                 });
-            }
-            const text = list[key] || '';
-            const optionTags = [ text, key, ...(tags[key] || []) ];
-            const tagLabels = {};
-            const searchTags = [];
-            optionTags.forEach(label => {
-                const tag = normalizeTag(label);
-                tagLabels[tag] = label;
-                searchTags.push(tag);
+                const searchText = searchTags.join('||');
+                listElements[key] = { element, index, span, text, tagLabels, searchTags, searchText };
             });
-            const searchText = searchTags.join('||');
-            listElements[key] = { element, index, span, text, tagLabels, searchTags, searchText };
-        });
-        focusIndex = listElements[currentValue]?.index ?? -1;
-        listElements[currentValue]?.element.classList.add('option-selected');
+            focusIndex = listElements[currentValue]?.index ?? -1;
+            listElements[currentValue]?.element.classList.add('option-selected');
+        };
 
         const searchForText = (q = '') => {
             q = normalizeTag(q);
@@ -8760,6 +8888,9 @@ class Controller {
         };
         const onfocus = e => {
             if (listVisible) return;
+
+            if (lazyOptionsGenerator) lazyOptionsGenerator();
+
             optionsListElement.classList.add('list-visible');
             selectedOptionElement.classList.add('list-visible');
             if (!isClicking) selectedOptionElement.classList.add('keyboard-focus');
@@ -8816,6 +8947,9 @@ class Controller {
 
         const setValue = newValue => {
             if (currentValue === newValue) return;
+
+            if (lazyOptionsGenerator) lazyOptionsGenerator();
+
             onchange({ oldValue: currentValue, newValue });
             listElements[currentValue]?.element.classList.remove('option-selected');
             listElements[newValue]?.element.classList.add('option-selected');
@@ -9139,6 +9273,52 @@ class Controller {
 
         return stateCopy;
     }
+
+
+    static dev_checkEnums(enums = null) {
+        if (!enums) {
+            console.log('[DEV]\n  1. Fetch "https://civitai.com/api/v1/enums"\n  2. Paste result as input to this function.');
+            return;
+        }
+
+        if (typeof enums !== 'string' && typeof enums !== 'object') {
+            console.log('[DEV] Enums must be a valid JSON or Object.');
+            return;
+        }
+
+        if (typeof enums === 'string') {
+            try {
+                enums = JSON.parse(enums);
+            } catch {
+                console.log('[DEV] Enums must be a valid JSON or Object.');
+                return;
+            }
+        }
+
+        const modelType = enums.ModelType;
+        const baseModel = enums.BaseModel;
+
+        let isFullOk = true;
+        const getDiff = (enumList, configList) => ({
+            missingInConfig: enumList.filter(item => !configList.includes(item)),
+            missingInEnum: configList.filter(item => !enumList.includes(item))
+        });
+
+        const typesDiff = getDiff(modelType, this.#types.options);
+        const modelsDiff = getDiff(baseModel, this.#models.options);
+
+        if (typesDiff.missingInConfig.length || typesDiff.missingInEnum.length) {
+            console.log('[DEV] ModelType difference:', typesDiff);
+            isFullOk = false;
+        }
+
+        if (modelsDiff.missingInConfig.length || modelsDiff.missingInEnum.length) {
+            console.log('[DEV] BaseModel difference:', modelsDiff);
+            isFullOk = false;
+        }
+
+        if (isFullOk) console.log('[DEV] Enums and Configs match.');
+    }
 }
 
 // ==============================
@@ -9350,6 +9530,34 @@ function compileFilterItemsRules(rules) {
         return [pathInput];
     };
 
+    function traverseLeafs(node, keyPath, idx, visitor) {
+        if (node == null) return true;
+
+        if (idx >= keyPath.length) {
+            if (Array.isArray(node)) {
+                for (let i = 0; i < node.length; i++) {
+                    if (!traverseLeafs(node[i], keyPath, idx, visitor)) return false;
+                }
+                return true;
+            }
+            return visitor(node);
+        }
+
+        const key = keyPath[idx];
+        const nextVal = node[key];
+
+        if (Array.isArray(nextVal)) {
+            for (let i = 0; i < nextVal.length; i++) {
+                if (!traverseLeafs(nextVal[i], keyPath, idx + 1, visitor)) return false;
+            }
+            return true;
+        } else if (nextVal != null) {
+            return traverseLeafs(nextVal, keyPath, idx + 1, visitor);
+        }
+
+        return true;
+    }
+
     return rules.map((rule, ruleIndex) => {
         if (!rule || !Array.isArray(rule.conditions) || !rule.conditions.length) return null;
 
@@ -9363,86 +9571,109 @@ function compileFilterItemsRules(rules) {
             const blocks = conditionStr.match(blocksRegex);
             if (!blocks) return null;
 
-            const parsedBlocks = blocks.map(block => {
+            const plusBlocks = [];
+            const minusBlocks = [];
+
+            for (let i = 0; i < blocks.length; i++) {
+                const block = blocks[i];
                 const prefix = block[0];
                 const content = block.slice(1);
-                if (!content) return null;
+                if (!content) continue;
 
                 const tags = content.split('|').filter(Boolean).map(val => isNumber ? Number(val) : String(val));
-                if (tags.length === 0) return null;
+                if (tags.length === 0) continue;
 
                 const tagSet = new Set(tags);
-                const isPlus = prefix === '+';
-                const singleTag = tags[0];
-                const isSingle = tags.length === 1;
+                if (prefix === '+') {
+                    plusBlocks.push(tagSet);
+                } else {
+                    minusBlocks.push(tagSet);
+                }
+            }
 
-                return {
-                    isPlus,
-                    matchVal(val) {
-                        if (val == null) return !isPlus;
-                        const target = isNumber ? Number(val) : String(val);
-                        const has = isSingle ? target === singleTag : tagSet.has(target);
-                        return isPlus ? has : !has;
-                    }
-                };
-            }).filter(Boolean);
+            if (plusBlocks.length === 0 && minusBlocks.length === 0) return null;
 
-            return parsedBlocks;
+            return {
+                plusBlocks,
+                minusBlocks,
+                targetPlusMask: (1 << plusBlocks.length) - 1,
+                isNumber
+            };
         }).filter(Boolean);
 
         if (conditionMatchers.length === 0) return null;
 
         const shouldApply = typeof rule.shouldApply === 'function' ? rule.shouldApply : null;
 
-        function checkValueAgainstBlocks(val, conditionBlocks) {
-            for (let i = 0; i < conditionBlocks.length; i++) {
-                if (!conditionBlocks[i].matchVal(val)) return false;
-            }
-            return true;
+        // Evaluates a single scope (item or inner object) against condition blocks
+        function checkScope(scopeNode, keyPath, condition) {
+            const { plusBlocks, minusBlocks, targetPlusMask, isNumber } = condition;
+            let currentPlusMask = 0;
+            let failed = false;
+
+            const visitLeaf = (val) => {
+                const target = isNumber ? Number(val) : String(val);
+
+                for (let i = 0; i < minusBlocks.length; i++) {
+                    if (minusBlocks[i].has(target)) {
+                        failed = true;
+                        return false;
+                    }
+                }
+
+                for (let i = 0; i < plusBlocks.length; i++) {
+                    if ((currentPlusMask & (1 << i)) === 0) {
+                        if (plusBlocks[i].has(target)) {
+                            currentPlusMask |= (1 << i);
+                        }
+                    }
+                }
+
+                return true;
+            };
+
+            traverseLeafs(scopeNode, keyPath, 0, visitLeaf);
+
+            return !failed && (currentPlusMask === targetPlusMask);
         }
 
-        function matchesAnyInNode(node, mainIdx, innerIdx, conditionBlocks) {
-            if (node == null) {
-                return checkValueAgainstBlocks(null, conditionBlocks);
+        // Traverses mainKey to locate scope nodes and evaluate conditions
+        function evaluateRuleOnItem(item, condition) {
+            if (item == null) return false;
+
+            // If no innerKey, scope is the item evaluated along mainKey
+            if (innerKey.length === 0) {
+                return checkScope(item, mainKey, condition);
             }
 
-            //  Walk mainKey
-            if (mainIdx < mainKey.length) {
-                const key = mainKey[mainIdx];
+            // If innerKey exists, evaluate each scope node at mainKey independently
+            function traverseScopes(node, idx) {
+                if (node == null) return false;
+
+                if (idx >= mainKey.length) {
+                    if (Array.isArray(node)) {
+                        for (let i = 0; i < node.length; i++) {
+                            if (checkScope(node[i], innerKey, condition)) return true;
+                        }
+                        return false;
+                    }
+                    return checkScope(node, innerKey, condition);
+                }
+
+                const key = mainKey[idx];
                 const nextVal = node[key];
 
                 if (Array.isArray(nextVal)) {
                     for (let i = 0; i < nextVal.length; i++) {
-                        if (matchesAnyInNode(nextVal[i], mainIdx + 1, innerIdx, conditionBlocks)) return true;
+                        if (traverseScopes(nextVal[i], idx + 1)) return true;
                     }
                     return false;
                 }
-                return matchesAnyInNode(nextVal, mainIdx + 1, innerIdx, conditionBlocks);
+
+                return traverseScopes(nextVal, idx + 1);
             }
 
-            // Walk innerKey
-            if (innerIdx < innerKey.length) {
-                const key = innerKey[innerIdx];
-                const nextVal = node[key];
-
-                if (Array.isArray(nextVal)) {
-                    for (let i = 0; i < nextVal.length; i++) {
-                        if (matchesAnyInNode(nextVal[i], mainIdx, innerIdx + 1, conditionBlocks)) return true;
-                    }
-                    return false;
-                }
-                return matchesAnyInNode(nextVal, mainIdx, innerIdx + 1, conditionBlocks);
-            }
-
-            // Reached leaf value or leaf array
-            if (Array.isArray(node)) {
-                for (let i = 0; i < node.length; i++) {
-                    if (checkValueAgainstBlocks(node[i], conditionBlocks)) return true;
-                }
-                return false;
-            }
-
-            return checkValueAgainstBlocks(node, conditionBlocks);
+            return traverseScopes(item, 0);
         }
 
         return {
@@ -9451,9 +9682,8 @@ function compileFilterItemsRules(rules) {
             isMatch(item) {
                 if (shouldApply && !shouldApply(item)) return false;
 
-                // OR evaluation between condition strings
                 for (let c = 0; c < conditionMatchers.length; c++) {
-                    if (matchesAnyInNode(item, 0, 0, conditionMatchers[c])) {
+                    if (evaluateRuleOnItem(item, conditionMatchers[c])) {
                         return true;
                     }
                 }
@@ -10347,14 +10577,14 @@ function startLilpipeEvent(e, options) {
         const offsetX = targetX - newX;
 
         tooltip.style.cssText = `left: ${newX}px; top: ${newY}px;${offsetX === 0 ? '' : ` --offsetX: ${offsetX}px;`}`;
-        if (isBelow) tooltip.setAttribute('tooltip-below', '');
+        if (isBelow) tooltip.classList.add('tooltip-below');
 
         // Animate new tooltip
-        tooltip.setAttribute('data-animation', 'in');
+        changeAnimationClass(tooltip, 'in');
         tooltip.style.setProperty('--duration', `${animationDuration}ms`);
         setTimeout(() => {
             if (document.body.contains(tooltip) && tooltip.getAttribute('data-animation') === 'in') {
-                tooltip.removeAttribute('data-animation');
+                changeAnimationClass(tooltip);
                 tooltip.style.setProperty('--duration', '');
             }
         }, animationDuration);
@@ -10386,7 +10616,7 @@ function startLilpipeEvent(e, options) {
             tooltip.remove?.();
             return;
         }
-        tooltip.setAttribute('data-animation', 'out');
+        changeAnimationClass(tooltip, 'out');
         setTimeout(() => tooltip.remove?.(), 150);
     };
 

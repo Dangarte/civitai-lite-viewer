@@ -63,6 +63,17 @@ function animateElement(element, options) {
     });
 }
 
+function changeAnimationClass(element, animationName = '') {
+    if (element.classList.contains('anim')) {
+        const existingAnimClasses = Array.from(element.classList).filter(cls => cls.startsWith('anim'));
+        if (existingAnimClasses.length > 0) element.classList.remove(...existingAnimClasses);
+    }
+    if (animationName) element.classList.add('anim', `anim-${animationName}`);
+
+    if (animationName) element.setAttribute('data-animation', animationName);
+    else element.removeAttribute('data-animation');
+}
+
 function toClipBoard(text) {
     navigator.clipboard.writeText(text);
 }
@@ -733,9 +744,9 @@ class Color {
     }
 
     static rgbToOklab(rgb) {
-        const lr = this.#srgbToLinear(rgb.r);
-        const lg = this.#srgbToLinear(rgb.g);
-        const lb = this.#srgbToLinear(rgb.b);
+        const lr = this.#SRGB_TO_LINEAR_LUT[rgb.r];
+        const lg = this.#SRGB_TO_LINEAR_LUT[rgb.g];
+        const lb = this.#SRGB_TO_LINEAR_LUT[rgb.b];
 
         const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
         const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
@@ -762,16 +773,10 @@ class Color {
         const lg = -1.2684380046 * L + 2.6097574011 * m - 0.3413193965 * s;
         const lb = -0.0041960863 * L - 0.7034186147 * m + 1.7076147010 * s;
 
-        // return {
-        //     r: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lr) * 255))),
-        //     g: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lg) * 255))),
-        //     b: Math.max(0, Math.min(255, Math.round(this.#linearToSrgb(lb) * 255)))
-        // };
-
         return {
-            r: Math.round(this.#linearToSrgb(lr) * 255),
-            g: Math.round(this.#linearToSrgb(lg) * 255),
-            b: Math.round(this.#linearToSrgb(lb) * 255),
+            r: this.#linearToSrgb(lr),
+            g: this.#linearToSrgb(lg),
+            b: this.#linearToSrgb(lb),
             a: lab.alpha ?? 1
         };
     }
@@ -784,13 +789,17 @@ class Color {
         return this.oklabToRgb(this.oklchToOklab(lch));
     }
 
-    static #srgbToLinear(c) {
-        c = c / 255;
-        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    static #SRGB_TO_LINEAR_LUT = new Float32Array(256);
+    static {
+        const n255Inv = 1 / 255;
+        for (let i = 0; i < 256; i++) {
+            const c = i * n255Inv;
+            this.#SRGB_TO_LINEAR_LUT[i] = c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        }
     }
 
     static #linearToSrgb(c) {
-        return c <= 0.0031308 ? 12.92 * c : 1.055 * (c ** (1 / 2.4)) - 0.055;
+        return Math.round((c <= 0.0031308 ? 12.92 * c : 1.055 * (c ** (1 / 2.4)) - 0.055) * 255);
     }
 
     static TARGET_LC_DEFAULT = 75;
@@ -2593,7 +2602,7 @@ class MasonryLayout {
                 boundWidth: options.itemWidth,
                 boundHeight: cardHeight,
                 boundBottom: targetColumn.height + cardHeight,
-                center: Math.round(targetColumn.height + cardHeight / 2),
+                center: Math.round(targetColumn.height + cardHeight * .5),
                 inDOM: false
             };
 
@@ -3117,7 +3126,7 @@ class MasonryLayout {
         // (the expectation is that the function that called the scroll function will then take into account the difference and scroll the page accordingly)
         if (e?.focusedItem && this.#itemsById.has(e.focusedItem)) {
             const focusedItem = this.#itemsById.get(e.focusedItem);
-            e.scrollTopRelative = focusedItem.boundTop + (e.focusedItemOffsetTop ?? (this.windowHeight / 2));
+            e.scrollTopRelative = focusedItem.boundTop + (e.focusedItemOffsetTop ?? (this.windowHeight * .5));
         }
 
         // scrollTopRelative - used to restore elements when moving through nav history, without causing a recalculation of styles

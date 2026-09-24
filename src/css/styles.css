@@ -1120,7 +1120,7 @@ footer a {
     --translateY: 1em;
 }
 
-.tooltip[tooltip-below] {
+.tooltip.tooltip-below {
     --translateY: -1em;
 }
 
@@ -1142,18 +1142,18 @@ footer a {
     transform: translateX(var(--offsetX, 0)) rotateZ(45deg);
 }
 
-.tooltip[tooltip-below]::after {
+.tooltip.tooltip-below::after {
     bottom: unset;
     top: calc(-1 * var(--arrow-size));
     box-shadow: 1px 1px 3px -2px #0003;
     transform: translateX(var(--offsetX, 0)) rotateZ(-135deg);
 }
 
-.tooltip[data-animation="in"] {
+.tooltip.anim-in {
     animation: tooltipFadeIn var(--duration, .15s) 1 cubic-bezier(0.172, 0.72, 0.27, 1.27);
 }
 
-.tooltip[data-animation="out"] {
+.tooltip.anim-out {
     animation: tooltipFadeOut var(--duration, .15s) 1 cubic-bezier(0.6, -0.27, 0.72, 0.045) forwards;
 }
 
@@ -1305,6 +1305,10 @@ footer a {
     text-decoration: none;
     background-color: var(--c-bg);
     border-radius: var(--radius);
+}
+
+.model-preview.preview-single .media-container {
+    margin-inline: auto;
 }
 
 .model-description {
@@ -1634,7 +1638,6 @@ hr.description-xl-item {
     text-decoration: none !important;
     color: var(--c-text) !important;
     border-radius: var(--radius);
-    contain: strict;
     pointer-events: all;
     transition: 0s !important;
     background-color: var(--c-bg);
@@ -3371,6 +3374,7 @@ a.link-button.link-open-civitai::after {
     padding-inline-end: 2px; /* 8px - 6px */
     min-width: 100%;
     overflow-y: scroll;
+    overscroll-behavior: contain;
     z-index: 9999;
     background-color: var(--c-bg);
     visibility: hidden;
