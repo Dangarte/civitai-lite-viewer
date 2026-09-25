@@ -1309,6 +1309,7 @@ footer a {
 
 .model-preview.preview-single .media-container {
     margin-inline: auto;
+    position: relative;
 }
 
 .model-description {

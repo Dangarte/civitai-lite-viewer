@@ -3,8 +3,8 @@
 
 
 const CONFIG = {
-    version: 51,
-    updated: '2026-09-24T12:00:00.000Z',
+    version: 52,
+    updated: '2026-09-25T12:00:00.000Z',
     extensionVertsion: 5,
     logo: 'src/icons/logo.svg',
     title: 'CivitAI Lite Viewer',
@@ -1647,6 +1647,7 @@ class Controller {
             'Ideogram 4.0',
             'Boogu',
             'Krea 2',
+            'Ming Image Design 0.1',
             'MageFlow',
             'MiniMax H3',
             'MiniMax Music 3',
@@ -1743,6 +1744,7 @@ class Controller {
             'ZImageBase': 'ZI',
             'MiniMax H3': 'H3',
             'MiniMax Music 3': 'H3 Music',
+            'Ming Image Design 0.1': 'Ming 0.1'
         },
         // TODO: add tag 'edit'
         tags: {
@@ -1846,6 +1848,7 @@ class Controller {
             'Muse Image': ['image', 'closed', 'meta', 'censored', 'multilingual'], // multilingual?
             'Grok': ['image', 'closed', 'xai', 'censored', 'multilingual'],
             'YuE2': ['audio', 'weights', 'm-a-p', 'multilingual'],
+            'Ming Image Design 0.1': ['image', 'weights', 'inclusionai', 'multilingual'],
             'Other': ['misc']
         }
     };
